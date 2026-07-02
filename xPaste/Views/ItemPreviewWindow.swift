@@ -10,10 +10,11 @@ struct PreviewPopoverContent: View {
 
     private var title: String {
         switch item.type {
-        case .url:   return "Link"
-        case .image: return "Image"
-        case .file:  return "File"
-        case .text:  return "Text"
+        case .url:    return "Link"
+        case .image:  return "Image"
+        case .file:   return "File"
+        case .folder: return "Folder"
+        case .text:   return "Text"
         }
     }
 
@@ -85,7 +86,7 @@ struct PreviewPopoverContent: View {
             imageContent
         case .text:
             textContent
-        case .file:
+        case .file, .folder:
             fileContent
         }
     }
@@ -155,8 +156,9 @@ struct PreviewPopoverContent: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
-            case .file:
-                Text("\((item.fileURLs ?? []).count) file(s)")
+            case .file, .folder:
+                let n = (item.fileURLs ?? []).count
+                Text(item.type == .folder ? "\(n) folder(s)" : "\(n) file(s)")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             }

@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 enum ClipboardContentType: String, Codable {
-    case text, url, image, file
+    case text, url, image, file, folder
 }
 
 struct ClipboardItem: Identifiable, Codable {
@@ -61,6 +61,7 @@ struct ClipboardItem: Identifiable, Codable {
         case .text, .url: return text ?? ""
         case .image: return label ?? "Image"
         case .file: return fileURLs?.map(\.lastPathComponent).joined(separator: ", ") ?? "File"
+        case .folder: return fileURLs?.map(\.lastPathComponent).joined(separator: ", ") ?? "Folder"
         }
     }
 
@@ -74,7 +75,10 @@ struct ClipboardItem: Identifiable, Codable {
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]
         ) as? [URL], !fileURLs.isEmpty {
-            return ClipboardItem(type: .file, fileURLs: fileURLs)
+            // Treat the selection as a folder only when every item is a directory;
+            // any regular file in the mix keeps it classified as a plain file.
+            let type: ClipboardContentType = allDirectories(fileURLs) ? .folder : .file
+            return ClipboardItem(type: type, fileURLs: fileURLs)
         }
 
         if let types = pasteboard.types,
@@ -98,6 +102,16 @@ struct ClipboardItem: Identifiable, Codable {
         return nil
     }
 
+    /// True only when every URL points at a plain directory. Packages/bundles
+    /// (`.app`, `.bundle`, …) are directories on disk but behave like single files
+    /// to the user, so they count as files, not folders.
+    private static func allDirectories(_ urls: [URL]) -> Bool {
+        urls.allSatisfy { url in
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+            return values?.isDirectory == true && values?.isPackage != true
+        }
+    }
+
     /// Grabs a formatted representation (RTF preferred, then HTML) if the source provided one.
     private static func captureRich(from pb: NSPasteboard) -> (Data?, String?) {
         if let d = pb.data(forType: .rtf), !d.isEmpty {
@@ -110,7 +124,13 @@ struct ClipboardItem: Identifiable, Codable {
     }
 
     func copyToPasteboard() {
-        let pb = NSPasteboard.general
+        write(to: .general)
+        ClipboardMonitor.shared.markNextChangeAsOwn()
+    }
+
+    /// Writes this item's payload to `pb`. Extracted from `copyToPasteboard()` so the
+    /// pasteboard contents can be verified in tests without touching `NSPasteboard.general`.
+    func write(to pb: NSPasteboard) {
         pb.clearContents()
         switch type {
         case .text, .url:
@@ -125,12 +145,15 @@ struct ClipboardItem: Identifiable, Codable {
             if let data, let image = NSImage(data: data) {
                 pb.writeObjects([image])
             }
-        case .file:
-            if let urls = fileURLs {
+        case .file, .folder:
+            // Write the file reference so Finder (and file-aware apps) paste the actual
+            // file/folder, plus the path(s) as plain text so text fields receive the path
+            // instead of a file attachment. One path per line for multi-item selections.
+            if let urls = fileURLs, !urls.isEmpty {
                 pb.writeObjects(urls as [NSURL])
+                pb.setString(urls.map(\.path).joined(separator: "\n"), forType: .string)
             }
         }
-        ClipboardMonitor.shared.markNextChangeAsOwn()
     }
 
     static func makeHash(_ data: Data) -> String {

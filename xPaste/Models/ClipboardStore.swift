@@ -76,7 +76,7 @@ final class ClipboardStore: ObservableObject {
             switch item.type {
             case .text, .url:
                 return item.text?.localizedCaseInsensitiveContains(searchQuery) ?? false
-            case .file:
+            case .file, .folder:
                 return item.displayText.localizedCaseInsensitiveContains(searchQuery)
             case .image:
                 return "image".hasPrefix(searchQuery.lowercased())
@@ -94,7 +94,7 @@ final class ClipboardStore: ObservableObject {
                 if let eh = existing.imageHash, let nh = item.imageHash { return eh == nh ? existing.id : nil }
                 guard let ed = existing.imageData, let nd = item.imageData else { return nil }
                 return ed == nd ? existing.id : nil
-            case .file:
+            case .file, .folder:
                 return existing.fileURLs == item.fileURLs ? existing.id : nil
             }
         }

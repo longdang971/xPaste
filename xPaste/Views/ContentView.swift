@@ -472,7 +472,7 @@ struct ContentView: View {
                 ?? ClipboardStore.shared.imageURL(for: item.id).flatMap { try? Data(contentsOf: $0) }
             if let data, let img = NSImage(data: data) { return [img] }
             return [item.displayText]
-        case .file:
+        case .file, .folder:
             return item.fileURLs ?? []
         }
     }

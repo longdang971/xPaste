@@ -132,6 +132,10 @@ struct ClipboardItemCard: View {
                 let n = item.fileURLs?.count ?? 0
                 return "\(n) file\(n == 1 ? "" : "s")"
             }
+            if item.type == .folder {
+                let n = item.fileURLs?.count ?? 0
+                return "\(n) folder\(n == 1 ? "" : "s")"
+            }
             if let pathURL = detectedFilePath {
                 var isDir: ObjCBool = false
                 FileManager.default.fileExists(atPath: pathURL.path, isDirectory: &isDir)
@@ -241,7 +245,7 @@ struct ClipboardItemCard: View {
                 } else {
                     placeholder("photo", color: .purple)
                 }
-            case .file:
+            case .file, .folder:
                 if let img = pathImage ?? Self.pathImageCache[item.id] {
                     Image(nsImage: img)
                         .resizable()
@@ -254,6 +258,8 @@ struct ClipboardItemCard: View {
                         .scaledToFit()
                         .frame(width: 120, height: 120)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if item.type == .folder {
+                    placeholder("folder.fill", color: .blue)
                 } else {
                     placeholder("doc.fill", color: .orange)
                 }
@@ -322,7 +328,7 @@ struct ClipboardItemCard: View {
         let hasLinkPreview = item.type == .url && linkPreviewEnabled && linkPreview != nil
         if hasLinkPreview {
             urlPreviewFooter
-        } else if item.type == .file || detectedFilePath != nil {
+        } else if item.type == .file || item.type == .folder || detectedFilePath != nil {
             fileFooter
         } else {
             defaultFooter
@@ -389,6 +395,9 @@ struct ClipboardItemCard: View {
         case .file:
             let n = item.fileURLs?.count ?? 0
             return "\(n) file\(n == 1 ? "" : "s")"
+        case .folder:
+            let n = item.fileURLs?.count ?? 0
+            return "\(n) folder\(n == 1 ? "" : "s")"
         }
     }
 
@@ -541,28 +550,31 @@ struct ClipboardItemCard: View {
 private extension ClipboardContentType {
     var cardTitle: String {
         switch self {
-        case .text:  return "Text"
-        case .url:   return "Link"
-        case .image: return "Image"
-        case .file:  return "File"
+        case .text:   return "Text"
+        case .url:    return "Link"
+        case .image:  return "Image"
+        case .file:   return "File"
+        case .folder: return "Folder"
         }
     }
 
     var iconName: String {
         switch self {
-        case .text:  return "text.alignleft"
-        case .url:   return "link"
-        case .image: return "photo"
-        case .file:  return "doc.fill"
+        case .text:   return "text.alignleft"
+        case .url:    return "link"
+        case .image:  return "photo"
+        case .file:   return "doc.fill"
+        case .folder: return "folder.fill"
         }
     }
 
     var accentColor: Color {
         switch self {
-        case .text:  return .blue
-        case .url:   return Color(red: 0.1, green: 0.6, blue: 0.3)
-        case .image: return .purple
-        case .file:  return .orange
+        case .text:   return .blue
+        case .url:    return Color(red: 0.1, green: 0.6, blue: 0.3)
+        case .image:  return .purple
+        case .file:   return .orange
+        case .folder: return .blue
         }
     }
 }
