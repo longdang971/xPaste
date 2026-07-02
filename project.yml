@@ -1,0 +1,46 @@
+name: xPaste
+options:
+  bundleIdPrefix: com.user
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+
+targets:
+  xPaste:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - xPaste
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.user.xPaste
+        INFOPLIST_FILE: xPaste/Info.plist
+        CODE_SIGN_ENTITLEMENTS: xPaste/xPaste.entitlements
+        SWIFT_VERSION: "5.9"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - sdk: Carbon.framework
+    scheme:
+      testTargets:
+        - xPasteTests
+
+  xPasteTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - xPasteTests
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: "$(BUILT_PRODUCTS_DIR)/xPaste.app/Contents/MacOS/xPaste"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/xPaste.app/Contents/MacOS/xPaste"
+    dependencies:
+      - target: xPaste
