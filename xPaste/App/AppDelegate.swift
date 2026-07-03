@@ -212,6 +212,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
     }
 
+    // Re-opening the app from Finder/Launchpad/Dock while it's already running (an accessory app
+    // won't launch a second instance) routes here instead. Show the panel so double-clicking the
+    // app icon in /Applications behaves like the hotkey.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if settingsWindow?.isVisible == true { return true }
+        if !panelVisible { showPanel() }
+        return true
+    }
+
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         guard let button = statusItem?.button else { return }

@@ -21,7 +21,11 @@ targets:
         SWIFT_VERSION: "5.9"
         MACOSX_DEPLOYMENT_TARGET: "13.0"
         ENABLE_APP_SANDBOX: NO
-        CODE_SIGN_STYLE: Automatic
+        # Sign with a stable self-signed identity so the app's designated requirement
+        # (and thus its Accessibility/TCC grant) stays constant across rebuilds.
+        # See build-release.sh and README (Accessibility permission section).
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "xPaste Local Signing"
         DEVELOPMENT_TEAM: ""
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
