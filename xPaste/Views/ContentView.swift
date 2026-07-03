@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var selectedIDs: Set<UUID> = []
     @State private var suppressCardDeselect = false
     @State private var previewItemID: UUID?
+    @State private var scrollTargetID: UUID?
     @State private var pendingReorderID: UUID?
     @State private var activeTab: ClipboardTab = .all
     @State private var searchToggleTapped = false
@@ -108,6 +109,23 @@ struct ContentView: View {
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
+                // Arrow-key navigation between cards. Left/Up move to the previous item,
+                // Right/Down to the next — so it feels natural whether the panel lays the
+                // cards out horizontally (bottom/top) or vertically (left/right).
+                Group {
+                    Button("") { moveSelection(by: -1) }
+                        .keyboardShortcut(.leftArrow, modifiers: [])
+                    Button("") { moveSelection(by: 1) }
+                        .keyboardShortcut(.rightArrow, modifiers: [])
+                    Button("") { moveSelection(by: -1) }
+                        .keyboardShortcut(.upArrow, modifiers: [])
+                    Button("") { moveSelection(by: 1) }
+                        .keyboardShortcut(.downArrow, modifiers: [])
+                }
+                .disabled(searchFocused)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+
                 Group {
                     Button("") { if let it = primarySelectedItem { pasteItem(it) } }
                         .keyboardShortcut(.return, modifiers: [])
@@ -179,6 +197,11 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .panelDidOpen)) { _ in
             let trusted = AccessibilityPermission.isTrusted
             if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
+            // Auto-select the first item on open so the keyboard is live immediately:
+            // ⌘A selects all, ←/→ move between cards, ⏎ pastes — no click into the list needed.
+            if let first = displayedItems.first {
+                selectedIDs = [first.id]
+            }
         }
         .onReceive(permissionTimer) { _ in
             let trusted = AccessibilityPermission.isTrusted
@@ -346,6 +369,10 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .panelDidOpen)) { _ in
                 proxy.scrollTo("h-list-start", anchor: .leading)
             }
+            .onChange(of: scrollTargetID) { id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
+            }
         }
     }
 
@@ -378,6 +405,10 @@ struct ContentView: View {
                 if let first = displayedItems.first {
                     proxy.scrollTo(first.id, anchor: .top)
                 }
+            }
+            .onChange(of: scrollTargetID) { id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
             }
         }
     }
@@ -545,6 +576,24 @@ struct ContentView: View {
     private func selectItem(_ item: ClipboardItem) {
         suppressCardDeselect = true
         selectedIDs = [item.id]
+    }
+
+    /// Moves the single-item selection by `delta` in display order (clamped to the ends) and
+    /// asks the list to scroll the newly selected card into view. With nothing selected yet,
+    /// the first arrow press lands on an end so navigation can start from a clean state.
+    private func moveSelection(by delta: Int) {
+        let ids = displayedItems.map(\.id)
+        guard !ids.isEmpty else { return }
+        let newIndex: Int
+        if let current = ids.firstIndex(where: { selectedIDs.contains($0) }) {
+            newIndex = min(max(current + delta, 0), ids.count - 1)
+        } else {
+            newIndex = delta > 0 ? 0 : ids.count - 1
+        }
+        let target = ids[newIndex]
+        suppressCardDeselect = true
+        selectedIDs = [target]
+        scrollTargetID = target
     }
 }
 

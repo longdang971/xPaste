@@ -334,6 +334,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrame(start, display: false, animate: false)
         panel.orderFrontRegardless()
         panel.makeKey()
+        // Route key events into the SwiftUI content right away so ⌘A / arrow keys / ⏎ work the
+        // instant the panel appears, without first clicking a card to establish first responder.
+        panel.makeFirstResponder(panel.contentView)
         NotificationCenter.default.post(name: .panelDidOpen, object: nil)
 
         // Start the slide on the NEXT runloop tick so the off-screen `start` frame is committed
