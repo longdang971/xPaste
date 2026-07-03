@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var suppressCardDeselect = false
     @State private var previewItemID: UUID?
     @State private var scrollTargetID: UUID?
+    @State private var isHidingPanel = false
     @State private var pendingReorderID: UUID?
     @State private var activeTab: ClipboardTab = .all
     @State private var searchToggleTapped = false
@@ -57,8 +58,8 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            VisualEffectBlur(material: .underWindowBackground, blendingMode: .behindWindow)
-                .opacity(0.82)
+            VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+                .opacity(0.9)
 
             LinearGradient(
                 stops: [
@@ -173,11 +174,24 @@ struct ContentView: View {
                 selectedIDs = []
             }
         })
+        .onChange(of: showSearch) { open in
+            // When the search box closes by any path, force the TextField to resign — otherwise it
+            // stays first responder while hidden, so the caret keeps blinking there and keystrokes
+            // still land in an invisible field. Then restore a live selection (first item if none),
+            // but never while the panel is hiding: that path intentionally clears the selection.
+            guard !open else { return }
+            searchFocused = false
+            guard !isHidingPanel else { return }
+            if selectedIDs.isEmpty, let first = displayedItems.first {
+                selectedIDs = [first.id]
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .panelWillHide)) { _ in
             // Only mutate when there is actually something to reset. `store.searchQuery` is
             // @Published and emits even when set to the same value, which would invalidate the
             // whole ContentView and force a ~110ms synchronous re-layout right as the close
             // animation starts — freezing the slide. Guarding keeps the close smooth.
+            isHidingPanel = true
             if showSearch { showSearch = false }
             if !store.searchQuery.isEmpty { store.searchQuery = "" }
             if !selectedIDs.isEmpty { selectedIDs = [] }
@@ -195,6 +209,7 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidOpen)) { _ in
+            isHidingPanel = false
             let trusted = AccessibilityPermission.isTrusted
             if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
             // Auto-select the first item on open so the keyboard is live immediately:
