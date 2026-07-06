@@ -162,16 +162,29 @@ struct ContentView: View {
         .shadow(color: .black.opacity(0.10), radius:  6, x: 0, y: -2)
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded {
-            if showSearch, !searchFocused {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    showSearch = false
-                    store.searchQuery = ""
+            // This ancestor gesture fires BEFORE a tapped card's own .onTapGesture (confirmed via
+            // logging), so `suppressCardDeselect` isn't set yet at this instant. Defer the decision
+            // to the next runloop tick: by then selectItem() has run and set the flag, so a click
+            // that landed on a card won't collapse the search or clear the selection. A click on
+            // empty space leaves the flag false and still dismisses search / deselects as before.
+            DispatchQueue.main.async {
+                if suppressCardDeselect {
+                    suppressCardDeselect = false
+                    return
                 }
-            }
-            if suppressCardDeselect {
-                suppressCardDeselect = false
-            } else if !NSEvent.modifierFlags.contains(.command), !selectedIDs.isEmpty {
-                selectedIDs = []
+                // Tapping the search icon / a compact tab sets this for ~0.3s and opens the search
+                // before `searchFocused` flips true. Without this guard the deferred close below
+                // would immediately dismiss the search the toggle just opened.
+                if searchToggleTapped { return }
+                if showSearch, !searchFocused {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showSearch = false
+                        store.searchQuery = ""
+                    }
+                }
+                if !NSEvent.modifierFlags.contains(.command), !selectedIDs.isEmpty {
+                    selectedIDs = []
+                }
             }
         })
         .onChange(of: showSearch) { open in
@@ -331,7 +344,12 @@ struct ContentView: View {
                 }
                 .onChange(of: searchFocused) { focused in
                     guard !focused, !searchToggleTapped else { return }
-                    withAnimation(toolbarSpring) { showSearch = false; store.searchQuery = "" }
+                    // Losing focus with a live query means the user clicked into the results (e.g.
+                    // to double-click-paste). Keep the search open so the filtered list stays put and
+                    // the paste hits the right item. Only auto-close when nothing was typed, which
+                    // preserves the "open search, click away, it closes" feel.
+                    guard store.searchQuery.isEmpty else { return }
+                    withAnimation(toolbarSpring) { showSearch = false }
                 }
 
             if !store.searchQuery.isEmpty {
