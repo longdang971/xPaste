@@ -17,7 +17,17 @@ final class ClipboardStore: ObservableObject {
     // panel open, forcing a ~110ms synchronous re-layout before the panel could animate in.
     var targetAppName: String?
 
-    private let maxItems: Int
+    static let minHistoryCount = 500
+    static let maxHistoryCount = 3000
+
+    /// Fallback cap used when the user hasn't picked one yet (from init).
+    private let defaultMaxItems: Int
+    /// Effective cap on unpinned items, driven by the "maxHistoryCount" slider in Settings
+    /// and clamped to the supported range. Pinned items are never counted or removed.
+    private var maxItems: Int {
+        let stored = UserDefaults.standard.object(forKey: "maxHistoryCount") as? Int ?? defaultMaxItems
+        return min(Self.maxHistoryCount, max(Self.minHistoryCount, stored))
+    }
     private let itemsDir: URL?
     private let imagesDir: URL?
     private let saveQueue = DispatchQueue(label: "com.user.xPaste.save", qos: .background)
@@ -31,7 +41,7 @@ final class ClipboardStore: ObservableObject {
     }()
 
     init(maxItems: Int, storageDir: URL? = ClipboardStore.defaultStorageDir()) {
-        self.maxItems  = maxItems
+        self.defaultMaxItems = maxItems
         self.itemsDir  = storageDir?.appendingPathComponent("items",  isDirectory: true)
         self.imagesDir = storageDir?.appendingPathComponent("images", isDirectory: true)
 
@@ -228,6 +238,10 @@ final class ClipboardStore: ObservableObject {
         }
         items.removeAll { expiredIDs.contains($0.id) }
     }
+
+    /// Enforce the count cap now — call after the user lowers the history slider so
+    /// the oldest unpinned items over the new limit are pruned immediately.
+    func enforceHistoryLimit() { trim() }
 
     private func trim() {
         let unpinned = items.filter { !$0.isPinned }.sorted { $0.timestamp < $1.timestamp }

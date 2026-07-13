@@ -15,6 +15,7 @@ struct ClipboardItemCard: View {
     @State private var pathImage: NSImage?
     @State private var computedAccentColor: Color?
     @AppStorage("linkPreviewEnabled") private var linkPreviewEnabled: Bool = true
+    @Environment(\.panelScale) private var panelScale
 
     private static var colorCache: [String: Color] = [:]
     private static var iconCache: [String: NSImage] = [:]
@@ -123,6 +124,11 @@ struct ClipboardItemCard: View {
                 favicon = await LinkPreviewService.shared.fetchFavicon(for: url)
             }
         }
+        // Shrink the whole card uniformly on shorter screens so it stays proportional to the
+        // adaptively-sized panel. The trailing frame reserves the scaled footprint so layout,
+        // hit-testing and the overlays added in ContentView all line up with what's drawn.
+        .scaleEffect(panelScale, anchor: .center)
+        .frame(width: 250 * panelScale, height: 240 * panelScale)
     }
 
     private func cardHeader(_ accent: Color) -> some View {
@@ -206,10 +212,7 @@ struct ClipboardItemCard: View {
                 if linkPreviewEnabled, let img = linkPreview?.image {
                     Image(nsImage: img)
                         .resizable()
-                        .scaledToFill()
-                        .frame(maxWidth: .infinity, maxHeight: 130)
-                        .clipped()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if linkPreviewEnabled, linkPreview != nil, linkImageChecked {
                     noImagePlaceholder
                 } else {
@@ -220,8 +223,6 @@ struct ClipboardItemCard: View {
                     if let img = pathImage ?? Self.pathImageCache[item.id] {
                         Image(nsImage: img)
                             .resizable()
-                            .scaledToFit()
-                            .frame(width: 120, height: 120)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         Image(nsImage: fileIcon(pathURL.path))
@@ -239,8 +240,6 @@ struct ClipboardItemCard: View {
                 if let nsImage = loadedImage ?? Self.loadedImageCache[item.id] {
                     Image(nsImage: nsImage)
                         .resizable()
-                        .scaledToFit()
-                        .frame(width: 200, height: 140)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     placeholder("photo", color: .purple)
@@ -249,8 +248,6 @@ struct ClipboardItemCard: View {
                 if let img = pathImage ?? Self.pathImageCache[item.id] {
                     Image(nsImage: img)
                         .resizable()
-                        .scaledToFit()
-                        .frame(width: 220, height: 140)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let url = item.fileURLs?.first {
                     Image(nsImage: fileIcon(url.path))

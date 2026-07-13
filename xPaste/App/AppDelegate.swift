@@ -306,8 +306,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let position = UserDefaults.standard.string(forKey: "panelPosition") ?? "bottom"
         let sf = screen.frame
         let vf = screen.visibleFrame
-        let hThickness: CGFloat = 320
-        let vThickness: CGFloat = 320
+        let hThickness = PanelLayout.horizontalThickness(for: screen)
+        let vThickness = PanelLayout.verticalThickness(for: screen)
 
         switch position {
         case "top":
@@ -536,5 +536,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             OptionBits(0),
             &hotKeyRef
         )
+    }
+}
+
+// MARK: - Adaptive panel sizing
+
+/// Keeps the panel (and its cards) at a pleasant proportion across screens of
+/// different logical heights. On a tall screen `scale == 1` (the reference
+/// design); on a shorter one (e.g. a 1080-point Full-HD or a default-scaled 4K)
+/// it shrinks so the bar never eats an oversized slice of the screen.
+enum PanelLayout {
+    /// Card design size at scale 1 (matches ClipboardItemCard's base frame).
+    static let cardBaseHeight: CGFloat = 240
+    static let cardBaseWidth: CGFloat = 250
+    /// Fixed chrome around the horizontal card row (toolbar + divider + list padding).
+    static let horizontalChrome: CGFloat = 80
+    /// Fixed chrome around the vertical card column (horizontal list padding + slack).
+    static let verticalChrome: CGFloat = 70
+    /// Screen height (points) at/above which the full-size design is used.
+    static let referenceScreenHeight: CGFloat = 1360
+    static let minScale: CGFloat = 0.8
+
+    static func scale(for screen: NSScreen?) -> CGFloat {
+        guard let screen else { return 1 }
+        return min(1.0, max(minScale, screen.frame.height / referenceScreenHeight))
+    }
+
+    /// Thickness of a top/bottom bar (its height).
+    static func horizontalThickness(for screen: NSScreen?) -> CGFloat {
+        (horizontalChrome + cardBaseHeight * scale(for: screen)).rounded()
+    }
+
+    /// Thickness of a left/right bar (its width).
+    static func verticalThickness(for screen: NSScreen?) -> CGFloat {
+        (verticalChrome + cardBaseWidth * scale(for: screen)).rounded()
+    }
+}
+
+private struct PanelScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+
+extension EnvironmentValues {
+    /// Uniform scale applied to cards so they stay proportional to the panel.
+    var panelScale: CGFloat {
+        get { self[PanelScaleKey.self] }
+        set { self[PanelScaleKey.self] = newValue }
     }
 }

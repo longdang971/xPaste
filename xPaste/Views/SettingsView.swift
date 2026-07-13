@@ -209,6 +209,7 @@ private struct GeneralTab: View {
     @State private var launchAtLogin = false
     @State private var showEraseConfirm = false
     @AppStorage("keepHistoryIndex") private var keepHistoryIndex: Int = 4
+    @AppStorage("maxHistoryCount") private var maxHistoryCount: Int = 500
     @AppStorage("clearOnLogout") private var clearOnLogout: Bool = false
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
     @AppStorage("clipboardScanInterval") private var scanInterval: Double = 0.1
@@ -290,6 +291,38 @@ private struct GeneralTab: View {
 
                     CardDivider()
 
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Maximum items stored").font(.system(size: 13))
+                            Spacer()
+                            Text("\(maxHistoryCount)")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { Double(maxHistoryCount) },
+                                set: { maxHistoryCount = Int($0.rounded()) }
+                            ),
+                            in: Double(ClipboardStore.minHistoryCount)...Double(ClipboardStore.maxHistoryCount),
+                            step: 500
+                        )
+                        HStack {
+                            Text("\(ClipboardStore.minHistoryCount)")
+                            Spacer()
+                            Text("\(ClipboardStore.maxHistoryCount)")
+                        }
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        Text("Keeps up to \(maxHistoryCount) unpinned items; the oldest are removed once the limit is reached. Pinned items are always kept and don't count toward this.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(14)
+
+                    CardDivider()
+
                     Row(title: "Clear history on sleep or logout",
                         subtitle: "Erase every item (including pinned) when your Mac goes to sleep, or when you log out, restart, or shut down.") {
                         Toggle("", isOn: $clearOnLogout)
@@ -298,6 +331,7 @@ private struct GeneralTab: View {
                     }
                 }
                 .onChange(of: keepHistoryIndex) { _ in store.pruneExpired() }
+                .onChange(of: maxHistoryCount) { _ in store.enforceHistoryLimit() }
             }
 
             VStack(alignment: .leading, spacing: 8) {

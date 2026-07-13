@@ -259,6 +259,13 @@ struct ContentView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
         }
+        .environment(\.panelScale, panelScale)
+    }
+
+    /// Uniform card scale for the screen the panel currently sits on, so cards
+    /// stay proportional to the adaptively-sized bar. Matches AppDelegate's panel frame.
+    private var panelScale: CGFloat {
+        PanelLayout.scale(for: NSScreen.main)
     }
 
     private let toolbarSpring = Animation.spring(response: 0.3, dampingFraction: 0.9)
