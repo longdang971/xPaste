@@ -109,6 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var previousApp: NSRunningApplication?
     private var alertIsPresented = false
     private var frameAnimTimer: Timer?
+    /// The screen the panel was last shown on. Captured once per show so the frame, the
+    /// off-screen slide target, and the card scale are all computed against the same display.
+    private var activeScreen: NSScreen?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -300,7 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func panelFrame() -> NSRect {
-        guard let screen = NSScreen.main else {
+        guard let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens.first else {
             return NSRect(x: 0, y: 0, width: 900, height: 300)
         }
         let position = UserDefaults.standard.string(forKey: "panelPosition") ?? "bottom"
@@ -334,6 +337,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         previousApp = NSWorkspace.shared.frontmostApplication
         ClipboardStore.shared.targetAppName = previousApp?.localizedName
         guard let panel else { return }
+        // Lock in the display now (before makeKey can flip NSScreen.main) and publish the
+        // matching card scale, so the bar and the cards are sized against the same screen.
+        activeScreen = NSScreen.main ?? NSScreen.screens.first
+        ClipboardStore.shared.panelScale = PanelLayout.scale(for: activeScreen)
         let target = panelFrame()
         let start  = offscreenFrame(for: target)
 

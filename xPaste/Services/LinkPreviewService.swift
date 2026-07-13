@@ -20,9 +20,11 @@ actor LinkPreviewService {
     static let shared = LinkPreviewService()
 
     private var metaCache: [URL: CachedLinkMeta] = [:]
-    private var imageCache: [URL: NSImage] = [:]
-    private var faviconCache: [String: NSImage] = [:]
-    private let maxImageCache = 50
+    // NSCache (thread-safe, count-bounded) instead of plain dictionaries: the old dict eviction
+    // removed `keys.first`, whose order is unspecified, so it could drop the entry just inserted,
+    // and neither dict was ever bounded — decoded NSImages leaked for the whole session.
+    private let imageCache = NSCache<NSURL, NSImage>()
+    private let faviconCache = NSCache<NSString, NSImage>()
     private let maxDiskEntries = 200
 
     private let cacheDir: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
@@ -31,10 +33,20 @@ actor LinkPreviewService {
     private static let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
     init() {
+        imageCache.countLimit = 50
+        faviconCache.countLimit = 100
         if let dir = cacheDir {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             Task { await self.loadDiskCache() }
         }
+    }
+
+    /// Turn an href / og:image value into a loadable absolute URL. `URL(string:)` succeeds on
+    /// path-relative ("/x.png") and protocol-relative ("//cdn/x.png") strings but yields a
+    /// scheme-less URL that URLSession can't fetch — so resolve those against the page URL.
+    private static func resolvedURL(_ s: String, relativeTo base: URL) -> URL? {
+        if let u = URL(string: s), u.scheme != nil { return u }
+        return URL(string: s, relativeTo: base)?.absoluteURL
     }
 
     func fetchMetadata(_ url: URL) async -> LinkPreviewData? {
@@ -44,7 +56,8 @@ actor LinkPreviewService {
 
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
-        guard let (data, _) = try? await URLSession.shared.data(for: req),
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
               let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
         else { return nil }
 
@@ -52,34 +65,38 @@ actor LinkPreviewService {
         let imgStr = ogMeta("og:image", in: html) ?? ogMeta("twitter:image", in: html)
         let domain = url.host?.replacingOccurrences(of: "www.", with: "")
         var ogImageURL: URL?
-        if let s = imgStr { ogImageURL = URL(string: s) ?? URL(string: s, relativeTo: url)?.absoluteURL }
+        if let s = imgStr { ogImageURL = Self.resolvedURL(s, relativeTo: url) }
         let favURL = htmlFaviconURL(in: html, relativeTo: url)
 
         var meta = CachedLinkMeta(url: url, title: title, imageURL: ogImageURL, domain: domain)
         meta.faviconURL = favURL
-        metaCache[url] = meta
-        persistToDisk(meta)
-        evictDiskIfNeeded()
+        // Don't cache a fully-empty result — an error/redirect page that still returns HTML
+        // would otherwise poison the cache and block a real preview once the site recovers.
+        if title != nil || ogImageURL != nil {
+            metaCache[url] = meta
+            persistToDisk(meta)
+            evictDiskIfNeeded()
+        }
 
         return LinkPreviewData(title: title, imageURL: ogImageURL, image: nil, domain: domain)
     }
 
     func fetchImage(for url: URL) async -> NSImage? {
-        if let cached = imageCache[url] { return cached }
+        if let cached = imageCache.object(forKey: url as NSURL) { return cached }
         guard let meta = metaCache[url], let imageURL = meta.imageURL else { return nil }
-        guard let (imgData, _) = try? await URLSession.shared.data(from: imageURL),
+        var req = URLRequest(url: imageURL, timeoutInterval: 8)
+        req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
+        guard let (imgData, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
               let image = NSImage(data: imgData) else { return nil }
 
-        imageCache[url] = image
-        if imageCache.count > maxImageCache {
-            imageCache.removeValue(forKey: imageCache.keys.first!)
-        }
+        imageCache.setObject(image, forKey: url as NSURL)
         return image
     }
 
     func fetchFavicon(for url: URL) async -> NSImage? {
         guard let host = url.host else { return nil }
-        if let cached = faviconCache[host] { return cached }
+        if let cached = faviconCache.object(forKey: host as NSString) { return cached }
 
         var candidates: [String] = []
         if let favURL = metaCache[url]?.faviconURL?.absoluteString {
@@ -91,13 +108,15 @@ actor LinkPreviewService {
         ]
 
         for urlStr in candidates {
-            guard let favURL = URL(string: urlStr),
-                  let (data, resp) = try? await URLSession.shared.data(from: favURL),
+            guard let favURL = URL(string: urlStr) else { continue }
+            var req = URLRequest(url: favURL, timeoutInterval: 8)
+            req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
                   (resp as? HTTPURLResponse)?.statusCode == 200,
                   let img = NSImage(data: data),
                   img.size.width > 1
             else { continue }
-            faviconCache[host] = img
+            faviconCache.setObject(img, forKey: host as NSString)
             return img
         }
         return nil
@@ -149,8 +168,7 @@ actor LinkPreviewService {
             guard m.range(at: g).location != NSNotFound,
                   let r = Range(m.range(at: g), in: html) else { continue }
             let href = String(html[r]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if let absolute = URL(string: href) { return absolute }
-            return URL(string: href, relativeTo: base)?.absoluteURL
+            if let resolved = Self.resolvedURL(href, relativeTo: base) { return resolved }
         }
         return nil
     }

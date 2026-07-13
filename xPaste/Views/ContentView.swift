@@ -262,10 +262,12 @@ struct ContentView: View {
         .environment(\.panelScale, panelScale)
     }
 
-    /// Uniform card scale for the screen the panel currently sits on, so cards
-    /// stay proportional to the adaptively-sized bar. Matches AppDelegate's panel frame.
+    /// Uniform card scale for the screen the panel currently sits on, so cards stay
+    /// proportional to the adaptively-sized bar. Sourced from the store (set by AppDelegate
+    /// from the same screen it frames the panel with) so it's observable and never disagrees
+    /// with the bar — reading NSScreen.main here could see a different display.
     private var panelScale: CGFloat {
-        PanelLayout.scale(for: NSScreen.main)
+        store.panelScale
     }
 
     private let toolbarSpring = Animation.spring(response: 0.3, dampingFraction: 0.9)
@@ -631,7 +633,9 @@ struct ContentView: View {
             newIndex = delta > 0 ? 0 : ids.count - 1
         }
         let target = ids[newIndex]
-        suppressCardDeselect = true
+        // No `suppressCardDeselect` here: that flag only exists to stop the ancestor tap
+        // handler from clearing a selection made by a card *click*. Arrow-key navigation
+        // produces no tap, so leaving it set would swallow the user's next empty-space click.
         selectedIDs = [target]
         scrollTargetID = target
     }

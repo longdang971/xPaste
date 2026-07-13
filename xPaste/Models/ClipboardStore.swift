@@ -12,6 +12,11 @@ final class ClipboardStore: ObservableObject {
         didSet { _cachedFilteredItems = nil }
     }
 
+    /// Card scale for the screen the panel currently sits on. AppDelegate sets this from the
+    /// SAME screen it sizes the panel frame with, so cards and the bar never disagree across
+    /// displays of different logical heights. Read by ContentView via the `panelScale` environment.
+    @Published var panelScale: CGFloat = 1
+
     // NOT @Published: this is only read lazily when building an item's context menu
     // ("Paste to <app>"). Publishing it invalidated the entire ContentView on every
     // panel open, forcing a ~110ms synchronous re-layout before the panel could animate in.
@@ -50,6 +55,7 @@ final class ClipboardStore: ObservableObject {
             try? FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
             if let storageDir { migrateFromLegacyIfNeeded(in: storageDir) }
             load()
+            trim()          // enforce the count cap at launch too, not only on the next add()
             pruneExpired()
         }
     }
@@ -89,7 +95,7 @@ final class ClipboardStore: ObservableObject {
             case .file, .folder:
                 return item.displayText.localizedCaseInsensitiveContains(searchQuery)
             case .image:
-                return "image".hasPrefix(searchQuery.lowercased())
+                return item.displayText.localizedCaseInsensitiveContains(searchQuery)
             }
         }
     }
@@ -116,7 +122,7 @@ final class ClipboardStore: ObservableObject {
 
         if let data = item.imageData, let imagesDir {
             let imgURL = imagesDir.appendingPathComponent(item.id.uuidString + ".jpg")
-            saveQueue.async { try? data.write(to: imgURL) }
+            saveQueue.async { try? data.write(to: imgURL, options: .atomic) }
             if let image = NSImage(data: data) {
                 imageCache.setObject(image, forKey: item.id.uuidString as NSString)
             }
@@ -167,10 +173,16 @@ final class ClipboardStore: ObservableObject {
     func clearAll() {
         items.forEach { imageCache.removeObject(forKey: $0.id.uuidString as NSString) }
         items.removeAll()
-        let fm = FileManager.default
-        for dir in [itemsDir, imagesDir].compactMap({ $0 }) {
-            try? fm.removeItem(at: dir)
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dirs = [itemsDir, imagesDir].compactMap { $0 }
+        // Tear the directories down ON the save queue so it runs AFTER any in-flight
+        // metadata/image writes. Doing it on the main thread races those writes, which can
+        // drop a file into the freshly recreated dir and resurrect a "ghost" item on relaunch.
+        saveQueue.async {
+            let fm = FileManager.default
+            for dir in dirs {
+                try? fm.removeItem(at: dir)
+                try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
         }
     }
 

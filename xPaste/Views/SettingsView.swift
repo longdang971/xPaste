@@ -238,7 +238,12 @@ private struct GeneralTab: View {
                             do {
                                 if newValue { try SMAppService.mainApp.register() }
                                 else { try SMAppService.mainApp.unregister() }
-                            } catch { print("Launch at login error: \(error)") }
+                            } catch {
+                                print("Launch at login error: \(error)")
+                                // Registration failed — resync the toggle to the real state
+                                // instead of leaving it stuck on the value the user just picked.
+                                launchAtLogin = (SMAppService.mainApp.status == .enabled)
+                            }
                         }
                 }
                 CardDivider()

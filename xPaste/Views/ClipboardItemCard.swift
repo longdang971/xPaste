@@ -14,14 +14,24 @@ struct ClipboardItemCard: View {
     @State private var favicon: NSImage?
     @State private var pathImage: NSImage?
     @State private var computedAccentColor: Color?
+    @State private var detectedFilePath: URL?
+    @State private var detectedIsDirectory = false
     @AppStorage("linkPreviewEnabled") private var linkPreviewEnabled: Bool = true
     @Environment(\.panelScale) private var panelScale
 
     private static var colorCache: [String: Color] = [:]
     private static var iconCache: [String: NSImage] = [:]
 
-    private static var pathImageCache: [UUID: NSImage] = [:]
-    private static var loadedImageCache: [UUID: NSImage] = [:]
+    // Count-bounded NSCaches, not plain dicts: keyed by item UUID and written from .task,
+    // the old dictionaries were never evicted, so every previewed image (thumbnails up to
+    // 1000px + full clipboard images) stayed resident for the whole session even after the
+    // item was deleted or history cleared.
+    private static let pathImageCache: NSCache<NSUUID, NSImage> = {
+        let c = NSCache<NSUUID, NSImage>(); c.countLimit = 120; return c
+    }()
+    private static let loadedImageCache: NSCache<NSUUID, NSImage> = {
+        let c = NSCache<NSUUID, NSImage>(); c.countLimit = 120; return c
+    }()
     private static var fileIconCache: [String: NSImage] = [:]
 
     private func fileIcon(_ path: String) -> NSImage {
@@ -53,18 +63,24 @@ struct ClipboardItemCard: View {
             if item.type == .image {
                 if let data = item.imageData, let img = NSImage(data: data) {
                     loadedImage = img
-                    Self.loadedImageCache[item.id] = img
+                    Self.loadedImageCache.setObject(img, forKey: item.id as NSUUID)
                 } else if item.imageData == nil {
                     loadedImage = await ClipboardStore.shared.loadImage(for: item.id)
-                    if let loadedImage { Self.loadedImageCache[item.id] = loadedImage }
+                    if let loadedImage { Self.loadedImageCache.setObject(loadedImage, forKey: item.id as NSUUID) }
                 }
             }
+
+            // Resolve the path-detection (which touches the filesystem) ONCE here and cache it in
+            // @State, instead of hitting FileManager on every `body` pass from cardHeader/footer.
+            let resolved = resolveDetectedFilePath()
+            if detectedFilePath != resolved.url { detectedFilePath = resolved.url }
+            if detectedIsDirectory != resolved.isDir { detectedIsDirectory = resolved.isDir }
 
             let imageURL: URL? = {
                 if item.type == .file, let url = item.fileURLs?.first, isImagePath(url) {
                     return url
                 }
-                if let pathURL = detectedFilePath, isImagePath(pathURL) {
+                if let pathURL = resolved.url, isImagePath(pathURL) {
                     return pathURL
                 }
                 return nil
@@ -83,7 +99,7 @@ struct ClipboardItemCard: View {
                 if let cgImage {
                     let image = NSImage(cgImage: cgImage, size: .zero)
                     pathImage = image
-                    Self.pathImageCache[item.id] = image
+                    Self.pathImageCache.setObject(image, forKey: item.id as NSUUID)
                 }
             }
 
@@ -142,10 +158,8 @@ struct ClipboardItemCard: View {
                 let n = item.fileURLs?.count ?? 0
                 return "\(n) folder\(n == 1 ? "" : "s")"
             }
-            if let pathURL = detectedFilePath {
-                var isDir: ObjCBool = false
-                FileManager.default.fileExists(atPath: pathURL.path, isDirectory: &isDir)
-                return isDir.boolValue ? "Folder" : "File"
+            if detectedFilePath != nil {
+                return detectedIsDirectory ? "Folder" : "File"
             }
             return item.type.cardTitle
         }()
@@ -220,7 +234,7 @@ struct ClipboardItemCard: View {
                 }
             case .text:
                 if let pathURL = detectedFilePath {
-                    if let img = pathImage ?? Self.pathImageCache[item.id] {
+                    if let img = pathImage ?? Self.pathImageCache.object(forKey: item.id as NSUUID) {
                         Image(nsImage: img)
                             .resizable()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -237,7 +251,7 @@ struct ClipboardItemCard: View {
                     textPreview
                 }
             case .image:
-                if let nsImage = loadedImage ?? Self.loadedImageCache[item.id] {
+                if let nsImage = loadedImage ?? Self.loadedImageCache.object(forKey: item.id as NSUUID) {
                     Image(nsImage: nsImage)
                         .resizable()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -245,7 +259,7 @@ struct ClipboardItemCard: View {
                     placeholder("photo", color: .purple)
                 }
             case .file, .folder:
-                if let img = pathImage ?? Self.pathImageCache[item.id] {
+                if let img = pathImage ?? Self.pathImageCache.object(forKey: item.id as NSUUID) {
                     Image(nsImage: img)
                         .resizable()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -457,17 +471,20 @@ struct ClipboardItemCard: View {
         return imageExts.contains(url.pathExtension.lowercased())
     }
 
-    private var detectedFilePath: URL? {
+    /// Resolve whether this text item is an existing file/folder path. Hits the filesystem, so
+    /// it's called once from `.task` and the result is cached in @State — never from `body`.
+    private func resolveDetectedFilePath() -> (url: URL?, isDir: Bool) {
         guard item.type == .text,
               let raw = item.text
-        else { return nil }
+        else { return (nil, false) }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.contains("\n"),
               text.hasPrefix("/") || text.hasPrefix("~/")
-        else { return nil }
+        else { return (nil, false) }
         let expanded = (text as NSString).expandingTildeInPath
-        guard FileManager.default.fileExists(atPath: expanded) else { return nil }
-        return URL(fileURLWithPath: expanded)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir) else { return (nil, false) }
+        return (URL(fileURLWithPath: expanded), isDir.boolValue)
     }
 
     private func parseHexColor(_ s: String) -> Color? {
