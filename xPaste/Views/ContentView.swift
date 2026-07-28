@@ -20,6 +20,11 @@ struct ContentView: View {
     @State private var pendingReorderID: UUID?
     @State private var activeTab: ClipboardTab = .all
     @State private var searchToggleTapped = false
+    /// The card whose header title is currently being edited, if any.
+    @State private var renameItemID: UUID?
+    @State private var showFilters = false
+    /// Apps present in the history, resolved when the filter popover opens.
+    @State private var filterApps: [FilterApp] = []
     @FocusState private var searchFocused: Bool
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     @AppStorage("accessibilityBannerDismissed") private var accessibilityBannerDismissed = false
@@ -52,9 +57,9 @@ struct ContentView: View {
         case .all:
             return store.filteredItems
         case .pinned:
-            let pinned = store.items.filter(\.isPinned)
-            guard !store.searchQuery.isEmpty else { return pinned }
-            return pinned.filter { $0.displayText.localizedCaseInsensitiveContains(store.searchQuery) }
+            // Narrowed by the very same search box and filter popover as the main tab — one that
+            // understood them in one tab and not the other would just look broken.
+            return store.pinnedFilteredItems
         }
     }
 
@@ -105,7 +110,7 @@ struct ContentView: View {
                     }
                 }
                 .keyboardShortcut(.delete, modifiers: [])
-                .disabled(searchFocused)
+                .disabled(searchFocused || isRenaming)
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
@@ -113,7 +118,7 @@ struct ContentView: View {
                     selection.set(Set(displayedItems.map(\.id)))
                 }
                 .keyboardShortcut("a", modifiers: .command)
-                .disabled(searchFocused)
+                .disabled(searchFocused || isRenaming)
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
@@ -130,12 +135,16 @@ struct ContentView: View {
                     Button("") { moveSelection(by: 1) }
                         .keyboardShortcut(.downArrow, modifiers: [])
                 }
-                .disabled(searchFocused)
+                .disabled(searchFocused || isRenaming)
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
                 Group {
-                    Button("") { if let it = primarySelectedItem { pasteItem(it) } }
+                    // ⏎ pastes what is selected — all of it. Pasting only the first of three
+                    // ⌘-clicked cards is never what the selection meant, and one shortcut for
+                    // both cases means one fewer hidden button on the panel's open path (each
+                    // registered key equivalent is resolved when first responder is established).
+                    Button("") { pasteSelected() }
                         .keyboardShortcut(.return, modifiers: [])
                     Button("") { if let it = primarySelectedItem { pastePlainText(it) } }
                         .keyboardShortcut(.return, modifiers: .shift)
@@ -144,7 +153,7 @@ struct ContentView: View {
                     Button("") { if let it = primarySelectedItem { togglePreview(it) } }
                         .keyboardShortcut(.space, modifiers: [])
                 }
-                .disabled(searchFocused)
+                .disabled(searchFocused || isRenaming)
                 .opacity(0)
                 .frame(width: 0, height: 0)
             }
@@ -201,6 +210,9 @@ struct ContentView: View {
             // but never while the panel is hiding: that path intentionally clears the selection.
             guard !open else { return }
             searchFocused = false
+            // The filter button lives in the search field, so its popover has nothing left to
+            // hang off once the field folds away.
+            if showFilters { showFilters = false }
             guard !isHidingPanel else { return }
             if selection.isEmpty, let first = displayedItems.first {
                 selection.select(first.id)
@@ -214,8 +226,14 @@ struct ContentView: View {
             isHidingPanel = true
             if showSearch { showSearch = false }
             if !store.searchQuery.isEmpty { store.searchQuery = "" }
+            // Filters go with the search box: reopening to a silently narrowed history reads
+            // as "my clipboard lost everything".
+            if showFilters { showFilters = false }
+            if !store.filters.isEmpty { store.filters.clear() }
             selection.clear()
             if previewItemID != nil { previewItemID = nil }
+            // Drop a half-finished rename rather than reopening the panel into edit mode.
+            if renameItemID != nil { renameItemID = nil }
         }
         .onReceive(NotificationCenter.default.publisher(for: .pasteNumberedItem)) { note in
             guard let number = note.userInfo?["number"] as? Int,
@@ -266,6 +284,14 @@ struct ContentView: View {
         .onChange(of: showDeleteSelectedConfirm) { showing in
             NotificationCenter.default.post(
                 name: showing ? .clipboardAlertShown : .clipboardAlertHidden,
+                object: nil
+            )
+        }
+        // Borrows the alert handshake so AppDelegate stops swallowing Escape while a name is
+        // being typed: Escape must cancel the edit, not close the panel.
+        .onChange(of: renameItemID) { id in
+            NotificationCenter.default.post(
+                name: id != nil ? .clipboardAlertShown : .clipboardAlertHidden,
                 object: nil
             )
         }
@@ -333,10 +359,34 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard showSearch else { return }
-            withAnimation(toolbarSpring) { showSearch = false; store.searchQuery = "" }
+            // Closing the search box explicitly drops its filter tokens too — leaving invisible
+            // filters applied would look like items had gone missing.
+            withAnimation(toolbarSpring) {
+                showSearch = false
+                store.searchQuery = ""
+                if !store.filters.isEmpty { store.filters.clear() }
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    /// Lives inside the search field, at its trailing edge.
+    private var filterButton: some View {
+        FilterIconButton(isActive: !store.filters.isEmpty) {
+            // Clicking the button pulls focus out of the text field, and an empty field that
+            // loses focus collapses the search — taking this button's popover anchor with it.
+            // The same flag the tab buttons use suppresses that for the length of the click.
+            searchToggleTapped = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { searchToggleTapped = false }
+            // Resolving app names and icons hits LaunchServices, so it happens here rather than
+            // on every toolbar render.
+            filterApps = FilterApp.present(in: store.items)
+            showFilters.toggle()
+        }
+        .popover(isPresented: $showFilters, arrowEdge: previewArrowEdge) {
+            FilterPopover(filters: $store.filters, apps: filterApps)
+        }
     }
 
     private func tabFull(title: String, icon: String, iconColor: Color? = nil, tab: ClipboardTab) -> some View {
@@ -359,13 +409,26 @@ struct ContentView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.secondary)
 
+            // Guarded rather than left to draw nothing: both toolbar layouts stay in the
+            // hierarchy (the hidden one at opacity 0), so this is built on every toolbar pass —
+            // including the one on the panel's open path, where no filter is ever set yet.
+            if !store.filters.isEmpty {
+                ActiveFilterTokens(filters: $store.filters)
+            }
+
             DebouncedSearchField(focused: $searchFocused) {
                 guard !searchToggleTapped else { return }
+                // Filters live as tokens inside this field: folding it away would hide the only
+                // sign that the list is being narrowed.
+                guard store.filters.isEmpty else { return }
                 withAnimation(toolbarSpring) { showSearch = false }
             }
+
+            filterButton
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity)
         .fixedSize(horizontal: false, vertical: true)
         .background(
@@ -386,12 +449,18 @@ struct ContentView: View {
                         }
                         ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                             ClipboardItemCard(
-                                item: item, index: index + 1, isCopied: copiedID == item.id
+                                item: item, index: index + 1, isCopied: copiedID == item.id,
+                                actions: cardActions(for: item),
+                                isRenaming: renameItemID == item.id,
+                                onRenameEnd: { endRename($0) }
                             )
-                            .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { toggleSelection(item.id) })
-                            .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { pasteItem(item) })
+                            .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { _, _ in toggleSelection(item.id) })
+                            .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { point, size in
+                                handleDoubleClick(on: item, at: point, in: size)
+                            })
                             .onTapGesture(count: 1) { selectItem(item) }
-                            .overlay(CardContextMenu { cardMenu(for: item) })
+                            .onDrag { dragProvider(for: item) }
+                            .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                             .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
                                 PreviewPopoverContent(item: item) { previewItemID = nil }
                             }
@@ -421,13 +490,19 @@ struct ContentView: View {
                     }
                     ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                         ClipboardItemCard(
-                            item: item, index: index + 1, isCopied: copiedID == item.id
+                            item: item, index: index + 1, isCopied: copiedID == item.id,
+                            actions: cardActions(for: item),
+                            isRenaming: renameItemID == item.id,
+                            onRenameEnd: { endRename($0) }
                         )
                         .frame(maxWidth: .infinity)
-                        .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { toggleSelection(item.id) })
-                        .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { pasteItem(item) })
+                        .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { _, _ in toggleSelection(item.id) })
+                        .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { point, size in
+                                handleDoubleClick(on: item, at: point, in: size)
+                            })
                         .onTapGesture(count: 1) { selectItem(item) }
-                        .overlay(CardContextMenu { cardMenu(for: item) })
+                        .onDrag { dragProvider(for: item) }
+                        .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                         .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
                             PreviewPopoverContent(item: item) { previewItemID = nil }
                         }
@@ -470,7 +545,7 @@ struct ContentView: View {
     /// This used to be a SwiftUI `.contextMenu`, whose content SwiftUI evaluates eagerly for
     /// every row: one scroll built 86 menus for 43 cards, each ten Buttons carrying a
     /// `.keyboardShortcut`. It dominated scrolling jank — 45 late frames with it, 8 without.
-    private func cardMenu(for item: ClipboardItem) -> NSMenu {
+    private func cardMenu(for item: ClipboardItem, anchor: NSView) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem(title: "Paste\(targetSuffix)", symbol: "arrow.right.doc.on.clipboard",
                                      key: "\r") { pasteItem(item) })
@@ -478,9 +553,23 @@ struct ContentView: View {
             menu.addItem(ClosureMenuItem(title: "Paste as Plain Text", symbol: "text.alignleft",
                                          key: "\r", modifiers: .shift) { pastePlainText(item) })
         }
+        if let transformMenu = transformMenu(for: item) {
+            let host = NSMenuItem(title: "Paste as", action: nil, keyEquivalent: "")
+            host.image = NSImage(systemSymbolName: "textformat.alt", accessibilityDescription: nil)
+            host.submenu = transformMenu
+            menu.addItem(host)
+        }
+        // Only meaningful with a multi-item selection, which is exactly when people reach for it.
+        if selection.count > 1 {
+            menu.addItem(ClosureMenuItem(title: "Paste \(selection.count) Selected Items",
+                                         symbol: "list.bullet.rectangle",
+                                         key: "\r") { pasteSelected() })
+        }
         menu.addItem(ClosureMenuItem(title: "Copy", symbol: "doc.on.doc",
                                      key: "c", modifiers: .command) { copyItem(item) })
         menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: item.label == nil ? "Name…" : "Rename…",
+                                     symbol: "character.cursor.ibeam") { beginRename(item) })
         if item.type == .url, let text = item.text, let url = URL(string: text) {
             menu.addItem(ClosureMenuItem(title: "Open URL", symbol: "safari") {
                 NSWorkspace.shared.open(url)
@@ -493,8 +582,8 @@ struct ContentView: View {
                                      symbol: item.isPinned ? "pin.slash" : "pin") { store.togglePin(item) })
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: "Preview", symbol: "eye", key: " ") { previewItemID = item.id })
-        menu.addItem(ClosureMenuItem(title: "Share", symbol: "square.and.arrow.up") {
-            presentShareMenu(for: item)
+        menu.addItem(ClosureMenuItem(title: "Share", symbol: "square.and.arrow.up") { [weak anchor] in
+            presentShareMenu(for: item, anchor: anchor)
         })
         return menu
     }
@@ -503,15 +592,37 @@ struct ContentView: View {
     /// SwiftUI submenu, which made `.contextMenu` eagerly call `NSSharingService.sharingServices`
     /// for every visible card on every re-layout (~110ms) — freezing selection/paste. Computing
     /// them only when Share is chosen keeps the context menu (and thus every click) cheap.
-    private func presentShareMenu(for item: ClipboardItem) {
+    ///
+    /// `anchor` is the card's own overlay view, so the picker pops up hugging that card. The old
+    /// code anchored to `NSApp.keyWindow`'s mouse location, but the panel is non-activating and
+    /// never becomes key, so the fallback window it picked put the picker adrift on screen.
+    private func presentShareMenu(for item: ClipboardItem, anchor: NSView?) {
         let items = shareItems(for: item)
         guard !items.isEmpty else { return }
+        let edge = shareArrowEdge
         DispatchQueue.main.async {
+            let picker = NSSharingServicePicker(items: items)
+            if let anchor, anchor.window != nil, !anchor.bounds.isEmpty {
+                picker.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: edge)
+                return
+            }
+            // The card went away (scrolled out, deleted) between the click and here.
             guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }),
                   let view = window.contentView else { return }
             let loc = view.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            NSSharingServicePicker(items: items)
-                .show(relativeTo: NSRect(origin: loc, size: .zero), of: view, preferredEdge: .minY)
+            picker.show(relativeTo: NSRect(origin: loc, size: .zero), of: view, preferredEdge: .minY)
+        }
+    }
+
+    /// Which side of the card the share picker should sit on — away from the screen edge the
+    /// panel is docked to, mirroring `previewArrowEdge`. Card anchor views are unflipped, so
+    /// `.maxY` is their top.
+    private var shareArrowEdge: NSRectEdge {
+        switch panelPosition {
+        case "top":   return .minY
+        case "left":  return .maxX
+        case "right": return .minX
+        default:      return .maxY
         }
     }
 
@@ -530,6 +641,135 @@ struct ContentView: View {
         case .file, .folder:
             return item.fileURLs ?? []
         }
+    }
+
+    /// "Paste as ▸ Trimmed / Single Line / Pretty JSON / …", or nil when nothing applies.
+    ///
+    /// Built only while the context menu is being assembled — i.e. once, on an explicit
+    /// right-click — because deciding applicability means actually running each transform.
+    private func transformMenu(for item: ClipboardItem) -> NSMenu? {
+        guard let text = item.text else { return nil }
+        let transforms = TextTransform.applicable(to: text, type: item.type)
+        guard !transforms.isEmpty else { return nil }
+        let submenu = NSMenu()
+        for transform in transforms {
+            submenu.addItem(ClosureMenuItem(title: transform.title, symbol: transform.symbol) {
+                pasteTransformed(item, using: transform)
+            })
+        }
+        return submenu
+    }
+
+    private func pasteTransformed(_ item: ClipboardItem, using transform: TextTransform) {
+        guard let text = item.text, let transformed = transform.apply(to: text) else { return }
+        writePlainTextAndPaste(transformed, reorder: item.id)
+    }
+
+    /// Pastes every selected card at once, in the order they appear in the panel. With one card
+    /// selected — or nothing left to join — it falls back to a normal single paste, which can
+    /// still carry an image or a real file instead of text.
+    private func pasteSelected() {
+        let chosen = displayedItems.filter { selection.contains($0.id) }
+        guard let joined = MultiPaste.joinedText(for: chosen, separator: .stored()) else {
+            if let single = chosen.first { pasteItem(single) }
+            return
+        }
+        writePlainTextAndPaste(joined, reorder: chosen.first?.id)
+    }
+
+    /// Shared tail of every "paste something other than the item itself" path: put plain text on
+    /// the pasteboard, claim the change so the monitor doesn't re-capture it as a new item, and
+    /// let AppDelegate press ⌘V.
+    private func writePlainTextAndPaste(_ text: String, reorder id: UUID?) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        ClipboardMonitor.shared.markNextChangeAsOwn()
+        pendingReorderID = id
+        NotificationCenter.default.post(name: .pasteClipboardItem, object: nil)
+    }
+
+    /// Double-clicking a card pastes it — except on its title, where it starts a rename, the way
+    /// a filename behaves in Finder.
+    private func handleDoubleClick(on item: ClipboardItem, at point: CGPoint, in size: CGSize) {
+        guard renameItemID == nil else { return }
+        if isInTitleZone(point, in: size) {
+            beginRename(item)
+        } else {
+            pasteItem(item)
+        }
+    }
+
+    /// The card's header strip, minus the source-app icon bleeding in from its right edge. In the
+    /// vertical panel the row is wider than the card, so the card's own box is derived first.
+    private func isInTitleZone(_ point: CGPoint, in size: CGSize) -> Bool {
+        let scale = store.panelScale
+        let cardWidth = min(size.width, PanelLayout.cardBaseWidth * scale)
+        let left = (size.width - cardWidth) / 2
+        let appIconZone = 70 * scale
+        return point.y <= PanelLayout.cardHeaderHeight * scale
+            && point.x >= left
+            && point.x <= left + cardWidth - appIconZone
+    }
+
+    private func beginRename(_ item: ClipboardItem) {
+        // Deselect first: the hidden ⏎/Space/Delete shortcuts act on the selection, and they are
+        // disabled while renaming anyway — but a stray selection ring under an edit field reads
+        // as if both were live.
+        selection.select(item.id)
+        renameItemID = item.id
+    }
+
+    /// `newName` is nil when the edit was cancelled.
+    private func endRename(_ newName: String?) {
+        guard let id = renameItemID else { return }
+        renameItemID = nil
+        guard let newName else { return }
+        store.setLabel(newName, for: id)
+    }
+
+    private var isRenaming: Bool { renameItemID != nil }
+
+    /// Pin / delete for the buttons a card shows while hovered. Sharing stays in the right-click
+    /// menu, where the picker can anchor to the card's own AppKit view.
+    private func cardActions(for item: ClipboardItem) -> CardActions {
+        CardActions(
+            isPinned: item.isPinned,
+            togglePin: { store.togglePin(item) },
+            delete: {
+                selection.remove(item.id)
+                store.delete(item)
+            }
+        )
+    }
+
+    /// What a card carries when dragged out of the panel.
+    ///
+    /// Files and images are offered as their real file so Finder accepts the drop and image-aware
+    /// apps still get pixels; links go as a URL so browsers and note apps make them clickable.
+    private func dragProvider(for item: ClipboardItem) -> NSItemProvider {
+        switch item.type {
+        case .file, .folder:
+            if let url = item.fileURLs?.first, let provider = NSItemProvider(contentsOf: url) {
+                return provider
+            }
+        case .image:
+            if let url = ClipboardStore.shared.imageURL(for: item.id),
+               FileManager.default.fileExists(atPath: url.path),
+               let provider = NSItemProvider(contentsOf: url) {
+                return provider
+            }
+            if let data = item.imageData, let image = NSImage(data: data) {
+                return NSItemProvider(object: image)
+            }
+        case .url:
+            if let text = item.text, let url = URL(string: text) {
+                return NSItemProvider(object: url as NSURL)
+            }
+        case .text:
+            break
+        }
+        return NSItemProvider(object: (item.text ?? item.displayText) as NSString)
     }
 
     private func copyItem(_ item: ClipboardItem) {
@@ -558,14 +798,10 @@ struct ContentView: View {
     }
 
     private func pastePlainText(_ item: ClipboardItem) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(item.text ?? item.displayText, forType: .string)
-        // Tell the monitor this clipboard change is ours; otherwise it re-captures the pasted
-        // text with the target app as the source and overwrites the item's real source app.
-        ClipboardMonitor.shared.markNextChangeAsOwn()
-        pendingReorderID = item.id
-        NotificationCenter.default.post(name: .pasteClipboardItem, object: nil)
+        // `writePlainTextAndPaste` also tells the monitor the change is ours; otherwise it
+        // re-captures the pasted text with the target app as the source and overwrites the
+        // item's real source app.
+        writePlainTextAndPaste(item.text ?? item.displayText, reorder: item.id)
     }
 
     private func toggleSelection(_ id: UUID) {
@@ -689,6 +925,33 @@ private struct AccessibilityPanelBanner: View {
     }
 }
 
+/// The search bar's filter button. Carries a dot while any filter is on, so a narrowed list is
+/// never mistaken for an empty history.
+private struct FilterIconButton: View {
+    let isActive: Bool
+    let onTap: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Image(systemName: "line.3.horizontal.decrease")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundColor(isActive ? Color.accentColor : .secondary)
+            .padding(6)
+            .background(Circle().fill(hovered ? Color(NSColor.controlColor) : .clear))
+            .overlay(alignment: .topTrailing) {
+                if isActive {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 5, height: 5)
+                        .offset(x: -1, y: 1)
+                }
+            }
+            .onHover { hovered = $0 }
+            .onTapGesture { onTap() }
+            .help("Filter by type, app, or date")
+    }
+}
+
 private struct SearchIconButton: View {
     let onTap: () -> Void
     @State private var hovered = false
@@ -792,9 +1055,12 @@ private struct CompactTabButton: View {
     }
 }
 
+/// Reports panel-wide clicks that landed on this view, with the click point in the view's own
+/// (top-left origin) coordinates and the view's size — so a caller can tell *where* on a card
+/// the click landed: the title bar means "rename", the rest means "paste".
 private struct PanelClickOverlay: NSViewRepresentable {
     let notification: Notification.Name
-    let action: () -> Void
+    let action: (CGPoint, CGSize) -> Void
 
     func makeNSView(context: Context) -> PanelClickView {
         PanelClickView(notification: notification, action: action)
@@ -807,10 +1073,10 @@ private struct PanelClickOverlay: NSViewRepresentable {
 
 private final class PanelClickView: NSView {
     let notification: Notification.Name
-    var action: () -> Void
+    var action: (CGPoint, CGSize) -> Void
     private var observer: NSObjectProtocol?
 
-    init(notification: Notification.Name, action: @escaping () -> Void) {
+    init(notification: Notification.Name, action: @escaping (CGPoint, CGSize) -> Void) {
         self.notification = notification
         self.action = action
         super.init(frame: .zero)
@@ -821,6 +1087,10 @@ private final class PanelClickView: NSView {
     deinit {
         if let obs = observer { NotificationCenter.default.removeObserver(obs) }
     }
+
+    /// Flipped so the reported point is measured from the top of the card, which is how the card
+    /// is laid out (header first) and how callers reason about it.
+    override var isFlipped: Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -836,7 +1106,7 @@ private final class PanelClickView: NSView {
                 else { return }
                 let pt = self.convert(loc, from: nil)
                 guard self.bounds.contains(pt) else { return }
-                self.action()
+                self.action(pt, self.bounds.size)
             }
         } else {
             if let obs = observer { NotificationCenter.default.removeObserver(obs); observer = nil }
@@ -945,22 +1215,28 @@ final class ClosureMenuItem: NSMenuItem {
 }
 
 /// Hosts a card's right-click menu without SwiftUI ever building it up front.
+///
+/// The builder is handed the overlay view itself: it covers exactly the card's frame, which makes
+/// it the anchor for anything the menu pops up next to it (the share picker).
 private struct CardContextMenu: NSViewRepresentable {
-    let build: () -> NSMenu
+    let build: (NSView) -> NSMenu
 
     func makeNSView(context: Context) -> CardContextMenuView { CardContextMenuView(build: build) }
     func updateNSView(_ nsView: CardContextMenuView, context: Context) { nsView.build = build }
 }
 
 private final class CardContextMenuView: NSView {
-    var build: () -> NSMenu
+    var build: (NSView) -> NSMenu
 
-    init(build: @escaping () -> NSMenu) {
+    init(build: @escaping (NSView) -> NSMenu) {
         self.build = build
         super.init(frame: .zero)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Kept unflipped so `shareArrowEdge`'s `.maxY` really means "above the card".
+    override var isFlipped: Bool { false }
 
     /// Claim right-clicks (and ⌃-click) only, so the card's own tap, double-click and ⌘-click
     /// handling underneath is untouched.
@@ -976,5 +1252,5 @@ private final class CardContextMenuView: NSView {
         }
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? { build() }
+    override func menu(for event: NSEvent) -> NSMenu? { build(self) }
 }

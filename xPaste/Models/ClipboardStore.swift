@@ -8,7 +8,7 @@ final class ClipboardStore: ObservableObject {
     // Deliberately not `@Published`: see `publishingSuppressed`.
     private(set) var items: [ClipboardItem] = [] {
         willSet { notifyWillChange() }
-        didSet { _cachedFilteredItems = nil }
+        didSet { invalidateCaches() }
     }
 
     /// Silences SwiftUI updates while nothing is on screen.
@@ -30,7 +30,17 @@ final class ClipboardStore: ObservableObject {
         if publishingSuppressed { pendingChange = true } else { objectWillChange.send() }
     }
     @Published var searchQuery = "" {
-        didSet { _cachedFilteredItems = nil }
+        didSet { invalidateCaches() }
+    }
+
+    /// Type / app / date switches from the filter popover, applied on top of `searchQuery`.
+    @Published var filters = SearchFilters() {
+        didSet { invalidateCaches() }
+    }
+
+    private func invalidateCaches() {
+        _cachedFilteredItems = nil
+        _cachedPinnedItems = nil
     }
 
     /// Card scale for the screen the panel currently sits on. AppDelegate sets this from the
@@ -59,6 +69,7 @@ final class ClipboardStore: ObservableObject {
     private let saveQueue = DispatchQueue(label: "com.user.xPaste.save", qos: .background)
 
     private var _cachedFilteredItems: [ClipboardItem]?
+    private var _cachedPinnedItems: [ClipboardItem]?
 
     private let imageCache: NSCache<NSString, NSImage> = {
         let c = NSCache<NSString, NSImage>()
@@ -103,21 +114,41 @@ final class ClipboardStore: ObservableObject {
         return result
     }
 
+    /// The Pinned tab's list, narrowed the same way and cached the same way as `filteredItems`.
+    /// `ContentView` reads it several times per body pass, so recomputing it each time meant
+    /// filtering the whole history four times over to draw one panel.
+    var pinnedFilteredItems: [ClipboardItem] {
+        if let cached = _cachedPinnedItems { return cached }
+        let result = narrow(items.filter(\.isPinned))
+        _cachedPinnedItems = result
+        return result
+    }
+
     private func computeFilteredItems() -> [ClipboardItem] {
         let sorted = items.sorted {
             if $0.isPinned != $1.isPinned { return $0.isPinned }
             return $0.timestamp > $1.timestamp
         }
-        guard !searchQuery.isEmpty else { return sorted }
-        return sorted.filter { item in
-            switch item.type {
-            case .text, .url:
-                return item.text?.localizedCaseInsensitiveContains(searchQuery) ?? false
-            case .file, .folder:
-                return item.displayText.localizedCaseInsensitiveContains(searchQuery)
-            case .image:
-                return item.displayText.localizedCaseInsensitiveContains(searchQuery)
-            }
+        return narrow(sorted)
+    }
+
+    /// Applies the popover's filters and the search box to any list of items. Shared so the
+    /// Pinned tab, which builds its own list, narrows it exactly the same way.
+    func narrow(_ items: [ClipboardItem]) -> [ClipboardItem] {
+        // `img:`, `app:chrome`, free text — see SearchQuery. A query made only of filter tokens
+        // (`img:` alone) still filters; one that parses to nothing at all is ignored.
+        let query = searchQuery.isEmpty ? nil : SearchQuery.parse(searchQuery)
+        let activeQuery = (query?.isEmpty ?? true) ? nil : query
+        guard !filters.isEmpty || activeQuery != nil else { return items }
+        let resolver = AppNameResolver.shared
+        // One "now" for the whole pass: sampling Date() per item would let a date-window edge
+        // move underneath the filter mid-list.
+        let now = Date()
+        let calendar = Calendar.current
+        return items.filter { item in
+            guard filters.matches(item, now: now, calendar: calendar) else { return false }
+            guard let activeQuery else { return true }
+            return activeQuery.matches(item, appName: { resolver.name(for: $0) })
         }
     }
 
@@ -165,6 +196,31 @@ final class ClipboardStore: ObservableObject {
         guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
         items[idx].isPinned.toggle()
         writeMetadata(items[idx])
+    }
+
+    /// Names an item (or clears the name when `label` is nil/blank).
+    func setLabel(_ label: String?, for id: UUID) {
+        guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newValue = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        guard items[idx].label != newValue else { return }
+        items[idx].label = newValue
+        writeMetadata(items[idx])
+    }
+
+    /// Records what OCR read out of an image. Writing an empty string is meaningful: it marks
+    /// the item as scanned so the backfill never looks at it again.
+    func setOCRText(_ text: String, for id: UUID) {
+        guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
+        guard items[idx].ocrText != text else { return }
+        items[idx].ocrText = text
+        writeMetadata(items[idx])
+    }
+
+    /// Image items that have never been through OCR, newest first — the backfill works through
+    /// recent screenshots before old ones, since those are what people look for.
+    func itemsAwaitingOCR() -> [ClipboardItem] {
+        items.filter { $0.type == .image && $0.ocrText == nil }
     }
 
     func moveToTop(_ item: ClipboardItem) {

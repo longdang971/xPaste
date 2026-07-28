@@ -1,12 +1,29 @@
 import SwiftUI
 import AppKit
 
+/// The quick actions a card offers while the pointer is over it. Handed in from `ContentView`,
+/// which owns the store and the share picker.
+struct CardActions {
+    let isPinned: Bool
+    let togglePin: () -> Void
+    let delete: () -> Void
+}
+
 struct ClipboardItemCard: View {
     let item: ClipboardItem
     let index: Int
     let isCopied: Bool
+    var actions: CardActions? = nil
+    /// Turns the header title into an editable field. Driven by ContentView, which owns
+    /// "which card is being renamed" so only one can be at a time.
+    var isRenaming: Bool = false
+    /// Called once when editing ends: the new name, or nil if the user cancelled.
+    var onRenameEnd: ((String?) -> Void)? = nil
 
     @State private var isHovered = false
+    @State private var draftName = ""
+    @State private var renameEnded = false
+    @FocusState private var nameFieldFocused: Bool
     @State private var loadedImage: NSImage?
     @State private var linkPreview: LinkPreviewData?
     @State private var linkImageChecked = false
@@ -160,31 +177,44 @@ struct ClipboardItemCard: View {
                height: PanelLayout.cardBaseHeight * panelScale)
     }
 
+    /// What the header shows when the item has no name of its own.
+    private var derivedTitle: String {
+        if detectedColor != nil { return "Color" }
+        if item.type == .file {
+            let n = item.fileURLs?.count ?? 0
+            return "\(n) file\(n == 1 ? "" : "s")"
+        }
+        if item.type == .folder {
+            let n = item.fileURLs?.count ?? 0
+            return "\(n) folder\(n == 1 ? "" : "s")"
+        }
+        if detectedFilePath != nil {
+            return detectedIsDirectory ? "Folder" : "File"
+        }
+        return item.type.cardTitle
+    }
+
+    /// The header title: a name the user gave this item wins over every derived title — that
+    /// name is the whole point of pinning something as a snippet.
+    private var headerTitle: String {
+        if let label = item.label, !label.isEmpty { return label }
+        return derivedTitle
+    }
+
     private func cardHeader(_ accent: Color) -> some View {
-        let title: String = {
-            if detectedColor != nil { return "Color" }
-            if item.type == .file {
-                let n = item.fileURLs?.count ?? 0
-                return "\(n) file\(n == 1 ? "" : "s")"
-            }
-            if item.type == .folder {
-                let n = item.fileURLs?.count ?? 0
-                return "\(n) folder\(n == 1 ? "" : "s")"
-            }
-            if detectedFilePath != nil {
-                return detectedIsDirectory ? "Folder" : "File"
-            }
-            return item.type.cardTitle
-        }()
         // Headers now carry the app's real brightness, so a pale icon (Finder, Notes) yields a
         // pale bar that white text would vanish on. Flip the title to dark for those.
         let onAccent: Color = isPaleColor(accent) ? .black.opacity(0.78) : .white
         return HStack(alignment: .center, spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(onAccent)
-                    .lineLimit(1)
+                if isRenaming {
+                    nameField(onAccent: onAccent)
+                } else {
+                    Text(headerTitle)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(onAccent)
+                        .lineLimit(1)
+                }
                 Text(item.timestamp.relativeString)
                     .font(.system(size: 10))
                     .foregroundColor(onAccent.opacity(0.75))
@@ -196,6 +226,57 @@ struct ClipboardItemCard: View {
         }
         .frame(height: PanelLayout.cardHeaderHeight)
         .background(accent)
+    }
+
+    /// The header title, editable in place.
+    ///
+    /// Return commits, Escape cancels, and clicking away commits — the Finder rule. `renameEnded`
+    /// makes sure only the first of those wins: ending the edit drops focus, which would
+    /// otherwise fire the click-away commit right after a cancel and undo it.
+    /// No box, no highlight: the title keeps its exact look and only gains a caret, so editing
+    /// reads as typing over the title itself rather than as a field appearing on the card.
+    private func nameField(onAccent: Color) -> some View {
+        TextField("", text: $draftName)
+            .textFieldStyle(.plain)
+            .font(.system(size: 15, weight: .bold))
+            .foregroundColor(onAccent)
+            .focused($nameFieldFocused)
+            .lineLimit(1)
+            .frame(width: PanelLayout.cardBaseWidth - 108, alignment: .leading)
+            .onSubmit { finishRename(with: draftName) }
+            .onExitCommand { finishRename(with: nil) }
+            .onChange(of: nameFieldFocused) { focused in
+                if !focused { finishRename(with: draftName) }
+            }
+            .onAppear {
+                // Start from what the header already reads — including a derived title like
+                // "Link" — so nothing vanishes when the edit begins and the user can just keep
+                // typing onto it.
+                draftName = headerTitle
+                renameEnded = false
+                // Same delay the search box uses: the field has to exist in the responder
+                // chain before focus will stick.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    nameFieldFocused = true
+                    placeCaretAtEnd()
+                }
+            }
+    }
+
+    /// SwiftUI hands a newly focused text field a select-all, so the first keystroke would wipe
+    /// the name instead of extending it. Collapse that selection to the end via the field editor.
+    private func placeCaretAtEnd() {
+        DispatchQueue.main.async {
+            guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
+            let end = (editor.string as NSString).length
+            editor.setSelectedRange(NSRange(location: end, length: 0))
+        }
+    }
+
+    private func finishRename(with value: String?) {
+        guard !renameEnded else { return }
+        renameEnded = true
+        onRenameEnd?(value)
     }
 
     private var headerIcon: some View {
@@ -301,7 +382,12 @@ struct ClipboardItemCard: View {
         .frame(maxWidth: .infinity)
         .frame(maxHeight: .infinity)
         .overlay(alignment: .topTrailing) {
-            if item.isPinned {
+            // The hover buttons take this corner while they're up: the pin button already shows
+            // the pinned state, so keeping the static indicator too would just be two pins.
+            if let actions, isHovered {
+                CardHoverActions(actions: actions)
+                    .padding(6)
+            } else if item.isPinned {
                 Image(systemName: "pin.fill")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(.red)
@@ -561,8 +647,7 @@ struct ClipboardItemCard: View {
 
     private var detectedColor: Color? {
         guard item.type == .text, let text = item.text else { return nil }
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return parseHexColor(t) ?? parseRGBColor(t) ?? parseHSLColor(t)
+        return ColorParser.parse(text)
     }
 
     private func isImagePath(_ url: URL) -> Bool {
@@ -584,73 +669,6 @@ struct ClipboardItemCard: View {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDir) else { return (nil, false) }
         return (URL(fileURLWithPath: expanded), isDir.boolValue)
-    }
-
-    private func parseHexColor(_ s: String) -> Color? {
-        guard s.hasPrefix("#") else { return nil }
-        var hex = String(s.dropFirst())
-        if hex.count == 3 || hex.count == 4 { hex = hex.map { "\($0)\($0)" }.joined() }
-        guard hex.allSatisfy({ $0.isHexDigit }) else { return nil }
-        if hex.count == 6, let val = UInt32(hex, radix: 16) {
-            return Color(red: Double((val >> 16) & 0xFF) / 255,
-                         green: Double((val >> 8) & 0xFF) / 255,
-                         blue: Double(val & 0xFF) / 255)
-        }
-        if hex.count == 8, let val = UInt32(hex, radix: 16) {
-            return Color(red: Double((val >> 24) & 0xFF) / 255,
-                         green: Double((val >> 16) & 0xFF) / 255,
-                         blue: Double((val >> 8) & 0xFF) / 255,
-                         opacity: Double(val & 0xFF) / 255)
-        }
-        return nil
-    }
-
-    private static let rgbRegex = try? NSRegularExpression(
-        pattern: #"^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([\d.]+))?\s*\)$"#,
-        options: .caseInsensitive)
-    private static let hslRegex = try? NSRegularExpression(
-        pattern: #"^hsla?\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%(?:\s*,\s*([\d.]+))?\s*\)$"#,
-        options: .caseInsensitive)
-
-    private func parseRGBColor(_ s: String) -> Color? {
-        guard s.count >= 10, s.lowercased().hasPrefix("rgb"),
-              let regex = Self.rgbRegex,
-              let m = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) else { return nil }
-        func cap(_ i: Int) -> Double? {
-            guard let r = Range(m.range(at: i), in: s) else { return nil }
-            return Double(s[r])
-        }
-        guard let r = cap(1), let g = cap(2), let b = cap(3),
-              r <= 255, g <= 255, b <= 255 else { return nil }
-        return Color(red: r / 255, green: g / 255, blue: b / 255, opacity: cap(4) ?? 1.0)
-    }
-
-    private func parseHSLColor(_ s: String) -> Color? {
-        guard s.count >= 10, s.lowercased().hasPrefix("hsl"),
-              let regex = Self.hslRegex,
-              let m = regex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) else { return nil }
-        func cap(_ i: Int) -> Double? {
-            guard let r = Range(m.range(at: i), in: s) else { return nil }
-            return Double(s[r])
-        }
-        guard let h = cap(1), let s = cap(2), let l = cap(3) else { return nil }
-        return hslToColor(h: h / 360, s: s / 100, l: l / 100, a: cap(4) ?? 1.0)
-    }
-
-    private func hslToColor(h: Double, s: Double, l: Double, a: Double) -> Color {
-        if s == 0 { return Color(red: l, green: l, blue: l, opacity: a) }
-        let q = l < 0.5 ? l * (1 + s) : l + s - l * s
-        let p = 2 * l - q
-        func hue2rgb(_ t: Double) -> Double {
-            var t = t
-            if t < 0 { t += 1 }
-            if t > 1 { t -= 1 }
-            if t < 1/6 { return p + (q - p) * 6 * t }
-            if t < 1/2 { return q }
-            if t < 2/3 { return p + (q - p) * (2/3 - t) * 6 }
-            return p
-        }
-        return Color(red: hue2rgb(h + 1/3), green: hue2rgb(h), blue: hue2rgb(h - 1/3), opacity: a)
     }
 
     /// Whether a header bar is pale enough to need dark text. Deliberately higher than the 0.5
@@ -698,6 +716,52 @@ private extension ClipboardContentType {
         case .file:   return .orange
         case .folder: return .blue
         }
+    }
+}
+
+/// Pin / share / delete, floating over a card while the pointer is on it.
+///
+/// Built only while hovered — the card body already re-renders on hover for its ring, so this
+/// costs nothing extra when the pointer is elsewhere.
+private struct CardHoverActions: View {
+    let actions: CardActions
+
+    var body: some View {
+        HStack(spacing: 2) {
+            HoverActionButton(symbol: actions.isPinned ? "pin.slash.fill" : "pin.fill",
+                              tint: actions.isPinned ? .secondary : .red,
+                              help: actions.isPinned ? "Unpin" : "Pin",
+                              action: actions.togglePin)
+            HoverActionButton(symbol: "trash", tint: .secondary,
+                              help: "Delete", action: actions.delete)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(.ultraThinMaterial))
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
+    }
+}
+
+private struct HoverActionButton: View {
+    let symbol: String
+    let tint: Color
+    let help: String
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(tint)
+                .frame(width: 22, height: 20)
+                .background(Circle().fill(hovered ? Color.primary.opacity(0.12) : .clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(help)
     }
 }
 

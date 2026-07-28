@@ -15,15 +15,20 @@ struct ClipboardItem: Identifiable, Codable {
     var fileURLs: [URL]?
     var timestamp: Date
     var isPinned: Bool
+    /// User-given name. Shown instead of the generic card title and searched like the content,
+    /// which is what turns a pinned item into a snippet you can find by name.
     var label: String?
     var sourceAppBundleID: String?
+    /// Text recognised inside an image by `OCRService`, so screenshots are searchable.
+    /// `nil` means "not scanned yet"; an empty string means "scanned, found nothing".
+    var ocrText: String?
     /// Formatted representation (RTF or HTML) so a paste can preserve styling.
     var richData: Data?
     /// Raw pasteboard type of `richData` (e.g. "public.rtf" or "public.html").
     var richType: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, type, text, imageSize, imageHash, fileURLs, timestamp, isPinned, label, sourceAppBundleID, richData, richType
+        case id, type, text, imageSize, imageHash, fileURLs, timestamp, isPinned, label, sourceAppBundleID, ocrText, richData, richType
     }
 
     init(
@@ -38,6 +43,7 @@ struct ClipboardItem: Identifiable, Codable {
         isPinned: Bool = false,
         label: String? = nil,
         sourceAppBundleID: String? = nil,
+        ocrText: String? = nil,
         richData: Data? = nil,
         richType: String? = nil
     ) {
@@ -52,6 +58,7 @@ struct ClipboardItem: Identifiable, Codable {
         self.isPinned = isPinned
         self.label = label
         self.sourceAppBundleID = sourceAppBundleID
+        self.ocrText = ocrText
         self.richData = richData
         self.richType = richType
     }

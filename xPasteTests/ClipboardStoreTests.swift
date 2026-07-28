@@ -147,6 +147,64 @@ final class ClipboardStoreTests: XCTestCase {
         XCTAssertTrue(store.items.contains { $0.text == "ancient" })
     }
 
+    func test_setLabel_names_and_clears() {
+        let item = ClipboardItem(type: .text, text: "1234")
+        store.add(item)
+
+        store.setLabel("  Bank account  ", for: item.id)
+        XCTAssertEqual(store.items.first?.label, "Bank account")
+
+        store.setLabel("   ", for: item.id)
+        XCTAssertNil(store.items.first?.label)
+    }
+
+    func test_filteredItems_matches_label() {
+        let item = ClipboardItem(type: .text, text: "1234")
+        store.add(item)
+        store.setLabel("Bank account", for: item.id)
+        store.searchQuery = "bank"
+
+        XCTAssertEqual(store.filteredItems.count, 1)
+    }
+
+    func test_filteredItems_type_filter_token() {
+        store.add(ClipboardItem(type: .text, text: "some text"))
+        store.add(ClipboardItem(type: .image, imageData: Data([1, 2, 3])))
+        store.searchQuery = "img:"
+
+        XCTAssertEqual(store.filteredItems.count, 1)
+        XCTAssertEqual(store.filteredItems.first?.type, .image)
+    }
+
+    func test_filteredItems_app_filter_token() {
+        store.add(ClipboardItem(type: .text, text: "a", sourceAppBundleID: "com.google.Chrome"))
+        store.add(ClipboardItem(type: .text, text: "b", sourceAppBundleID: "com.apple.Terminal"))
+        store.searchQuery = "app:chrome"
+
+        XCTAssertEqual(store.filteredItems.count, 1)
+        XCTAssertEqual(store.filteredItems.first?.text, "a")
+    }
+
+    func test_setOCRText_makes_image_searchable_and_marks_it_scanned() {
+        let image = ClipboardItem(type: .image, imageData: Data([1, 2, 3]))
+        store.add(image)
+        XCTAssertEqual(store.itemsAwaitingOCR().count, 1)
+
+        store.setOCRText("Invoice 2026", for: image.id)
+        store.searchQuery = "invoice"
+
+        XCTAssertEqual(store.filteredItems.count, 1)
+        XCTAssertTrue(store.itemsAwaitingOCR().isEmpty)
+    }
+
+    func test_setOCRText_empty_still_marks_scanned() {
+        let image = ClipboardItem(type: .image, imageData: Data([9]))
+        store.add(image)
+        store.setOCRText("", for: image.id)
+
+        XCTAssertTrue(store.itemsAwaitingOCR().isEmpty)
+    }
+
     func test_persistence_roundtrip() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("test_clipboard_\(UUID().uuidString)", isDirectory: true)

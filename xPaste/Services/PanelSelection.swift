@@ -34,6 +34,13 @@ final class PanelSelection: ObservableObject {
         set(next)
     }
 
+    func remove(_ id: UUID) {
+        guard ids.contains(id) else { return }
+        var next = ids
+        next.remove(id)
+        set(next)
+    }
+
     func clear() { set([]) }
 
     var isEmpty: Bool { ids.isEmpty }

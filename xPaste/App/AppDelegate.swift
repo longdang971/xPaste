@@ -122,6 +122,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "ignoreTransientContent": true,
             // Passwords.app and Keychain Access are excluded out of the box.
             "ignoredAppBundleIDs": ["com.apple.Passwords", "com.apple.keychainaccess"],
+            "ocrEnabled": true,
+            "multiPasteSeparator": "newline",
         ])
         AppearanceManager.applyStored()
         setupStatusItem()
@@ -129,6 +131,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupHotKey()
         ClipboardMonitor.shared.start()
         warmPanel()
+        // Index older screenshots for search. Deliberately late and paused whenever the panel is
+        // open, so it can never compete with the hotkey path for the main thread.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { OCRService.startBackfill() }
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleToggleClipboard),
@@ -497,6 +502,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.hidePanel()
                 return nil
             }
+            // While an alert is up — or a card's name is being edited, which borrows the same
+            // flag — the panel's own shortcuts must stay out of the way: ⌘1 belongs to the text
+            // field, not to "paste card 1".
+            if self.alertIsPresented { return event }
             if event.modifierFlags.contains(.command),
                event.charactersIgnoringModifiers == "," {
                 self.hidePanel()

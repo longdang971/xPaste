@@ -213,6 +213,8 @@ private struct GeneralTab: View {
     @AppStorage("clearOnLogout") private var clearOnLogout: Bool = false
     @AppStorage("showMenuBarIcon") private var showMenuBarIcon: Bool = true
     @AppStorage("clipboardScanInterval") private var scanInterval: Double = 0.1
+    @AppStorage("ocrEnabled") private var ocrEnabled: Bool = true
+    @AppStorage("multiPasteSeparator") private var multiPasteSeparator: String = "newline"
     @AppStorage("alwaysPastePlainText") private var alwaysPastePlainText: Bool = false
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
@@ -372,6 +374,30 @@ private struct GeneralTab: View {
                             .labelsHidden()
                             .toggleStyle(.switch)
                     }
+
+                    CardDivider()
+
+                    Row(title: "Recognize text in images",
+                        subtitle: "Read text out of screenshots so you can search for what's written inside them.") {
+                        Toggle("", isOn: $ocrEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .onChange(of: ocrEnabled) { on in if on { OCRService.startBackfill() } }
+                    }
+
+                    CardDivider()
+
+                    Row(title: "Multi-item paste separator",
+                        subtitle: "Joins the items when you paste a ⌘-click selection with ↩.") {
+                        Picker("", selection: $multiPasteSeparator) {
+                            Text("New line").tag("newline")
+                            Text("Space").tag("space")
+                            Text("Comma").tag("comma")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 120)
+                    }
                 }
             }
 
@@ -472,7 +498,10 @@ private struct AboutTab: View {
                         .frame(width: 56, height: 56)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("xPaste").font(.system(size: 15, weight: .semibold))
-                        Text("Version 1.0.0").font(.system(size: 12)).foregroundStyle(.secondary)
+                        // Read from the bundle rather than typed here: this line still said
+                        // 1.0.0 two releases after the app was 1.1.0.
+                        Text("Version \(Bundle.main.appVersion)")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
                         Text("Powered by LQ Team").font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -519,7 +548,117 @@ private struct PrivacyTab: View {
                     .padding(.leading, 4)
                 IgnoredAppsList()
             }
+
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("Never Save Matching Text")
+                Text("Copied text containing any of these is never saved. Wrap a pattern in slashes for a regular expression — /sk-[A-Za-z0-9]{20,}/ — otherwise it matches as plain text, ignoring case.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 4)
+                ExcludedPatternsList()
+            }
         }
+    }
+}
+
+/// Editor for `ExclusionRules`' never-save patterns.
+private struct ExcludedPatternsList: View {
+    @State private var patterns: [String] = []
+    @State private var selection: String?
+    @State private var draft = ""
+    @State private var draftIsInvalid = false
+
+    var body: some View {
+        SettingsCard {
+            VStack(spacing: 0) {
+                if patterns.isEmpty {
+                    Text("No patterns added")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
+                } else {
+                    ForEach(patterns, id: \.self) { pattern in
+                        HStack(spacing: 10) {
+                            Image(systemName: pattern.hasPrefix("/") && pattern.hasSuffix("/")
+                                  ? "asterisk" : "textformat")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16)
+                            Text(pattern)
+                                .font(.system(size: 13, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(selection == pattern ? Color.accentColor.opacity(0.18) : Color.clear)
+                        .contentShape(Rectangle())
+                        .onTapGesture { selection = pattern }
+                        if pattern != patterns.last { CardDivider() }
+                    }
+                }
+
+                Divider()
+
+                HStack(spacing: 8) {
+                    TextField("Add a word or /regex/", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                        .onSubmit(add)
+                        .onChange(of: draft) { _ in draftIsInvalid = false }
+                    Button(action: add) {
+                        Image(systemName: "plus").frame(width: 22, height: 18)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Divider().frame(height: 14)
+                    Button(action: removeSelected) {
+                        Image(systemName: "minus").frame(width: 22, height: 18)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(selection == nil)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+
+                if draftIsInvalid {
+                    Text("That regular expression doesn’t compile — it would never match anything.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                }
+            }
+        }
+        .onAppear { patterns = ExclusionRules.storedPatterns() }
+    }
+
+    private func add() {
+        let value = draft.trimmingCharacters(in: .whitespaces)
+        guard !value.isEmpty else { return }
+        guard ExclusionRules.isValid(value) else {
+            draftIsInvalid = true
+            return
+        }
+        guard !patterns.contains(value) else { draft = ""; return }
+        patterns.append(value)
+        save()
+        draft = ""
+    }
+
+    private func removeSelected() {
+        guard let sel = selection else { return }
+        patterns.removeAll { $0 == sel }
+        selection = nil
+        save()
+    }
+
+    private func save() {
+        UserDefaults.standard.set(patterns, forKey: ExclusionRules.defaultsKey)
     }
 }
 

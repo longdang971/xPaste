@@ -80,11 +80,25 @@ final class ClipboardMonitor {
                 var item = ClipboardItem(type: .image, imageData: compressed)
                 item.sourceAppBundleID = sourceBundleID
                 await MainActor.run { ClipboardStore.shared.add(item) }
+                OCRService.scan(itemID: item.id, imageData: compressed)
             }
             return
         }
 
         guard var item = ClipboardItem.from(pasteboard: pb) else { return }
+
+        // Never-store patterns (tokens, keys, card numbers). Checked against the text and, for
+        // file items, the paths — the point is that this content never reaches disk at all.
+        let patterns = ExclusionRules.storedPatterns(defaults)
+        if !patterns.isEmpty {
+            let candidates = [item.text, item.fileURLs?.map(\.path).joined(separator: "\n")]
+            if candidates.compactMap({ $0 }).contains(where: {
+                ExclusionRules.shouldExclude($0, patterns: patterns)
+            }) {
+                return
+            }
+        }
+
         item.sourceAppBundleID = sourceBundleID
         DispatchQueue.main.async {
             ClipboardStore.shared.add(item)
