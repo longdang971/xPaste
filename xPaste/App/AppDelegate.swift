@@ -22,6 +22,7 @@ extension Notification.Name {
     static let cmdClickInPanel      = Notification.Name("com.user.xPaste.cmdClickInPanel")
     static let doubleClickInPanel   = Notification.Name("com.user.xPaste.doubleClickInPanel")
     static let hotkeyChanged        = Notification.Name("com.user.xPaste.hotkeyChanged")
+    static let pasteNumberedItem    = Notification.Name("com.user.xPaste.pasteNumberedItem")
     static let openSettingsWindow   = Notification.Name("com.user.xPaste.openSettingsWindow")
     static let menuBarIconChanged   = Notification.Name("com.user.xPaste.menuBarIconChanged")
     static let screenSharingVisibilityChanged = Notification.Name("com.user.xPaste.screenSharingVisibilityChanged")
@@ -127,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupPanel()
         setupHotKey()
         ClipboardMonitor.shared.start()
+        warmPanel()
 
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleToggleClipboard),
@@ -277,7 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = CGColor.clear
-        hostingView.layer?.cornerRadius = 16
+        hostingView.layer?.cornerRadius = PanelLayout.cornerRadius
         hostingView.layer?.cornerCurve = .continuous
         hostingView.layer?.masksToBounds = true
 
@@ -298,6 +300,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panel = p
     }
 
+    /// Builds the panel's SwiftUI tree once, off-screen, shortly after launch.
+    ///
+    /// Cold, the first open measured 71–89ms against 38–46ms warm: that gap is SwiftUI creating
+    /// the whole view tree on the critical path between the hotkey and the slide starting.
+    /// Doing it here moves the cost to launch, where nobody is waiting on it.
+    private func warmPanel() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let panel = self.panel, !self.panelVisible else { return }
+            // Fully transparent for the duration: ordering the panel in — even at an off-screen
+            // frame — flashed it on screen for a frame at launch. Alpha 0 makes the warm-up
+            // invisible no matter how the window server decides to place it.
+            panel.alphaValue = 0
+            panel.setFrame(self.offscreenFrame(for: self.panelFrame()), display: false, animate: false)
+            panel.orderFrontRegardless()
+            panel.displayIfNeeded()
+            // Establish first responder here too: NSWindow remembers it across orderOut, so the
+            // per-open call below finds it already set and costs nothing.
+            panel.makeFirstResponder(panel.contentView)
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+            if self.settingsWindow?.isVisible != true {
+                ClipboardStore.shared.publishingSuppressed = true
+            }
+        }
+    }
+
     @objc private func updateScreenSharingVisibility() {
         panel?.sharingType = UserDefaults.standard.bool(forKey: "showDuringScreenSharing") ? .readOnly : .none
     }
@@ -307,24 +335,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return NSRect(x: 0, y: 0, width: 900, height: 300)
         }
         let position = UserDefaults.standard.string(forKey: "panelPosition") ?? "bottom"
-        let sf = screen.frame
-        let vf = screen.visibleFrame
         let hThickness = PanelLayout.horizontalThickness(for: screen)
         let vThickness = PanelLayout.verticalThickness(for: screen)
+        // Float the bar with a uniform gap so it reads as a detached panel instead of
+        // hugging the bezel. The axis the bar spans is measured against the full screen —
+        // a Dock parked on that edge must not push the bar off-centre — while the axis it
+        // is anchored on uses the visible frame, so it never sits under the menu bar or Dock.
+        let inset = PanelLayout.screenInset
+        let sf = screen.frame
+        let vf = screen.visibleFrame
+        let hSpan = sf.insetBy(dx: inset, dy: 0)   // left/right extent of a top/bottom bar
+        let vSpan = vf.insetBy(dx: 0, dy: inset)   // top/bottom extent of a left/right bar
 
         switch position {
         case "top":
-            return NSRect(x: sf.minX, y: sf.maxY - hThickness,
-                          width: sf.width, height: hThickness)
+            return NSRect(x: hSpan.minX, y: vf.maxY - inset - hThickness,
+                          width: hSpan.width, height: hThickness)
         case "left":
-            return NSRect(x: sf.minX, y: sf.minY,
-                          width: vThickness, height: sf.height)
+            return NSRect(x: vf.minX + inset, y: vSpan.minY,
+                          width: vThickness, height: vSpan.height)
         case "right":
-            return NSRect(x: sf.maxX - vThickness, y: sf.minY,
-                          width: vThickness, height: sf.height)
+            return NSRect(x: vf.maxX - inset - vThickness, y: vSpan.minY,
+                          width: vThickness, height: vSpan.height)
         default:
-            return NSRect(x: sf.minX, y: vf.minY,
-                          width: sf.width, height: hThickness)
+            return NSRect(x: hSpan.minX, y: vf.minY + inset,
+                          width: hSpan.width, height: hThickness)
         }
     }
 
@@ -333,14 +368,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel() {
-        ClipboardStore.shared.pruneExpired()
+        // Republish anything that piled up while hidden, before the first layout reads it.
+        ClipboardStore.shared.publishingSuppressed = false
         previousApp = NSWorkspace.shared.frontmostApplication
-        ClipboardStore.shared.targetAppName = previousApp?.localizedName
         guard let panel else { return }
         // Lock in the display now (before makeKey can flip NSScreen.main) and publish the
         // matching card scale, so the bar and the cards are sized against the same screen.
         activeScreen = NSScreen.main ?? NSScreen.screens.first
-        ClipboardStore.shared.panelScale = PanelLayout.scale(for: activeScreen)
+        // Guarded: `panelScale` is @Published, and @Published emits even when assigned the same
+        // value — an unconditional write here invalidated the whole panel on every single open,
+        // although the scale only ever changes when the panel moves to a different-sized screen.
+        let scale = PanelLayout.scale(for: activeScreen)
+        if ClipboardStore.shared.panelScale != scale { ClipboardStore.shared.panelScale = scale }
         let target = panelFrame()
         let start  = offscreenFrame(for: target)
 
@@ -350,8 +389,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrame(start, display: false, animate: false)
         panel.orderFrontRegardless()
         panel.makeKey()
+        // Route key events into the SwiftUI content so ⌘A / arrow keys / ⏎ work without first
+        // clicking a card. Guarded: establishing first responder on the hosting view measured
+        // 16–20ms, and it survives an orderOut, so after the warm-up this is a no-op.
         // Route key events into the SwiftUI content right away so ⌘A / arrow keys / ⏎ work the
         // instant the panel appears, without first clicking a card to establish first responder.
+        //
+        // This costs 16-20ms of layout and is the single biggest item on the open path, but it
+        // has to stay here. Skipping it when the first responder is already somewhere inside the
+        // content view does make the call free — and silently breaks arrow-key navigation,
+        // because the responder it finds is not the one that forwards those keys. Deferring it
+        // to just after the slide starts instead steals frames from the slide (measured 9-11
+        // frames instead of 12-14).
         panel.makeFirstResponder(panel.contentView)
         NotificationCenter.default.post(name: .panelDidOpen, object: nil)
 
@@ -360,6 +409,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.panelVisible, self.panel != nil else { return }
             self.slidePanel(from: start, to: target, duration: 0.11, easeOut: true)
+            // Housekeeping that nothing on the first frame depends on. Running it here keeps it
+            // out of the window between the hotkey and the panel starting to move.
+            ClipboardStore.shared.targetAppName = self.previousApp?.localizedName
         }
     }
 
@@ -377,6 +429,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Panel is now off-screen and unmounted; safe to run deferred store mutations
             // (e.g. moveToTop after a paste) without freezing the close animation.
             NotificationCenter.default.post(name: .panelDidHide, object: nil)
+            // Expiry used to be enforced at the top of showPanel, where a prune that actually
+            // removed something re-laid the panel out before it could start moving. Off-screen
+            // is the right moment for it.
+            ClipboardStore.shared.pruneExpired()
+            // Nothing is watching the panel now, so stop paying SwiftUI for its updates.
+            // The Settings window observes the same store, so only go quiet when it is closed.
+            if self?.settingsWindow?.isVisible != true {
+                ClipboardStore.shared.publishingSuppressed = true
+            }
         }
     }
 
@@ -405,12 +466,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func offscreenFrame(for frame: NSRect) -> NSRect {
         let pos = UserDefaults.standard.string(forKey: "panelPosition") ?? "bottom"
+        // The panel no longer touches the screen edge, so sliding it by its own thickness
+        // would leave the edge gap's worth of it on screen — clear the gap and the shadow too.
+        let slack = PanelLayout.screenInset + 40
         var f = frame
         switch pos {
-        case "top":   f.origin.y = frame.maxY
-        case "left":  f.origin.x = frame.minX - frame.width
-        case "right": f.origin.x = frame.maxX
-        default:      f.origin.y = frame.minY - frame.height
+        case "top":   f.origin.y = frame.maxY + slack
+        case "left":  f.origin.x = frame.minX - frame.width - slack
+        case "right": f.origin.x = frame.maxX + slack
+        default:      f.origin.y = frame.minY - frame.height - slack
         }
         return f
     }
@@ -437,6 +501,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                event.charactersIgnoringModifiers == "," {
                 self.hidePanel()
                 self.openSettings()
+                return nil
+            }
+            // ⌘1…⌘9 paste the card carrying that number, ⌘⇧1…⌘⇧9 paste it as plain text.
+            //
+            // Handled here rather than with hidden SwiftUI Buttons carrying `.keyboardShortcut`:
+            // the eighteen of those cost ~4ms of the panel's first-responder setup and ~7ms of
+            // the whole open path, measured, because establishing first responder resolves every
+            // registered key equivalent.
+            if event.modifierFlags.contains(.command),
+               let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
+               (1...9).contains(digit) {
+                NotificationCenter.default.post(
+                    name: .pasteNumberedItem,
+                    object: nil,
+                    userInfo: ["number": digit,
+                               "plainText": event.modifierFlags.contains(.shift)]
+                )
                 return nil
             }
             return event
@@ -502,6 +583,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.center()
             settingsWindow = window
         }
+        // The Settings window shows live history counts, so it needs the store publishing.
+        ClipboardStore.shared.publishingSuppressed = false
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -554,15 +637,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// it shrinks so the bar never eats an oversized slice of the screen.
 enum PanelLayout {
     /// Card design size at scale 1 (matches ClipboardItemCard's base frame).
-    static let cardBaseHeight: CGFloat = 240
-    static let cardBaseWidth: CGFloat = 250
+    /// Measured off Paste's own panel on a 2x display: its cards are 464x464 device
+    /// pixels, i.e. a 232pt square.
+    static let cardBaseHeight: CGFloat = 232
+    static let cardBaseWidth: CGFloat = 232
+    /// Gap between neighbouring cards. Paste uses 24pt; this is deliberately tighter.
+    static let cardSpacing: CGFloat = 18
+    /// Height of a card's coloured header bar, measured off Paste (96 device pixels).
+    static let cardHeaderHeight: CGFloat = 48
     /// Fixed chrome around the horizontal card row (toolbar + divider + list padding).
-    static let horizontalChrome: CGFloat = 80
+    /// Paste leaves 68pt above the card row and 24pt below it; `listTopPadding` below
+    /// makes up the difference between 68 and the toolbar's own height.
+    static let horizontalChrome: CGFloat = 92
+    /// Padding between the divider under the toolbar and the top of the cards.
+    static let listTopPadding: CGFloat = 10
+    /// Padding between the bottom of the cards and the bottom edge of the panel.
+    static let listBottomPadding: CGFloat = 24
     /// Fixed chrome around the vertical card column (horizontal list padding + slack).
     static let verticalChrome: CGFloat = 70
     /// Screen height (points) at/above which the full-size design is used.
     static let referenceScreenHeight: CGFloat = 1360
     static let minScale: CGFloat = 0.8
+    /// Gap between the panel and the edges of the screen's visible frame.
+    static let screenInset: CGFloat = 8
+    /// Corner radius of the floating panel (window mask and SwiftUI clip must agree).
+    static let cornerRadius: CGFloat = 20
 
     static func scale(for screen: NSScreen?) -> CGFloat {
         guard let screen else { return 1 }
@@ -583,6 +682,7 @@ enum PanelLayout {
 private struct PanelScaleKey: EnvironmentKey {
     static let defaultValue: CGFloat = 1
 }
+
 
 extension EnvironmentValues {
     /// Uniform scale applied to cards so they stay proportional to the panel.

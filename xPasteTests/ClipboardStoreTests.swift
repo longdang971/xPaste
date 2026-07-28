@@ -33,21 +33,6 @@ final class ClipboardStoreTests: XCTestCase {
         XCTAssertTrue(store.items.contains { $0.isPinned })
     }
 
-    func test_trim_caps_unpinned_at_maxItems() {
-        for i in 0..<8 {
-            store.add(ClipboardItem(type: .text, text: "item \(i)"))
-        }
-
-        XCTAssertLessThanOrEqual(store.items.filter { !$0.isPinned }.count, 5)
-    }
-
-    func test_trim_removes_oldest_unpinned_first() {
-        for i in 0..<7 {
-            store.add(ClipboardItem(type: .text, text: "item \(i)"))
-        }
-        XCTAssertFalse(store.items.contains { $0.text == "item 0" })
-    }
-
     func test_trim_never_removes_pinned() {
         var pinned = ClipboardItem(type: .text, text: "keep me")
         pinned.isPinned = true

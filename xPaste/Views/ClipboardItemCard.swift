@@ -5,7 +5,6 @@ struct ClipboardItemCard: View {
     let item: ClipboardItem
     let index: Int
     let isCopied: Bool
-    var isSelected: Bool = false
 
     @State private var isHovered = false
     @State private var loadedImage: NSImage?
@@ -21,6 +20,7 @@ struct ClipboardItemCard: View {
 
     private static var colorCache: [String: Color] = [:]
     private static var iconCache: [String: NSImage] = [:]
+    private static var unresolvedBundleIDs: Set<String> = []
 
     // Count-bounded NSCaches, not plain dicts: keyed by item UUID and written from .task,
     // the old dictionaries were never evicted, so every previewed image (thumbnails up to
@@ -33,6 +33,23 @@ struct ClipboardItemCard: View {
         let c = NSCache<NSUUID, NSImage>(); c.countLimit = 120; return c
     }()
     private static var fileIconCache: [String: NSImage] = [:]
+
+    /// Per-item strings that are expensive to derive but never change once captured.
+    ///
+    /// `footerLabel` used `String.count`, which walks the whole string: 0.015ms for a 1k-char
+    /// item but 2.9ms for a 500k one — paid on every body pass, for every visible card. The
+    /// preview likewise handed the entire string to `Text` and only then applied `lineLimit`,
+    /// leaving TextKit to measure hundreds of kilobytes to draw seven lines.
+    final class CardText {
+        let footer: String
+        let preview: String
+        init(footer: String, preview: String) { self.footer = footer; self.preview = preview }
+    }
+    private static let cardTextCache: NSCache<NSUUID, CardText> = {
+        let c = NSCache<NSUUID, CardText>(); c.countLimit = 300; return c
+    }()
+    /// Enough to fill the seven visible lines several times over.
+    private static let previewCharLimit = 2000
 
     private func fileIcon(_ path: String) -> NSImage {
         if let cached = Self.fileIconCache[path] { return cached }
@@ -48,15 +65,9 @@ struct ClipboardItemCard: View {
             contentPreview
             footer
         }
-        .frame(width: 250, height: 240)
+        .frame(width: PanelLayout.cardBaseWidth, height: PanelLayout.cardBaseHeight)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(
-                    (isHovered || isSelected) ? accent : .clear,
-                    lineWidth: 2
-                )
-        )
+        .overlay(CardSelectionBorder(itemID: item.id, isHovered: isHovered))
         .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4)
         .onHover { isHovered = $0 }
         .task(id: item.id) {
@@ -103,10 +114,11 @@ struct ClipboardItemCard: View {
                 }
             }
 
-            if let bundleID = item.sourceAppBundleID {
-                if let cached = Self.colorCache[bundleID] {
-                    computedAccentColor = cached
-                } else if let icon = sourceAppIcon,
+            // Only publish a colour that had to be computed. `appAccentColor` already falls back
+            // to `colorCache`, so assigning the cached value into @State changed nothing on
+            // screen while forcing an extra body pass for every card scrolled into view.
+            if let bundleID = item.sourceAppBundleID, Self.colorCache[bundleID] == nil {
+                if let icon = sourceAppIcon,
                           let cgImage = icon.cgImage(forProposedRect: nil, context: nil, hints: nil) {
                     let color = await Task.detached(priority: .utility) {
                         Self.extractDominantColor(from: cgImage)
@@ -144,7 +156,8 @@ struct ClipboardItemCard: View {
         // adaptively-sized panel. The trailing frame reserves the scaled footprint so layout,
         // hit-testing and the overlays added in ContentView all line up with what's drawn.
         .scaleEffect(panelScale, anchor: .center)
-        .frame(width: 250 * panelScale, height: 240 * panelScale)
+        .frame(width: PanelLayout.cardBaseWidth * panelScale,
+               height: PanelLayout.cardBaseHeight * panelScale)
     }
 
     private func cardHeader(_ accent: Color) -> some View {
@@ -163,22 +176,25 @@ struct ClipboardItemCard: View {
             }
             return item.type.cardTitle
         }()
+        // Headers now carry the app's real brightness, so a pale icon (Finder, Notes) yields a
+        // pale bar that white text would vanish on. Flip the title to dark for those.
+        let onAccent: Color = isPaleColor(accent) ? .black.opacity(0.78) : .white
         return HStack(alignment: .center, spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(.white)
+                    .foregroundColor(onAccent)
                     .lineLimit(1)
                 Text(item.timestamp.relativeString)
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.75))
+                    .foregroundColor(onAccent.opacity(0.75))
                     .lineLimit(1)
             }
             .padding(.leading, 12)
             Spacer()
             headerIcon
         }
-        .frame(height: 58)
+        .frame(height: PanelLayout.cardHeaderHeight)
         .background(accent)
     }
 
@@ -186,8 +202,8 @@ struct ClipboardItemCard: View {
         Image(nsImage: sourceAppIcon ?? Self.fallbackAppIcon)
             .resizable()
             .scaledToFit()
-            .frame(width: 84, height: 84)
-            .offset(x: 13)
+            .frame(width: 77, height: 77)
+            .offset(x: 14)
             .help(sourceAppName)
     }
 
@@ -210,7 +226,13 @@ struct ClipboardItemCard: View {
     private var sourceAppIcon: NSImage? {
         guard let bundleID = item.sourceAppBundleID else { return nil }
         if let cached = Self.iconCache[bundleID] { return cached }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
+        // Remember failures too. Without this, an item captured from an app that has since been
+        // uninstalled re-queries LaunchServices on every single body pass, forever.
+        if Self.unresolvedBundleIDs.contains(bundleID) { return nil }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            Self.unresolvedBundleIDs.insert(bundleID)
+            return nil
+        }
         let icon = NSWorkspace.shared.icon(forFile: url.path).copy() as! NSImage
         icon.size = NSSize(width: 64, height: 64)
         Self.iconCache[bundleID] = icon
@@ -289,7 +311,7 @@ struct ClipboardItemCard: View {
     }
 
     private var textPreview: some View {
-        Text(item.text ?? "")
+        Text(cardText.preview)
             .font(.system(size: 13))
             .foregroundColor(Color(NSColor.labelColor))
             .lineLimit(7)
@@ -316,7 +338,9 @@ struct ClipboardItemCard: View {
 
     private var noImagePlaceholder: some View {
         ZStack {
-            Color(NSColor.textBackgroundColor)
+            // Paste puts the tint on the preview and leaves the footer plain; this used to be
+            // the other way round, which read as an inverted card next to it.
+            mutedBackground
             if let fav = favicon {
                 Image(nsImage: fav)
                     .resizable()
@@ -346,6 +370,18 @@ struct ClipboardItemCard: View {
         }
     }
 
+    /// A subtly tinted fill, used for the parts of a card that sit behind its content.
+    private var mutedBackground: some View {
+        ZStack {
+            Color(NSColor.textBackgroundColor)
+            Color.primary.opacity(0.08)
+        }
+    }
+
+    private var shortcutBadge: some View {
+        ShortcutBadge(index: index)
+    }
+
     private var urlPreviewFooter: some View {
         HStack(alignment: .bottom, spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
@@ -358,31 +394,32 @@ struct ClipboardItemCard: View {
                     .lineLimit(1)
                     .foregroundColor(.secondary)
             }
+            // Claim the leftover width explicitly so the title/URL truncate around the badge.
+            .frame(maxWidth: .infinity, alignment: .leading)
+            shortcutBadge
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 52)
-        .background(
-            ZStack {
-                Color(NSColor.textBackgroundColor)
-                Color.primary.opacity(0.08)
-            }
-        )
+        .background(Color(NSColor.textBackgroundColor))
     }
 
     private var fileFooter: some View {
         let path = item.fileURLs?.first?.path ?? item.text ?? ""
-        return Text(path)
-            .font(.system(size: 11))
-            .foregroundColor(.secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .frame(height: 30)
-            .background(Color(NSColor.controlBackgroundColor))
+        return HStack(spacing: 0) {
+            Text(path)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            shortcutBadge
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(height: 30)
+        .background(Color(NSColor.controlBackgroundColor))
     }
 
     private var defaultFooter: some View {
@@ -390,12 +427,29 @@ struct ClipboardItemCard: View {
             .font(.system(size: 11))
             .foregroundColor(.secondary)
             .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .frame(height: 30)
+            // Overlaid rather than placed in an HStack: this label is short and centred, so it
+            // can never collide with the badge, and laying the badge out inline would re-centre
+            // the label in the leftover width — nudging "N characters" left on every ⌘ press.
+            .overlay(alignment: .trailing) {
+                shortcutBadge.padding(.trailing, 12)
+            }
             .background(Color(NSColor.controlBackgroundColor))
     }
 
-    private var footerLabel: String {
+    private var footerLabel: String { cardText.footer }
+
+    private var cardText: CardText {
+        if let cached = Self.cardTextCache.object(forKey: item.id as NSUUID) { return cached }
+        let built = CardText(footer: buildFooterLabel(),
+                             preview: String((item.text ?? "").prefix(Self.previewCharLimit)))
+        Self.cardTextCache.setObject(built, forKey: item.id as NSUUID)
+        return built
+    }
+
+    private func buildFooterLabel() -> String {
         switch item.type {
         case .text, .url:
             let n = item.text?.count ?? 0
@@ -417,8 +471,16 @@ struct ClipboardItemCard: View {
         return computedAccentColor ?? Self.colorCache[bundleID] ?? item.type.accentColor
     }
 
+    /// Brand colour of an app, taken from its icon.
+    ///
+    /// Picking the single most saturated pixel does not work: it ignores how much of the
+    /// icon a colour actually covers, so Chrome resolved to the green arc of its ring
+    /// (the smallest, most saturated patch) instead of the blue disc everyone reads as
+    /// "Chrome". Icons put their mark in the middle and their filler at the rim, so hues
+    /// are binned into a histogram weighted by distance from the centre — Chrome's blue is
+    /// 9.5% of the icon by raw area but 61% of its central third.
     private nonisolated static func extractDominantColor(from cgImage: CGImage) -> Color? {
-        let size = 16
+        let size = 32
         guard let ctx = CGContext(
             data: nil, width: size, height: size,
             bitsPerComponent: 8, bytesPerRow: size * 4,
@@ -430,34 +492,71 @@ struct ClipboardItemCard: View {
         guard let data = ctx.data else { return nil }
         let px = data.bindMemory(to: UInt8.self, capacity: size * size * 4)
 
-        var bestSat: CGFloat = 0.2
-        var bestHue: CGFloat = 0
-        var foundSaturated = false
-        var totalR: CGFloat = 0, totalG: CGFloat = 0, totalB: CGFloat = 0
-        var count: CGFloat = 0
+        let bucketCount = 24
+        var bucketWeight = [CGFloat](repeating: 0, count: bucketCount)
+        var bucketR = [CGFloat](repeating: 0, count: bucketCount)
+        var bucketG = [CGFloat](repeating: 0, count: bucketCount)
+        var bucketB = [CGFloat](repeating: 0, count: bucketCount)
+        // Greys are tracked separately: an icon that is entirely black/white (Terminal) has
+        // no hue to win, and must not be forced into whichever hue the anti-aliasing leaked.
+        var greyWeight: CGFloat = 0, greyR: CGFloat = 0, greyG: CGFloat = 0, greyB: CGFloat = 0
 
-        for i in 0..<(size * size) {
-            let o = i * 4
-            let r = CGFloat(px[o]) / 255
-            let g = CGFloat(px[o + 1]) / 255
-            let b = CGFloat(px[o + 2]) / 255
-            let a = CGFloat(px[o + 3]) / 255
-            guard a > 0.5 else { continue }
+        let sigma: CGFloat = 0.35
+        for y in 0..<size {
+            for x in 0..<size {
+                let o = (y * size + x) * 4
+                let a = CGFloat(px[o + 3]) / 255
+                guard a > 0.5 else { continue }
+                let r = CGFloat(px[o]) / 255
+                let g = CGFloat(px[o + 1]) / 255
+                let b = CGFloat(px[o + 2]) / 255
+                guard let ns = NSColor(red: r, green: g, blue: b, alpha: 1)
+                        .usingColorSpace(.deviceRGB) else { continue }
+                var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0
+                ns.getHue(&h, saturation: &s, brightness: &v, alpha: nil)
 
-            totalR += r; totalG += g; totalB += b; count += 1
+                let dx = (CGFloat(x) + 0.5) / CGFloat(size) - 0.5
+                let dy = (CGFloat(y) + 0.5) / CGFloat(size) - 0.5
+                let dist = (dx * dx + dy * dy).squareRoot() / 0.5
+                let centre = exp(-(dist * dist) / (2 * sigma * sigma))
 
-            guard let ns = NSColor(red: r, green: g, blue: b, alpha: 1).usingColorSpace(.deviceRGB) else { continue }
-            var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0
-            ns.getHue(&h, saturation: &s, brightness: &v, alpha: nil)
-            guard v > 0.15 && v < 0.98 else { continue }
-            if s > bestSat { bestSat = s; bestHue = h; foundSaturated = true }
+                if s < 0.18 {
+                    greyWeight += centre; greyR += r * centre; greyG += g * centre; greyB += b * centre
+                    continue
+                }
+                // Weight by saturation as well, so a pale wash behind the mark cannot outvote it.
+                let w = centre * s
+                let i = min(bucketCount - 1, Int(h * CGFloat(bucketCount)))
+                bucketWeight[i] += w; bucketR[i] += r * w; bucketG[i] += g * w; bucketB[i] += b * w
+            }
         }
 
-        if foundSaturated {
-            return Color(hue: bestHue, saturation: 0.65, brightness: 0.52)
+        var best = -1
+        var bestWeight: CGFloat = 0
+        for i in 0..<bucketCount where bucketWeight[i] > bestWeight {
+            bestWeight = bucketWeight[i]; best = i
         }
-        guard count > 0 else { return nil }
-        return Color(red: totalR / count, green: totalG / count, blue: totalB / count)
+
+        let raw: NSColor
+        if best >= 0, bestWeight > greyWeight * 0.25 {
+            raw = NSColor(red: bucketR[best] / bestWeight,
+                          green: bucketG[best] / bestWeight,
+                          blue: bucketB[best] / bestWeight, alpha: 1)
+        } else if greyWeight > 0 {
+            raw = NSColor(red: greyR / greyWeight, green: greyG / greyWeight,
+                          blue: greyB / greyWeight, alpha: 1)
+        } else {
+            return nil
+        }
+
+        guard let ns = raw.usingColorSpace(.deviceRGB) else { return nil }
+        var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0
+        ns.getHue(&h, saturation: &s, brightness: &v, alpha: nil)
+        // Keep the app's own saturation and brightness rather than flattening every header to
+        // one dark tone; only clamp far enough to keep the header title legible on top of it.
+        return Color(hue: h,
+                     saturation: min(s, 0.85),
+                     brightness: min(max(v, 0.32), 0.92))
     }
 
     private var detectedColor: Color? {
@@ -554,6 +653,15 @@ struct ClipboardItemCard: View {
         return Color(red: hue2rgb(h + 1/3), green: hue2rgb(h), blue: hue2rgb(h - 1/3), opacity: a)
     }
 
+    /// Whether a header bar is pale enough to need dark text. Deliberately higher than the 0.5
+    /// mid-point `isLightColor` uses: white still reads better on saturated brand colours such
+    /// as Mail's or Xcode's blue, whose luminance drifts just past 0.5 on the green coefficient.
+    private func isPaleColor(_ color: Color) -> Bool {
+        guard let ns = NSColor(color).usingColorSpace(.deviceRGB) else { return true }
+        let luminance = 0.2126 * ns.redComponent + 0.7152 * ns.greenComponent + 0.0722 * ns.blueComponent
+        return luminance > 0.62
+    }
+
     private func isLightColor(_ color: Color) -> Bool {
         guard let ns = NSColor(color).usingColorSpace(.deviceRGB) else { return true }
         let luminance = 0.2126 * ns.redComponent + 0.7152 * ns.greenComponent + 0.0722 * ns.blueComponent
@@ -590,5 +698,53 @@ private extension ClipboardContentType {
         case .file:   return .orange
         case .folder: return .blue
         }
+    }
+}
+
+/// The ⌘-number hint in a card's footer.
+///
+/// A view of its own, observing `ModifierWatcher` directly, so a modifier press rebuilds only
+/// these few labels. Reading the flags through the environment from `ContentView` instead cost
+/// a full-panel re-layout on every press (~40ms measured, Release and Debug alike).
+private struct ShortcutBadge: View {
+    let index: Int
+    @ObservedObject private var watcher = ModifierWatcher.shared
+
+    var body: some View {
+        if watcher.flags.contains(.command), index <= 9 {
+            HStack(spacing: 4) {
+                if watcher.flags.contains(.shift) {
+                    Image(systemName: "text.alignleft")
+                        .font(.system(size: 10))
+                }
+                Text("\(index)")
+                    .font(.system(size: 11))
+            }
+            .foregroundColor(.secondary)
+            .fixedSize()
+            .padding(.leading, 6)
+        }
+    }
+}
+
+/// The hover/selection ring around a card.
+///
+/// Split out so that it, rather than the whole card, is what observes `PanelSelection`. Moving
+/// the selection then rebuilds a handful of stroked rectangles instead of every visible card
+/// body — and nothing at all in ContentView.
+///
+/// Drawn in the system accent colour rather than the source app's, which is what Paste does too:
+/// its cards carry an orange header and a blue ring. Tying the ring to the app colour made it
+/// invisible whenever that colour was pale — a card copied from TextEdit drew a near-white ring
+/// on the panel's near-white glass. The app's colour still identifies the card, in the header.
+private struct CardSelectionBorder: View {
+    let itemID: UUID
+    let isHovered: Bool
+    @ObservedObject private var selection = PanelSelection.shared
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .stroke((isHovered || selection.contains(itemID)) ? Color.accentColor : .clear,
+                    lineWidth: 3)
     }
 }

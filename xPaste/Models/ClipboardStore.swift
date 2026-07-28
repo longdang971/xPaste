@@ -5,8 +5,29 @@ import Combine
 final class ClipboardStore: ObservableObject {
     static let shared = ClipboardStore(maxItems: 500)
 
-    @Published private(set) var items: [ClipboardItem] = [] {
+    // Deliberately not `@Published`: see `publishingSuppressed`.
+    private(set) var items: [ClipboardItem] = [] {
+        willSet { notifyWillChange() }
         didSet { _cachedFilteredItems = nil }
+    }
+
+    /// Silences SwiftUI updates while nothing is on screen.
+    ///
+    /// Every copy made anywhere in the system lands here. With the panel hidden, the resulting
+    /// update cost 39ms of SwiftUI layout against 1.1ms of actual store work — all of it to
+    /// re-lay-out a window the user cannot see. Changes are coalesced while suppressed and
+    /// published once, when this is switched back off.
+    var publishingSuppressed = false {
+        didSet {
+            guard !publishingSuppressed, pendingChange else { return }
+            pendingChange = false
+            objectWillChange.send()
+        }
+    }
+    private var pendingChange = false
+
+    private func notifyWillChange() {
+        if publishingSuppressed { pendingChange = true } else { objectWillChange.send() }
     }
     @Published var searchQuery = "" {
         didSet { _cachedFilteredItems = nil }

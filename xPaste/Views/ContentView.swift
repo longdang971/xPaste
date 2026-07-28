@@ -5,13 +5,15 @@ private enum ClipboardTab { case all, pinned }
 
 struct ContentView: View {
     @EnvironmentObject private var store: ClipboardStore
+    /// Read, never observed — see PanelSelection's note on why ContentView must not re-render
+    /// when the selection moves.
+    private var selection: PanelSelection { .shared }
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("panelPosition") private var panelPosition: String = "bottom"
     @State private var copiedID: UUID?
     @State private var showClearConfirm = false
     @State private var showDeleteSelectedConfirm = false
     @State private var showSearch = false
-    @State private var selectedIDs: Set<UUID> = []
-    @State private var suppressCardDeselect = false
     @State private var previewItemID: UUID?
     @State private var scrollTargetID: UUID?
     @State private var isHidingPanel = false
@@ -58,13 +60,14 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
-                .opacity(0.9)
+            PanelGlassBackground(cornerRadius: PanelLayout.cornerRadius)
 
+            // Sheen falling from the top edge, on top of the glass. Light appearance needs a
+            // stronger one to read as glare; dark appearance only wants a hint or it greys out.
             LinearGradient(
                 stops: [
-                    .init(color: .white.opacity(0.06), location: 0),
-                    .init(color: .white.opacity(0.01), location: 0.5),
+                    .init(color: .white.opacity(colorScheme == .dark ? 0.06 : 0.20), location: 0),
+                    .init(color: .white.opacity(colorScheme == .dark ? 0.01 : 0.05), location: 0.5),
                     .init(color: .white.opacity(0.0),  location: 1)
                 ],
                 startPoint: .top,
@@ -90,20 +93,24 @@ struct ContentView: View {
                 }
 
                 Button("") {
-                    if selectedIDs.count > 1 {
+                    // Gated inside the action rather than with `.disabled(selection.isEmpty)`:
+                    // ContentView no longer re-renders on selection changes, so a disabled-state
+                    // read in `body` would go stale the moment the selection moved.
+                    guard !selection.isEmpty else { return }
+                    if selection.count > 1 {
                         showDeleteSelectedConfirm = true
                     } else {
-                        store.deleteItems(ids: selectedIDs)
-                        withAnimation(toolbarSpring) { selectedIDs = [] }
+                        store.deleteItems(ids: selection.ids)
+                        selection.clear()
                     }
                 }
                 .keyboardShortcut(.delete, modifiers: [])
-                .disabled(selectedIDs.isEmpty || searchFocused)
+                .disabled(searchFocused)
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
                 Button("") {
-                    selectedIDs = Set(displayedItems.map(\.id))
+                    selection.set(Set(displayedItems.map(\.id)))
                 }
                 .keyboardShortcut("a", modifiers: .command)
                 .disabled(searchFocused)
@@ -137,14 +144,14 @@ struct ContentView: View {
                     Button("") { if let it = primarySelectedItem { togglePreview(it) } }
                         .keyboardShortcut(.space, modifiers: [])
                 }
-                .disabled(selectedIDs.isEmpty || searchFocused)
+                .disabled(searchFocused)
                 .opacity(0)
                 .frame(width: 0, height: 0)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: PanelLayout.cornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: PanelLayout.cornerRadius, style: .continuous)
                 .stroke(
                     LinearGradient(
                         stops: [
@@ -168,8 +175,8 @@ struct ContentView: View {
             // that landed on a card won't collapse the search or clear the selection. A click on
             // empty space leaves the flag false and still dismisses search / deselects as before.
             DispatchQueue.main.async {
-                if suppressCardDeselect {
-                    suppressCardDeselect = false
+                if selection.suppressCardDeselect {
+                    selection.suppressCardDeselect = false
                     return
                 }
                 // Tapping the search icon / a compact tab sets this for ~0.3s and opens the search
@@ -182,8 +189,8 @@ struct ContentView: View {
                         store.searchQuery = ""
                     }
                 }
-                if !NSEvent.modifierFlags.contains(.command), !selectedIDs.isEmpty {
-                    selectedIDs = []
+                if !NSEvent.modifierFlags.contains(.command) {
+                    selection.clear()
                 }
             }
         })
@@ -195,8 +202,8 @@ struct ContentView: View {
             guard !open else { return }
             searchFocused = false
             guard !isHidingPanel else { return }
-            if selectedIDs.isEmpty, let first = displayedItems.first {
-                selectedIDs = [first.id]
+            if selection.isEmpty, let first = displayedItems.first {
+                selection.select(first.id)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .panelWillHide)) { _ in
@@ -207,8 +214,17 @@ struct ContentView: View {
             isHidingPanel = true
             if showSearch { showSearch = false }
             if !store.searchQuery.isEmpty { store.searchQuery = "" }
-            if !selectedIDs.isEmpty { selectedIDs = [] }
+            selection.clear()
             if previewItemID != nil { previewItemID = nil }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pasteNumberedItem)) { note in
+            guard let number = note.userInfo?["number"] as? Int,
+                  let item = item(numbered: number) else { return }
+            if note.userInfo?["plainText"] as? Bool == true {
+                pastePlainText(item)
+            } else {
+                pasteItem(item)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidHide)) { _ in
             // Run the deferred history reorder off-screen. Delay it past the paste keystroke so
@@ -223,12 +239,17 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidOpen)) { _ in
             isHidingPanel = false
-            let trusted = AccessibilityPermission.isTrusted
-            if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
+            // `AXIsProcessTrusted()` is a synchronous IPC round-trip; running it here put it in
+            // the window between the hotkey and the panel starting to slide. The 2s timer below
+            // polls the same value, so the banner still appears within a blink of being granted.
+            DispatchQueue.main.async {
+                let trusted = AccessibilityPermission.isTrusted
+                if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
+            }
             // Auto-select the first item on open so the keyboard is live immediately:
             // ⌘A selects all, ←/→ move between cards, ⏎ pastes — no click into the list needed.
             if let first = displayedItems.first {
-                selectedIDs = [first.id]
+                selection.select(first.id)
             }
         }
         .onReceive(permissionTimer) { _ in
@@ -249,12 +270,12 @@ struct ContentView: View {
             )
         }
         .alert(
-            "Delete \(selectedIDs.count) selected item\(selectedIDs.count == 1 ? "" : "s")?",
+            "Delete \(selection.count) selected item\(selection.count == 1 ? "" : "s")?",
             isPresented: $showDeleteSelectedConfirm
         ) {
             Button("Delete", role: .destructive) {
-                store.deleteItems(ids: selectedIDs)
-                withAnimation(toolbarSpring) { selectedIDs = [] }
+                store.deleteItems(ids: selection.ids)
+                selection.clear()
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
@@ -338,36 +359,9 @@ struct ContentView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.secondary)
 
-            TextField("", text: $store.searchQuery)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .focused($searchFocused)
-                .frame(maxWidth: .infinity)
-                .overlay(alignment: .leading) {
-                    if store.searchQuery.isEmpty && !searchFocused {
-                        Text("Search")
-                            .font(.system(size: 15))
-                            .foregroundColor(Color(NSColor.placeholderTextColor))
-                            .allowsHitTesting(false)
-                    }
-                }
-                .onChange(of: searchFocused) { focused in
-                    guard !focused, !searchToggleTapped else { return }
-                    // Losing focus with a live query means the user clicked into the results (e.g.
-                    // to double-click-paste). Keep the search open so the filtered list stays put and
-                    // the paste hits the right item. Only auto-close when nothing was typed, which
-                    // preserves the "open search, click away, it closes" feel.
-                    guard store.searchQuery.isEmpty else { return }
-                    withAnimation(toolbarSpring) { showSearch = false }
-                }
-
-            if !store.searchQuery.isEmpty {
-                Button { store.searchQuery = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
-                }
-                .buttonStyle(.plain)
+            DebouncedSearchField(focused: $searchFocused) {
+                guard !searchToggleTapped else { return }
+                withAnimation(toolbarSpring) { showSearch = false }
             }
         }
         .padding(.horizontal, 12)
@@ -386,26 +380,26 @@ struct ContentView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
                     Color.clear.frame(width: 1, height: 1).id("h-list-start")
-                    LazyHStack(spacing: 10) {
+                    LazyHStack(spacing: PanelLayout.cardSpacing) {
                         if showAccessibilityBanner {
                             accessibilityCard
                         }
                         ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                             ClipboardItemCard(
-                                item: item, index: index + 1, isCopied: copiedID == item.id,
-                                isSelected: selectedIDs.contains(item.id)
+                                item: item, index: index + 1, isCopied: copiedID == item.id
                             )
                             .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { toggleSelection(item.id) })
                             .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { pasteItem(item) })
                             .onTapGesture(count: 1) { selectItem(item) }
-                            .contextMenu { contextMenuItems(for: item) }
+                            .overlay(CardContextMenu { cardMenu(for: item) })
                             .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
                                 PreviewPopoverContent(item: item) { previewItemID = nil }
                             }
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.top, PanelLayout.listTopPadding)
+                    .padding(.bottom, PanelLayout.listBottomPadding)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .panelDidOpen)) { _ in
@@ -421,20 +415,19 @@ struct ContentView: View {
     private var verticalList: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 10) {
+                LazyVStack(spacing: PanelLayout.cardSpacing) {
                     if showAccessibilityBanner {
                         accessibilityCard
                     }
                     ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                         ClipboardItemCard(
-                            item: item, index: index + 1, isCopied: copiedID == item.id,
-                            isSelected: selectedIDs.contains(item.id)
+                            item: item, index: index + 1, isCopied: copiedID == item.id
                         )
                         .frame(maxWidth: .infinity)
                         .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { toggleSelection(item.id) })
                         .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { pasteItem(item) })
                         .onTapGesture(count: 1) { selectItem(item) }
-                        .contextMenu { contextMenuItems(for: item) }
+                        .overlay(CardContextMenu { cardMenu(for: item) })
                         .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
                             PreviewPopoverContent(item: item) { previewItemID = nil }
                         }
@@ -472,49 +465,38 @@ struct ContentView: View {
         return ""
     }
 
-    @ViewBuilder
-    private func contextMenuItems(for item: ClipboardItem) -> some View {
-        Button { pasteItem(item) } label: {
-            Label("Paste\(targetSuffix)", systemImage: "arrow.right.doc.on.clipboard")
-        }
-        .keyboardShortcut(.return, modifiers: [])
-
+    /// The card's right-click menu, built only when AppKit asks for it.
+    ///
+    /// This used to be a SwiftUI `.contextMenu`, whose content SwiftUI evaluates eagerly for
+    /// every row: one scroll built 86 menus for 43 cards, each ten Buttons carrying a
+    /// `.keyboardShortcut`. It dominated scrolling jank — 45 late frames with it, 8 without.
+    private func cardMenu(for item: ClipboardItem) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(ClosureMenuItem(title: "Paste\(targetSuffix)", symbol: "arrow.right.doc.on.clipboard",
+                                     key: "\r") { pasteItem(item) })
         if item.text != nil {
-            Button { pastePlainText(item) } label: {
-                Label("Paste as Plain Text", systemImage: "text.alignleft")
-            }
-            .keyboardShortcut(.return, modifiers: .shift)
+            menu.addItem(ClosureMenuItem(title: "Paste as Plain Text", symbol: "text.alignleft",
+                                         key: "\r", modifiers: .shift) { pastePlainText(item) })
         }
-
-        Button { copyItem(item) } label: { Label("Copy", systemImage: "doc.on.doc") }
-            .keyboardShortcut("c", modifiers: .command)
-
-        Divider()
-
+        menu.addItem(ClosureMenuItem(title: "Copy", symbol: "doc.on.doc",
+                                     key: "c", modifiers: .command) { copyItem(item) })
+        menu.addItem(.separator())
         if item.type == .url, let text = item.text, let url = URL(string: text) {
-            Button { NSWorkspace.shared.open(url) } label: { Label("Open URL", systemImage: "safari") }
+            menu.addItem(ClosureMenuItem(title: "Open URL", symbol: "safari") {
+                NSWorkspace.shared.open(url)
+            })
         }
-        Button(role: .destructive) { store.delete(item) } label: {
-            Label("Delete", systemImage: "trash")
-        }
-        .keyboardShortcut(.delete, modifiers: [])
-
-        Divider()
-
-        Button { store.togglePin(item) } label: {
-            Label(item.isPinned ? "Unpin" : "Pin", systemImage: item.isPinned ? "pin.slash" : "pin")
-        }
-
-        Divider()
-
-        Button { previewItemID = item.id } label: {
-            Label("Preview", systemImage: "eye")
-        }
-        .keyboardShortcut(.space, modifiers: [])
-
-        Button { presentShareMenu(for: item) } label: {
-            Label("Share", systemImage: "square.and.arrow.up")
-        }
+        menu.addItem(ClosureMenuItem(title: "Delete", symbol: "trash",
+                                     key: "\u{8}") { store.delete(item) })
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: item.isPinned ? "Unpin" : "Pin",
+                                     symbol: item.isPinned ? "pin.slash" : "pin") { store.togglePin(item) })
+        menu.addItem(.separator())
+        menu.addItem(ClosureMenuItem(title: "Preview", symbol: "eye", key: " ") { previewItemID = item.id })
+        menu.addItem(ClosureMenuItem(title: "Share", symbol: "square.and.arrow.up") {
+            presentShareMenu(for: item)
+        })
+        return menu
     }
 
     /// Presents the system share picker on demand. Previously the share services were built as a
@@ -587,12 +569,18 @@ struct ContentView: View {
     }
 
     private func toggleSelection(_ id: UUID) {
-        if selectedIDs.contains(id) { selectedIDs.remove(id) }
-        else { selectedIDs.insert(id) }
+        selection.toggle(id)
+    }
+
+    /// The card showing `number` in its footer — the same 1-based index handed to the cards.
+    private func item(numbered number: Int) -> ClipboardItem? {
+        let items = displayedItems
+        guard number >= 1, number <= items.count else { return nil }
+        return items[number - 1]
     }
 
     private var primarySelectedItem: ClipboardItem? {
-        displayedItems.first { selectedIDs.contains($0.id) }
+        displayedItems.first { selection.contains($0.id) }
     }
 
     private var previewArrowEdge: Edge {
@@ -616,8 +604,8 @@ struct ContentView: View {
     }
 
     private func selectItem(_ item: ClipboardItem) {
-        suppressCardDeselect = true
-        selectedIDs = [item.id]
+        selection.suppressCardDeselect = true
+        selection.select(item.id)
     }
 
     /// Moves the single-item selection by `delta` in display order (clamped to the ends) and
@@ -627,7 +615,7 @@ struct ContentView: View {
         let ids = displayedItems.map(\.id)
         guard !ids.isEmpty else { return }
         let newIndex: Int
-        if let current = ids.firstIndex(where: { selectedIDs.contains($0) }) {
+        if let current = ids.firstIndex(where: { selection.contains($0) }) {
             newIndex = min(max(current + delta, 0), ids.count - 1)
         } else {
             newIndex = delta > 0 ? 0 : ids.count - 1
@@ -636,7 +624,7 @@ struct ContentView: View {
         // No `suppressCardDeselect` here: that flag only exists to stop the ancestor tap
         // handler from clearing a selection made by a card *click*. Arrow-key navigation
         // produces no tap, so leaving it set would swallow the user's next empty-space click.
-        selectedIDs = [target]
+        selection.select(target)
         scrollTargetID = target
     }
 }
@@ -688,7 +676,7 @@ private struct AccessibilityPanelBanner: View {
             .buttonStyle(.plain)
         }
         .padding(18)
-        .frame(width: 220, height: 240, alignment: .topLeading)
+        .frame(width: 220, height: PanelLayout.cardBaseHeight, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(.ultraThinMaterial)
@@ -854,4 +842,139 @@ private final class PanelClickView: NSView {
             if let obs = observer { NotificationCenter.default.removeObserver(obs); observer = nil }
         }
     }
+}
+
+/// The search text field, with its own local text state.
+///
+/// Bound straight to `store.searchQuery` this used to cost a full-panel re-layout on every
+/// keystroke — 23–52ms measured, because `searchQuery` is `@Published` and ContentView observes
+/// the store. Typing now only rebuilds this small view; the query reaches the store once the
+/// user pauses, so a burst of keystrokes re-filters and re-lays out the card list a single time.
+private struct DebouncedSearchField: View {
+    @EnvironmentObject private var store: ClipboardStore
+    @FocusState.Binding var focused: Bool
+    /// Called when the field loses focus while empty, so the toolbar can collapse the search.
+    let onEmptyBlur: () -> Void
+
+    @State private var text = ""
+    @State private var debounce: Task<Void, Never>?
+
+    private static let debounceNanos: UInt64 = 80_000_000
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .focused($focused)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .leading) {
+                    // Shown whenever the field is empty, focused or not: the search box opens
+                    // already focused, so gating on !focused hid it exactly when it was
+                    // the only thing telling you what the empty box was for.
+                    if text.isEmpty {
+                        Text("Search...")
+                            .font(.system(size: 15))
+                            .foregroundColor(Color(NSColor.placeholderTextColor))
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            if !text.isEmpty {
+                Button { apply("", immediately: true) } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onChange(of: text) { new in
+            debounce?.cancel()
+            debounce = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: Self.debounceNanos)
+                guard !Task.isCancelled else { return }
+                push(new)
+            }
+        }
+        .onChange(of: focused) { isFocused in
+            // Losing focus with a live query means the user clicked into the results (e.g. to
+            // double-click-paste). Keep the search open so the filtered list stays put and the
+            // paste hits the right item. Only auto-close when nothing was typed.
+            guard !isFocused, text.isEmpty else { return }
+            onEmptyBlur()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .panelWillHide)) { _ in
+            debounce?.cancel()
+            if !text.isEmpty { text = "" }
+        }
+        .onDisappear { debounce?.cancel() }
+    }
+
+    private func apply(_ new: String, immediately: Bool) {
+        text = new
+        if immediately {
+            debounce?.cancel()
+            push(new)
+        }
+    }
+
+    private func push(_ new: String) {
+        if store.searchQuery != new { store.searchQuery = new }
+    }
+}
+
+/// An `NSMenuItem` that runs a closure, so menus can be assembled inline.
+final class ClosureMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(title: String, symbol: String? = nil, key: String = "",
+         modifiers: NSEvent.ModifierFlags = [], handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(fire), keyEquivalent: key)
+        keyEquivalentModifierMask = modifiers
+        target = self
+        if let symbol {
+            image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        }
+    }
+
+    required init(coder: NSCoder) { fatalError() }
+
+    @objc private func fire() { handler() }
+}
+
+/// Hosts a card's right-click menu without SwiftUI ever building it up front.
+private struct CardContextMenu: NSViewRepresentable {
+    let build: () -> NSMenu
+
+    func makeNSView(context: Context) -> CardContextMenuView { CardContextMenuView(build: build) }
+    func updateNSView(_ nsView: CardContextMenuView, context: Context) { nsView.build = build }
+}
+
+private final class CardContextMenuView: NSView {
+    var build: () -> NSMenu
+
+    init(build: @escaping () -> NSMenu) {
+        self.build = build
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Claim right-clicks (and ⌃-click) only, so the card's own tap, double-click and ⌘-click
+    /// handling underneath is untouched.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let event = NSApp.currentEvent else { return nil }
+        switch event.type {
+        case .rightMouseDown, .rightMouseUp:
+            return super.hitTest(point)
+        case .leftMouseDown where event.modifierFlags.contains(.control):
+            return super.hitTest(point)
+        default:
+            return nil
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? { build() }
 }
