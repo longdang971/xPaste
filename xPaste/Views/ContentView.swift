@@ -23,6 +23,9 @@ struct ContentView: View {
     /// The card whose header title is currently being edited, if any.
     @State private var renameItemID: UUID?
     @State private var showFilters = false
+    /// The live NSPopover behind the filter sheet while it is open — see the notification
+    /// handlers on `body` for why it has to be held onto.
+    @State private var filterPopover: NSPopover?
     /// Apps present in the history, resolved when the filter popover opens.
     @State private var filterApps: [FilterApp] = []
     @FocusState private var searchFocused: Bool
@@ -203,6 +206,29 @@ struct ContentView: View {
                 }
             }
         })
+        // SwiftUI gives `.popover` no handle on the NSPopover it creates, so the filter sheet's
+        // is caught as it opens. Two things measured on the real panel need it:
+        //
+        //  • Its fade runs ~500ms in and ~550ms out. `animates = false` lands too late to shorten
+        //    the opening fade — SwiftUI builds a fresh popover per presentation — but it does make
+        //    the close instant (measured 550ms → 5ms), which is most of what "slow" felt like.
+        //  • `isPresented` is written back long after the popover has actually gone. Clicking the
+        //    button in that gap made `showFilters.toggle()` flip a still-true flag to false, so
+        //    the click that should have reopened the sheet did nothing. Clearing the flag the
+        //    moment AppKit says the popover closed keeps the two in step.
+        //
+        // Matched by identity, so the item-preview popover — which wants its animation — is
+        // untouched.
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { note in
+            guard showFilters, filterPopover == nil, let popover = note.object as? NSPopover else { return }
+            popover.animates = false
+            filterPopover = popover
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { note in
+            guard let popover = note.object as? NSPopover, popover === filterPopover else { return }
+            filterPopover = nil
+            if showFilters { showFilters = false }
+        }
         .onChange(of: showSearch) { open in
             // When the search box closes by any path, force the TextField to resign — otherwise it
             // stays first responder while hidden, so the caret keeps blinking there and keystrokes
