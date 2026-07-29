@@ -26,8 +26,6 @@ struct ContentView: View {
     /// The live NSPopover behind the filter sheet while it is open — see the notification
     /// handlers on `body` for why it has to be held onto.
     @State private var filterPopover: NSPopover?
-    /// Apps present in the history, resolved when the filter popover opens.
-    @State private var filterApps: [FilterApp] = []
     @FocusState private var searchFocused: Bool
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     @AppStorage("accessibilityBannerDismissed") private var accessibilityBannerDismissed = false
@@ -405,13 +403,15 @@ struct ContentView: View {
             // The same flag the tab buttons use suppresses that for the length of the click.
             searchToggleTapped = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { searchToggleTapped = false }
-            // Resolving app names and icons hits LaunchServices, so it happens here rather than
-            // on every toolbar render.
-            filterApps = FilterApp.present(in: store.items)
             showFilters.toggle()
         }
         .popover(isPresented: $showFilters, arrowEdge: previewArrowEdge) {
-            FilterPopover(filters: $store.filters, apps: filterApps)
+            // The sheet resolves the app list itself, when it appears. Computing it here — or in
+            // the tap handler above — leaves the App section missing on the panel's first open:
+            // SwiftUI builds that first presentation from a copy of this view taken before the
+            // tap's state change lands, so it sees an empty list. `store` is a reference, so the
+            // closure reads the live history however stale the copy around it is.
+            FilterPopover(filters: $store.filters) { FilterApp.present(in: store.items) }
         }
     }
 

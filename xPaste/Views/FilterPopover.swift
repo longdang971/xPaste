@@ -25,7 +25,15 @@ struct FilterApp: Identifiable, Equatable {
 /// app it came from, and by when it was copied.
 struct FilterPopover: View {
     @Binding var filters: SearchFilters
-    let apps: [FilterApp]
+    /// Asked for the app list when the sheet appears, rather than handed one when it is built.
+    /// SwiftUI can build the first presentation from a copy of the presenting view made before
+    /// the tap that opened it landed, so a snapshot passed in arrives empty on the panel's first
+    /// open; resolving here reads the history at a point where it is certainly there. It also
+    /// keeps LaunchServices off the toolbar's render path, which was the point of not keeping
+    /// this list in the store.
+    let appsInHistory: () -> [FilterApp]
+
+    @State private var apps: [FilterApp] = []
 
     private let columns = [GridItem(.flexible(), spacing: 8),
                            GridItem(.flexible(), spacing: 8),
@@ -87,6 +95,7 @@ struct FilterPopover: View {
             .padding(16)
         }
         .frame(width: 420, height: 330)
+        .onAppear { apps = appsInHistory() }
     }
 
     @ViewBuilder
