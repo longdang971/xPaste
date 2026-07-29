@@ -129,6 +129,61 @@ final class SearchFiltersTests: XCTestCase {
         XCTAssertTrue(filters.isEmpty)
     }
 
+    func test_removeLastToken_drops_the_date_first() {
+        var filters = SearchFilters()
+        filters.toggle(.image)
+        filters.toggle(app: "com.google.Chrome")
+        filters.toggle(date: .today)
+
+        filters.removeLastToken(appName: { _ in nil })
+
+        XCTAssertNil(filters.date)
+        XCTAssertEqual(filters.apps, ["com.google.Chrome"])
+        XCTAssertEqual(filters.types, [.image])
+    }
+
+    func test_removeLastToken_then_drops_the_last_app_by_display_name() {
+        var filters = SearchFilters()
+        filters.toggle(.image)
+        filters.toggle(app: "com.a.first")   // "Alpha"
+        filters.toggle(app: "com.z.second")  // "Zulu" — last on screen
+
+        filters.removeLastToken(appName: { $0 == "com.a.first" ? "Alpha" : "Zulu" })
+
+        XCTAssertEqual(filters.apps, ["com.a.first"])
+        XCTAssertEqual(filters.types, [.image])
+    }
+
+    func test_removeLastToken_finally_drops_the_last_type() {
+        var filters = SearchFilters()
+        filters.toggle(.text)     // drawn first
+        filters.toggle(.folder)   // drawn last
+
+        filters.removeLastToken(appName: { _ in nil })
+
+        XCTAssertEqual(filters.types, [.text])
+    }
+
+    func test_removeLastToken_on_empty_filters_does_nothing() {
+        var filters = SearchFilters()
+
+        filters.removeLastToken(appName: { _ in nil })
+
+        XCTAssertTrue(filters.isEmpty)
+    }
+
+    func test_repeated_removeLastToken_empties_everything() {
+        var filters = SearchFilters()
+        filters.toggle(.image)
+        filters.toggle(.link)
+        filters.toggle(app: "com.google.Chrome")
+        filters.toggle(date: .today)
+
+        for _ in 0..<4 { filters.removeLastToken(appName: { _ in nil }) }
+
+        XCTAssertTrue(filters.isEmpty)
+    }
+
     func test_clear_resets_every_section() {
         var filters = SearchFilters()
         filters.toggle(.image)

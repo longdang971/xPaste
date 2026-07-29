@@ -109,6 +109,27 @@ struct SearchFilters: Equatable {
 
     mutating func clear() { self = SearchFilters() }
 
+    /// Drops the token a Backspace in the search field should remove: the last one shown, which
+    /// is the date, then the trailing app, then the trailing type — the order `ActiveFilterTokens`
+    /// draws them in. `appName` resolves bundle IDs so the app order matches what is on screen.
+    mutating func removeLastToken(appName: (String) -> String?) {
+        if date != nil {
+            date = nil
+            return
+        }
+        let lastApp = apps
+            .map { (id: $0, name: appName($0) ?? $0) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .last
+        if let lastApp {
+            apps.remove(lastApp.id)
+            return
+        }
+        if let lastType = FilterType.allCases.last(where: { types.contains($0) }) {
+            types.remove(lastType)
+        }
+    }
+
     func matches(_ item: ClipboardItem,
                  now: Date = Date(),
                  calendar: Calendar = .current) -> Bool {

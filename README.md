@@ -4,7 +4,7 @@ A fast, native clipboard manager for macOS. xPaste lives in your menu bar,
 keeps a searchable history of everything you copy, and pastes it back into any
 app with a single shortcut.
 
-Built with SwiftUI + AppKit. Version 1.1.1 · Powered by LQ Team.
+Built with SwiftUI + AppKit. Version 1.1.2 · Powered by LQ Team.
 
 ## Features
 
@@ -35,8 +35,9 @@ Built with SwiftUI + AppKit. Version 1.1.1 · Powered by LQ Team.
 - **Filters** — the filter button at the right of the search field opens a popover to narrow the
   history by **Type** (Text, Link, Image, Color, File, Folder), by **App** (only the apps actually
   in your history), and by **Date** (Today, Yesterday, This week, Last week, Last 30 days). Each
-  active filter appears as a token inside the search field — click a token to drop it. Choices
-  inside a section are OR-ed, sections are AND-ed. The same thing can be typed into the search
+  active filter appears as a token inside the search field — click a token, or press Backspace on
+  an empty field, to drop it. Choices inside a section are OR-ed, sections are AND-ed. The same
+  thing can be typed into the search
   box: `img:`, `link:`, `text:`, `file:`, `folder:` (or `type:image`) and `app:chrome`, combined
   with free text.
 - **Text inside screenshots** — images are read with Vision on capture, so searching for a word

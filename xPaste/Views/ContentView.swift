@@ -1128,8 +1128,11 @@ private struct DebouncedSearchField: View {
 
     @State private var text = ""
     @State private var debounce: Task<Void, Never>?
+    @State private var backspaceMonitor: Any?
 
     private static let debounceNanos: UInt64 = 80_000_000
+    /// Backspace/Delete.
+    private static let deleteKeyCode: UInt16 = 51
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1168,6 +1171,10 @@ private struct DebouncedSearchField: View {
             }
         }
         .onChange(of: focused) { isFocused in
+            // The backspace monitor only exists while this field has the keyboard, so it can
+            // never swallow a Delete meant for a selected card.
+            if isFocused { installBackspaceMonitor() } else { removeBackspaceMonitor() }
+
             // Losing focus with a live query means the user clicked into the results (e.g. to
             // double-click-paste). Keep the search open so the filtered list stays put and the
             // paste hits the right item. Only auto-close when nothing was typed.
@@ -1178,7 +1185,33 @@ private struct DebouncedSearchField: View {
             debounce?.cancel()
             if !text.isEmpty { text = "" }
         }
-        .onDisappear { debounce?.cancel() }
+        .onDisappear {
+            debounce?.cancel()
+            removeBackspaceMonitor()
+        }
+    }
+
+    /// Backspace on an empty field deletes the last filter token, the way any token field
+    /// behaves. A local monitor rather than a custom `NSTextField`: the field itself is a plain
+    /// SwiftUI `TextField`, and this is the one key it needs to intercept.
+    private func installBackspaceMonitor() {
+        guard backspaceMonitor == nil else { return }
+        backspaceMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == Self.deleteKeyCode,
+                  focused,
+                  text.isEmpty,
+                  !store.filters.isEmpty
+            else { return event }
+            let resolver = AppNameResolver.shared
+            store.filters.removeLastToken(appName: { resolver.name(for: $0) })
+            return nil
+        }
+    }
+
+    private func removeBackspaceMonitor() {
+        guard let monitor = backspaceMonitor else { return }
+        NSEvent.removeMonitor(monitor)
+        backspaceMonitor = nil
     }
 
     private func apply(_ new: String, immediately: Bool) {
