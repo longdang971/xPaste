@@ -16,7 +16,6 @@ struct ContentView: View {
     @State private var showSearch = false
     @State private var previewItemID: UUID?
     @State private var scrollTargetID: UUID?
-    @State private var isHidingPanel = false
     @State private var pendingReorderID: UUID?
     @State private var activeTab: ClipboardTab = .all
     @State private var searchToggleTapped = false
@@ -237,7 +236,7 @@ struct ContentView: View {
             // The filter button lives in the search field, so its popover has nothing left to
             // hang off once the field folds away.
             if showFilters { showFilters = false }
-            guard !isHidingPanel else { return }
+            guard !selection.isHidingPanel else { return }
             if selection.isEmpty, let first = displayedItems.first {
                 selection.select(first.id)
             }
@@ -247,7 +246,7 @@ struct ContentView: View {
             // @Published and emits even when set to the same value, which would invalidate the
             // whole ContentView and force a ~110ms synchronous re-layout right as the close
             // animation starts — freezing the slide. Guarding keeps the close smooth.
-            isHidingPanel = true
+            selection.isHidingPanel = true
             if showSearch { showSearch = false }
             if !store.searchQuery.isEmpty { store.searchQuery = "" }
             // Filters go with the search box: reopening to a silently narrowed history reads
@@ -280,7 +279,7 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidOpen)) { _ in
-            isHidingPanel = false
+            selection.isHidingPanel = false
             // `AXIsProcessTrusted()` is a synchronous IPC round-trip; running it here put it in
             // the window between the hotkey and the panel starting to slide. The 2s timer below
             // polls the same value, so the banner still appears within a blink of being granted.
@@ -497,7 +496,10 @@ struct ContentView: View {
                     .padding(.bottom, PanelLayout.listBottomPadding)
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .panelDidOpen)) { _ in
+            // Rewinding the list belongs off-screen, not on the open path: scrolling a materialised
+            // LazyHStack back to its start measured 5ms with the user already waiting. Doing it
+            // once the panel is hidden leaves nothing to rewind by the time it reopens.
+            .onReceive(NotificationCenter.default.publisher(for: .panelDidHide)) { _ in
                 proxy.scrollTo("h-list-start", anchor: .leading)
             }
             .onChange(of: scrollTargetID) { id in
@@ -537,7 +539,8 @@ struct ContentView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 12)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .panelDidOpen)) { _ in
+            // Rewound off-screen for the same reason as the horizontal list — see there.
+            .onReceive(NotificationCenter.default.publisher(for: .panelDidHide)) { _ in
                 if let first = displayedItems.first {
                     proxy.scrollTo(first.id, anchor: .top)
                 }

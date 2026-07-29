@@ -19,6 +19,12 @@ final class PanelSelection: ObservableObject {
     /// and must not clear the selection. Not published — it is only ever read from callbacks.
     var suppressCardDeselect = false
 
+    /// True between `.panelWillHide` and the next `.panelDidOpen`. Lives here rather than as
+    /// `@State` on ContentView for the same reason as everything else in this object: nothing in
+    /// `body` reads it, so owning it there bought nothing but a full-panel invalidation on every
+    /// open and every close.
+    var isHidingPanel = false
+
     private init() {}
 
     func set(_ newIDs: Set<UUID>) {

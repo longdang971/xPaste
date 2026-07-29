@@ -113,6 +113,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The screen the panel was last shown on. Captured once per show so the frame, the
     /// off-screen slide target, and the card scale are all computed against the same display.
     private var activeScreen: NSScreen?
+    /// Fires a short while after copies stop arriving, to lay the hidden panel out ahead of time.
+    private var prewarmTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -179,6 +181,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.promptAccessibilityOnFirstLaunchIfNeeded()
         }
 
+        ClipboardStore.shared.onPendingChange = { [weak self] in self?.schedulePrewarm() }
+
+        startPerfHarnessIfRequested()
+    }
+
+    /// Lays the hidden panel out ahead of the next hotkey press.
+    ///
+    /// While the panel is hidden the store coalesces updates instead of publishing them, so a copy
+    /// costs nothing. The bill comes due on the next open: `orderFrontRegardless` flushes the whole
+    /// pending SwiftUI transaction before the window may become visible, measured at 31–38ms with
+    /// only three new items — all of it spent with the user already waiting for the panel to move.
+    ///
+    /// Paying it here instead costs the same work at a moment when nothing is on screen and no
+    /// animation is running. Debounced, so a burst of copies is settled once rather than per item.
+    private func schedulePrewarm() {
+        prewarmTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.5, repeats: false) { [weak self] _ in
+            self?.prewarmPanelLayout()
+        }
+        prewarmTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func prewarmPanelLayout() {
+        prewarmTimer = nil
+        // Only worth doing while hidden; while visible the store is already publishing live.
+        guard !panelVisible, ClipboardStore.shared.publishingSuppressed,
+              ClipboardStore.shared.hasPendingChange, let panel else { return }
+        PerfLog.begin("prewarm")
+        ClipboardStore.shared.publishingSuppressed = false
+        PerfLog.mark("publish")
+        // Drive the layout now rather than leaving it queued for the next order-in.
+        //
+        // Only the layout: also forcing a real off-screen render here (ordering the window in at
+        // alpha 0, the way `warmPanel` does) was measured and bought nothing — the work the open
+        // still pays comes from the panel becoming key, not from a missing display list.
+        panel.contentView?.layoutSubtreeIfNeeded()
+        PerfLog.mark("layoutSubtreeIfNeeded")
+        // Back to coalescing, so the copies that arrive after this one stay free.
+        if settingsWindow?.isVisible != true {
+            ClipboardStore.shared.publishingSuppressed = true
+        }
+        PerfLog.end()
+    }
+
+    /// Opens and closes the panel on a timer so the open path can be measured without a human
+    /// on the hotkey. Only ever runs under `XPASTE_PERF=1 XPASTE_AUTOOPEN=<n>`.
+    private func startPerfHarnessIfRequested() {
+        guard PerfLog.enabled,
+              let rounds = ProcessInfo.processInfo.environment["XPASTE_AUTOOPEN"].flatMap({ Int($0) }),
+              rounds > 0
+        else { return }
+        var done = 0
+        var synthetic: [UUID] = []
+        func cycle() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                guard let self else { return }
+                PerfLog.note("--- round \(done + 1) ---")
+                // Simulate copies made while the panel was hidden — the store coalesces them and
+                // republishes on open, which is the realistic path, not the idle reopen. The gap
+                // before opening matters: nobody presses the hotkey in the same instant they copy.
+                if let copies = ProcessInfo.processInfo.environment["XPASTE_COPIES"].flatMap({ Int($0) }) {
+                    for i in 0..<copies {
+                        let item = ClipboardItem(
+                            type: .text, text: "harness item \(done)-\(i) " + String(repeating: "x", count: 200),
+                            sourceAppBundleID: "com.apple.Terminal")
+                        synthetic.append(item.id)
+                        ClipboardStore.shared.add(item)
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                    self.showPanel()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                        self.hidePanel()
+                        done += 1
+                        if done < rounds { cycle() } else {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                                // Never leave synthetic items behind in the real history.
+                                ClipboardStore.shared.deleteItems(ids: Set(synthetic))
+                                PerfLog.note("harness finished, removed \(synthetic.count) synthetic items")
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { NSApp.terminate(nil) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cycle()
     }
 
     private func promptAccessibilityOnFirstLaunchIfNeeded() {
@@ -282,6 +372,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupPanel() {
         let rootView = ContentView().environmentObject(ClipboardStore.shared)
         let hostingView = NSHostingView(rootView: rootView)
+        // The panel sizes itself from the screen, never from its content. Left at the default,
+        // NSHostingView pushes SwiftUI's min/max size onto the window as size constraints, which
+        // costs a full `sizeThatFits` pass over the whole tree on every layout — measured at 6%
+        // of the main thread's work on the open path, for a number nothing reads.
+        hostingView.sizingOptions = []
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = CGColor.clear
         hostingView.layer?.cornerRadius = PanelLayout.cornerRadius
@@ -302,6 +397,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.sharingType = UserDefaults.standard.bool(forKey: "showDuringScreenSharing") ? .readOnly : .none
         p.contentView = hostingView
+        // Without this, showing the panel sends AppKit hunting for a first responder itself
+        // (`_selectFirstKeyView`), and what it finds is the search field — which lives in the
+        // toolbar at opacity 0 whether the search box is open or not. It then calls `selectText:`
+        // on it, spinning up a field editor and a SwiftUI focus update; the `makeFirstResponder`
+        // in showPanel immediately tears that same field editor back down. Profiling put the two
+        // halves of that round trip at 13% of all main-thread work on the open path.
+        p.initialFirstResponder = hostingView
         self.panel = p
     }
 
@@ -313,22 +415,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func warmPanel() {
         DispatchQueue.main.async { [weak self] in
             guard let self, let panel = self.panel, !self.panelVisible else { return }
-            // Fully transparent for the duration: ordering the panel in — even at an off-screen
-            // frame — flashed it on screen for a frame at launch. Alpha 0 makes the warm-up
-            // invisible no matter how the window server decides to place it.
-            panel.alphaValue = 0
-            panel.setFrame(self.offscreenFrame(for: self.panelFrame()), display: false, animate: false)
-            panel.orderFrontRegardless()
-            panel.displayIfNeeded()
-            // Establish first responder here too: NSWindow remembers it across orderOut, so the
-            // per-open call below finds it already set and costs nothing.
-            panel.makeFirstResponder(panel.contentView)
-            panel.orderOut(nil)
-            panel.alphaValue = 1
+            self.renderPanelOffScreen(panel)
             if self.settingsWindow?.isVisible != true {
                 ClipboardStore.shared.publishingSuppressed = true
             }
         }
+    }
+
+    /// Forces a real render of the panel's SwiftUI tree without ever showing it.
+    ///
+    /// Laying the hosting view out is not enough on its own: with the window ordered out, SwiftUI
+    /// stops short of building a display list, and the render is billed to the next open instead
+    /// (12–15ms, measured). Ordering the window in — off-screen and fully transparent — makes that
+    /// render happen here. Alpha 0 for the duration because ordering it in at an off-screen frame
+    /// still flashed it on screen for a frame.
+    private func renderPanelOffScreen(_ panel: NSPanel) {
+        panel.alphaValue = 0
+        panel.setFrame(offscreenFrame(for: panelFrame()), display: false, animate: false)
+        panel.orderFrontRegardless()
+        panel.displayIfNeeded()
+        // Establish first responder here too: NSWindow remembers it across orderOut, so the
+        // per-open call finds it already set and costs nothing.
+        panel.makeFirstResponder(panel.contentView)
+        panel.orderOut(nil)
+        panel.alphaValue = 1
     }
 
     @objc private func updateScreenSharingVisibility() {
@@ -373,9 +483,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel() {
+        PerfLog.begin("open")
         // Republish anything that piled up while hidden, before the first layout reads it.
         ClipboardStore.shared.publishingSuppressed = false
+        PerfLog.mark("publishingSuppressed=false")
         previousApp = NSWorkspace.shared.frontmostApplication
+        PerfLog.mark("frontmostApplication")
         guard let panel else { return }
         // Lock in the display now (before makeKey can flip NSScreen.main) and publish the
         // matching card scale, so the bar and the cards are sized against the same screen.
@@ -387,13 +500,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ClipboardStore.shared.panelScale != scale { ClipboardStore.shared.panelScale = scale }
         let target = panelFrame()
         let start  = offscreenFrame(for: target)
+        PerfLog.mark("screen+frames")
 
         panelVisible = true
         addMonitors()
+        PerfLog.mark("addMonitors")
 
         panel.setFrame(start, display: false, animate: false)
+        PerfLog.mark("setFrame")
         panel.orderFrontRegardless()
+        PerfLog.mark("orderFrontRegardless")
+        // Costs ~13ms of SwiftUI re-render on its own: becoming key flips the control-active
+        // state the whole tree reads, so every view is re-evaluated. Measured with and without.
+        // It has to stay and it has to stay here — the panel needs the keyboard the moment it
+        // appears, and deferring it past the slide would only move the same stall onto a
+        // moving panel.
         panel.makeKey()
+        PerfLog.mark("makeKey")
         // Route key events into the SwiftUI content so ⌘A / arrow keys / ⏎ work without first
         // clicking a card. Guarded: establishing first responder on the hosting view measured
         // 16–20ms, and it survives an orderOut, so after the warm-up this is a no-op.
@@ -407,12 +530,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // to just after the slide starts instead steals frames from the slide (measured 9-11
         // frames instead of 12-14).
         panel.makeFirstResponder(panel.contentView)
+        PerfLog.mark("makeFirstResponder")
         NotificationCenter.default.post(name: .panelDidOpen, object: nil)
+        PerfLog.mark("post panelDidOpen")
 
         // Start the slide on the NEXT runloop tick so the off-screen `start` frame is committed
         // and painted first — otherwise the very first open can begin mid-way (from the middle).
         DispatchQueue.main.async { [weak self] in
             guard let self, self.panelVisible, self.panel != nil else { return }
+            // Everything between the previous mark and this one is work the main thread did on
+            // its own after showPanel returned: SwiftUI's layout/render pass, chiefly.
+            PerfLog.mark("runloop turn (SwiftUI layout+render)")
+            PerfLog.end()
             self.slidePanel(from: start, to: target, duration: 0.11, easeOut: true)
             // Housekeeping that nothing on the first frame depends on. Running it here keeps it
             // out of the window between the hotkey and the panel starting to move.
@@ -452,16 +581,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         frameAnimTimer?.invalidate()
         p.setFrameOrigin(start.origin)
         let begin = Date()
+        PerfLog.beginFrames()
         let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] t in
             guard let self, let p = self.panel else { t.invalidate(); return }
+            PerfLog.frameTick()
             let raw = min(1, Date().timeIntervalSince(begin) / duration)
             let e = easeOut ? (1 - (1 - raw) * (1 - raw)) : (raw * raw)
             let x = start.origin.x + (end.origin.x - start.origin.x) * e
             let y = start.origin.y + (end.origin.y - start.origin.y) * e
-            p.setFrameOrigin(NSPoint(x: x, y: y))
+            PerfLog.frameWork { p.setFrameOrigin(NSPoint(x: x, y: y)) }
             if raw >= 1 {
                 t.invalidate()
                 self.frameAnimTimer = nil
+                PerfLog.endFrames(easeOut ? "slide-in" : "slide-out")
                 completion?()
             }
         }

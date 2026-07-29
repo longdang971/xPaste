@@ -26,8 +26,21 @@ final class ClipboardStore: ObservableObject {
     }
     private var pendingChange = false
 
+    /// Whether a change has been coalesced away and is still waiting to be published.
+    var hasPendingChange: Bool { pendingChange }
+
+    /// Called on the main thread whenever a change is coalesced while suppressed, so the panel
+    /// can pay the resulting SwiftUI re-layout at an idle moment instead of on the open path.
+    var onPendingChange: (() -> Void)?
+
     private func notifyWillChange() {
-        if publishingSuppressed { pendingChange = true } else { objectWillChange.send() }
+        if publishingSuppressed {
+            let wasPending = pendingChange
+            pendingChange = true
+            if !wasPending { onPendingChange?() }
+        } else {
+            objectWillChange.send()
+        }
     }
     @Published var searchQuery = "" {
         didSet { invalidateCaches() }
