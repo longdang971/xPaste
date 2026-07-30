@@ -485,6 +485,32 @@ Append inside `RichTextRendererTests`, before the closing brace:
         // Inside the 12pt padding, so it is fill and never a glyph.
         let corner = rep.colorAt(x: 2, y: 2)
         assertSimilar(corner, .black, tolerance: 0.1)
+
+        // The corner alone proves only that the fill rendered: a bitmap with no text drawn at
+        // all, or one where an opaque fill was painted over the glyphs, reads the same black
+        // there. Scan for any pixel that is not the fill — that is what proves glyphs exist.
+        // Scanned rather than sampled at a computed coordinate: the bitmap is retina-backed, so
+        // its pixel dimensions exceed the point size and any fixed coordinate would be both
+        // scale- and font-dependent.
+        guard let fill = NSColor.black.usingColorSpace(.sRGB) else {
+            return XCTFail("could not convert the fill colour")
+        }
+        var nonFillPixels = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let px = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                // 0.2 sits well above the ~0.08 colour-table round-tripping noise `assertSimilar`
+                // absorbs, and well below the near-saturated white/green/yellow-on-black deltas
+                // this fixture actually produces.
+                if abs(px.redComponent - fill.redComponent) > 0.2
+                    || abs(px.greenComponent - fill.greenComponent) > 0.2
+                    || abs(px.blueComponent - fill.blueComponent) > 0.2 {
+                    nonFillPixels += 1
+                }
+            }
+        }
+        XCTAssertGreaterThan(nonFillPixels, 0,
+            "the bitmap contains only its fill colour, so no text was drawn onto it")
     }
 
     @MainActor
