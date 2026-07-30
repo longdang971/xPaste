@@ -433,7 +433,7 @@ struct ClipboardItemCard: View {
             // The hover buttons take this corner while they're up: the pin button already shows
             // the pinned state, so keeping the static indicator too would just be two pins.
             if let actions, isHovered {
-                CardHoverActions(actions: actions)
+                CardHoverActions(actions: actions, fill: richFill)
                     .padding(6)
             } else if item.isPinned {
                 Image(systemName: "pin.fill")
@@ -460,13 +460,32 @@ struct ClipboardItemCard: View {
         return entry
     }
 
+    /// Whether this card is drawing its rich bitmap on this body pass.
+    ///
+    /// A `.url` card is excluded as soon as its link metadata arrives: from that moment the footer
+    /// is the 52pt `urlPreviewFooter` rather than the 30pt default one, so the content rect is
+    /// 132pt while the bitmap was laid out for 154pt, and `.clipped()` would cut off its bottom.
+    /// That window lasts until the image fetch returns and one of the link branches takes over.
+    /// The plain `textPreview` reflows into whatever rect it is given, so it is what draws there —
+    /// the bitmap is never resized, since having exactly one bitmap size is the point of caching.
+    ///
+    /// The condition is exactly the one `footer` switches on, so the two can never disagree.
+    private var drawsRichPreview: Bool {
+        guard resolvedRichPreview?.image != nil else { return false }
+        if item.type == .url, linkPreviewEnabled, linkPreview != nil { return false }
+        return true
+    }
+
     /// The fill this card's preview and footer share, or nil to keep the default colours.
-    private var richFill: NSColor? { resolvedRichPreview?.fill }
+    ///
+    /// Tied to `drawsRichPreview`, not merely to the cached entry: a card falling back to plain
+    /// text must not keep a black fill, or its `labelColor` text would sit on black.
+    private var richFill: NSColor? { drawsRichPreview ? resolvedRichPreview?.fill : nil }
 
     /// The formatted preview when there is one, the plain text otherwise.
     @ViewBuilder
     private var richOrTextPreview: some View {
-        if let image = resolvedRichPreview?.image {
+        if drawsRichPreview, let image = resolvedRichPreview?.image {
             // No `.resizable()`: the bitmap was laid out at exactly this size, and stretching it
             // would distort the glyphs. Top-leading + clipped truncates the way the layout does.
             Image(nsImage: image)
@@ -781,6 +800,17 @@ struct ClipboardItemCard: View {
         guard let fill else { return .secondary }
         return isLight(fill) ? Color.black.opacity(0.55) : Color.white.opacity(0.7)
     }
+
+    /// Hover-button tint that stays readable on a card whose preview took a rich fill.
+    ///
+    /// Same shape as `footerTextColor(on:)`, but stronger: these are 11pt glyphs on a translucent
+    /// capsule, and on a black card the `.ultraThinMaterial` behind them renders dark grey, which
+    /// `.secondary` sinks straight into — the delete button all but vanished. With no fill the
+    /// tint stays `.secondary`, exactly as before.
+    static func hoverIconColor(on fill: NSColor?) -> Color {
+        guard let fill else { return .secondary }
+        return isLight(fill) ? Color.black.opacity(0.7) : Color.white.opacity(0.92)
+    }
 }
 
 private extension ClipboardContentType {
@@ -821,14 +851,21 @@ private extension ClipboardContentType {
 /// costs nothing extra when the pointer is elsewhere.
 private struct CardHoverActions: View {
     let actions: CardActions
+    /// The card's rich fill, or nil when it kept the default background. The icons are tinted
+    /// against it so they stay visible on a black card.
+    let fill: NSColor?
+
+    private var iconTint: Color { ClipboardItemCard.hoverIconColor(on: fill) }
 
     var body: some View {
         HStack(spacing: 2) {
+            // The pin stays red while unpinned — that colour is what marks the state, and red
+            // reads on both a light and a dark fill.
             HoverActionButton(symbol: actions.isPinned ? "pin.slash.fill" : "pin.fill",
-                              tint: actions.isPinned ? .secondary : .red,
+                              tint: actions.isPinned ? iconTint : .red,
                               help: actions.isPinned ? "Unpin" : "Pin",
                               action: actions.togglePin)
-            HoverActionButton(symbol: "trash", tint: .secondary,
+            HoverActionButton(symbol: "trash", tint: iconTint,
                               help: "Delete", action: actions.delete)
         }
         .padding(.horizontal, 4)
