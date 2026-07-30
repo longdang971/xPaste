@@ -169,9 +169,11 @@ plain. The specialised previews stay ahead of it, so a copied `#000000` still sh
 `.url` items are unchanged too — link preview first, and rich only reaches the `textPreview`
 branch that already exists.
 
-`defaultFooter` and `urlPreviewFooter` take the same fill when one was resolved, and their text
-switches between dark and light through the existing `isLightColor(_:)` helper. `fileFooter` is
-untouched, since a path item never renders rich.
+`defaultFooter` takes the same fill when one was resolved, and its text switches between dark and
+light through the existing `isLightColor(_:)` helper. `urlPreviewFooter` does not: it only appears
+when a link preview exists, and that case draws the preview image or its placeholder rather than
+text, so a fill could never reach it. `fileFooter` keeps its own background too — a path item
+never renders rich — and changes only in picking up the shared height constant.
 
 ## Popover rendering
 
