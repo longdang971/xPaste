@@ -8,6 +8,7 @@ struct PreviewPopoverContent: View {
 
     @State private var loadedImage: NSImage?
     @State private var richPreview: RichFullPreview?
+    @Environment(\.colorScheme) private var colorScheme
 
     private var title: String {
         switch item.type {
@@ -37,7 +38,10 @@ struct PreviewPopoverContent: View {
             footer
         }
         .frame(width: previewWidth, height: previewHeight)
-        .task(id: item.id) {
+        // Keyed on the appearance as well as the item, the same way the card is: the legibility
+        // guard resolves against `textBackgroundColor`, so a popover left open across a light/dark
+        // flip would otherwise keep a verdict that no longer matches what is behind it.
+        .task(id: CardTaskKey(itemID: item.id, isLightAppearance: colorScheme == .light)) {
             await loadImageIfNeeded()
             // Parsed here, not in `body`: a large RTF re-parsed per body pass would stutter the
             // popover for nothing.
