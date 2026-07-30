@@ -9,6 +9,16 @@ struct CardActions {
     let delete: () -> Void
 }
 
+/// What a card's `.task` is keyed on.
+///
+/// `.task(id:)` takes a single `Equatable`, and the card's work depends on two things: which item
+/// it is showing, and which appearance it is showing it in. A light/dark flip must re-run the task
+/// so the rich preview is rebuilt for the mode now on screen.
+struct CardTaskKey: Equatable {
+    let itemID: UUID
+    let isLightAppearance: Bool
+}
+
 struct ClipboardItemCard: View {
     let item: ClipboardItem
     let index: Int
@@ -35,6 +45,10 @@ struct ClipboardItemCard: View {
     @State private var detectedIsDirectory = false
     @AppStorage("linkPreviewEnabled") private var linkPreviewEnabled: Bool = true
     @Environment(\.panelScale) private var panelScale
+    /// A rich preview is a baked bitmap, so it belongs to one appearance. Reading the scheme here
+    /// makes the card rebuild — rather than keep showing yesterday's white rectangle — when the
+    /// system flips between light and dark.
+    @Environment(\.colorScheme) private var colorScheme
 
     private static var colorCache: [String: Color] = [:]
     private static var iconCache: [String: NSImage] = [:]
@@ -93,7 +107,10 @@ struct ClipboardItemCard: View {
         .overlay(CardSelectionBorder(itemID: item.id, isHovered: isHovered))
         .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4)
         .onHover { isHovered = $0 }
-        .task(id: item.id) {
+        // Keyed on the appearance as well as the item: `.task(id:)` takes one Equatable value, so
+        // the two are combined. A light/dark flip re-runs this and rebuilds the rich preview for
+        // the appearance now on screen.
+        .task(id: CardTaskKey(itemID: item.id, isLightAppearance: isLightAppearance)) {
             if item.type == .image {
                 if let data = item.imageData, let img = NSImage(data: data) {
                     loadedImage = img
@@ -143,11 +160,17 @@ struct ClipboardItemCard: View {
                item.type == .text || item.type == .url,
                resolved.url == nil,
                detectedColor == nil {
-                if let cached = Self.richPreviewCache.object(forKey: item.id as NSUUID) {
-                    if richPreview == nil { richPreview = cached }
+                let light = isLightAppearance
+                if let cached = Self.richPreviewCache.object(forKey: item.id as NSUUID),
+                   cached.isUsable(underLightAppearance: light) {
+                    if richPreview !== cached { richPreview = cached }
                 } else {
+                    // The default fill is resolved for the appearance on screen, so both the
+                    // bitmap's background and the legibility verdict belong to it.
                     let built = await RichTextRenderer.cardPreview(
-                        for: item, size: RichTextRenderer.cardPreviewSize)
+                        for: item, size: RichTextRenderer.cardPreviewSize,
+                        forLightAppearance: light,
+                        defaultFill: RichTextRenderer.defaultFill(forLightAppearance: light))
                     Self.richPreviewCache.setObject(built, forKey: item.id as NSUUID)
                     richPreview = built
                 }
@@ -421,10 +444,20 @@ struct ClipboardItemCard: View {
         }
     }
 
+    /// Whether the appearance the card is being drawn in is the light one.
+    private var isLightAppearance: Bool { colorScheme == .light }
+
     /// The cached decision for this item. Reads the cache directly as well as `@State` so a card
     /// scrolled back into view draws its preview on the first body pass, not one pass later.
+    ///
+    /// An entry built under the other appearance is a miss, not a fallback: its bitmap was baked
+    /// with the other mode's `textBackgroundColor`, and its rich-or-plain verdict was decided
+    /// against that fill. Returning nil here draws the plain text for the one body pass it takes
+    /// `.task` to rebuild, rather than leaving a white rectangle on a dark panel.
     private var resolvedRichPreview: RichCardPreview? {
-        richPreview ?? Self.richPreviewCache.object(forKey: item.id as NSUUID)
+        let entry = richPreview ?? Self.richPreviewCache.object(forKey: item.id as NSUUID)
+        guard let entry, entry.isUsable(underLightAppearance: isLightAppearance) else { return nil }
+        return entry
     }
 
     /// The fill this card's preview and footer share, or nil to keep the default colours.

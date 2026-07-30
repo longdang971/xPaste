@@ -107,11 +107,18 @@ enum RichTextRenderer {
         text.enumerateAttribute(.foregroundColor,
                                 in: NSRange(location: 0, length: text.length),
                                 options: []) { value, range, _ in
-            let colour = ((value as? NSColor) ?? .black).usingColorSpace(.deviceRGB) ?? .black
+            // The trailing fallback must already be in an RGB colourspace: `NSColor.black` is
+            // Generic Gray, and `colourKey` below reads `.redComponent`, which raises an
+            // uncatchable NSInvalidArgumentException on a grey colour.
+            let colour = ((value as? NSColor) ?? .black).usingColorSpace(.deviceRGB)
+                ?? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
             let key = colourKey(colour)
             tally[key] = (colour, (tally[key]?.characters ?? 0) + range.length)
         }
-        return tally.values.max(by: { $0.characters < $1.characters })?.colour ?? .black
+        // Same reason for the sRGB literal: this colour is handed to callers that may read its
+        // components directly.
+        return tally.values.max(by: { $0.characters < $1.characters })?.colour
+            ?? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
     }
 
     /// WCAG relative-luminance contrast ratio, 1:1 to 21:1.
@@ -149,15 +156,37 @@ enum RichTextRenderer {
                    - PanelLayout.cardFooterHeight)
     }
 
+    /// The `NSColor.textBackgroundColor` of one specific appearance, resolved to a static colour.
+    ///
+    /// A card's bitmap is baked once and cached, so it cannot be painted with a dynamic colour:
+    /// the pixels would keep the appearance that happened to be current when the bitmap was
+    /// drawn. Resolving here means the caller decides which appearance it is drawing for, and
+    /// `RichCardPreview` can record that decision.
+    static func defaultFill(forLightAppearance light: Bool) -> NSColor {
+        guard let appearance = NSAppearance(named: light ? .aqua : .darkAqua) else {
+            return NSColor.textBackgroundColor
+        }
+        var resolved = NSColor.textBackgroundColor
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = NSColor.textBackgroundColor.usingColorSpace(.sRGB) ?? resolved
+        }
+        return resolved
+    }
+
     /// Always returns a decision, never nil — the caller caches either outcome.
+    ///
+    /// `forLightAppearance` is recorded on the result so a cached entry built under the other
+    /// appearance can be discarded rather than redrawn from stale pixels.
     ///
     /// `defaultFill` is injectable because `NSColor.textBackgroundColor` resolves against the
     /// current appearance: white text with no background of its own is illegible in light mode
-    /// but perfectly readable in dark. The app always passes the dynamic colour; tests pass a
-    /// fixed one so their result does not depend on the machine's appearance.
+    /// but perfectly readable in dark. The app passes the fill of the appearance actually on
+    /// screen (see `defaultFill(forLightAppearance:)`); tests pass a fixed one so their result
+    /// does not depend on the machine's appearance.
     @MainActor
     static func cardPreview(for item: ClipboardItem,
                             size: CGSize,
+                            forLightAppearance: Bool = true,
                             defaultFill: NSColor = .textBackgroundColor) async -> RichCardPreview {
         let parsed: ParsedRich?
         if item.richType == NSPasteboard.PasteboardType.rtf.rawValue {
@@ -166,18 +195,23 @@ enum RichTextRenderer {
             // The HTML importer is WebKit-backed and main-thread only.
             parsed = parse(item)
         }
-        guard let parsed else { return .plain }
+        guard let parsed else { return .plain(forLightAppearance: forLightAppearance) }
 
         let fill = resolveFill(runBackground: dominantBackground(of: parsed.text),
                                documentBackground: parsed.documentBackground)
         let effective = fill ?? defaultFill
-        guard fill != nil || isLegible(parsed.text, on: effective) else { return .plain }
+        guard fill != nil || isLegible(parsed.text, on: effective) else {
+            return .plain(forLightAppearance: forLightAppearance)
+        }
 
         let body = parsed.text.length > cardCharLimit
             ? parsed.text.attributedSubstring(from: NSRange(location: 0, length: cardCharLimit))
             : parsed.text
-        guard let image = rasterise(body, fill: effective, size: size) else { return .plain }
-        return RichCardPreview(image: image, fill: fill)
+        guard let image = rasterise(body, fill: effective, size: size) else {
+            return .plain(forLightAppearance: forLightAppearance)
+        }
+        return RichCardPreview(image: image, fill: fill,
+                               builtForLightAppearance: forLightAppearance)
     }
 
     /// The popover's counterpart to `cardPreview`: the whole string, untruncated, because a
@@ -227,13 +261,32 @@ final class RichCardPreview {
     /// nil means "use `NSColor.textBackgroundColor`". Always nil when `image` is nil: a fill
     /// without an image would tint a footer whose preview is plain text.
     let fill: NSColor?
+    /// The appearance this entry was built for.
+    ///
+    /// Both halves of the entry depend on it: an item with no run background is painted with the
+    /// *resolved* `textBackgroundColor`, so its bitmap is a white rectangle in light mode and a
+    /// near-black one in dark, and the legibility verdict that decided whether to draw at all was
+    /// taken against that same fill. A cached entry recorded for the other appearance is
+    /// therefore stale — the reader treats it as a miss and rebuilds.
+    let builtForLightAppearance: Bool
 
-    init(image: NSImage?, fill: NSColor?) {
+    init(image: NSImage?, fill: NSColor?, builtForLightAppearance: Bool = true) {
         self.image = image
         self.fill = image == nil ? nil : fill
+        self.builtForLightAppearance = builtForLightAppearance
     }
 
-    static let plain = RichCardPreview(image: nil, fill: nil)
+    /// Whether this entry can still be shown under `lightAppearance`.
+    ///
+    /// Entries carrying a real run background do not actually depend on the appearance, but a
+    /// flip is rare and rebuilding them too is far simpler than tracking which ones do.
+    func isUsable(underLightAppearance lightAppearance: Bool) -> Bool {
+        builtForLightAppearance == lightAppearance
+    }
+
+    static func plain(forLightAppearance light: Bool) -> RichCardPreview {
+        RichCardPreview(image: nil, fill: nil, builtForLightAppearance: light)
+    }
 }
 
 /// The full styled string for the preview popover.
