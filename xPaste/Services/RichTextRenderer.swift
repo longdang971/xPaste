@@ -102,23 +102,45 @@ enum RichTextRenderer {
 
     /// The foreground colour covering the most characters. Text with no colour attribute draws
     /// black, so that is the default.
-    static func dominantForeground(of text: NSAttributedString) -> NSColor {
+    ///
+    /// `ranges` narrows the tally to part of the string; `isLegible` uses it to ask only about the
+    /// runs that are actually painted onto the fill.
+    static func dominantForeground(of text: NSAttributedString,
+                                   in ranges: [NSRange]? = nil) -> NSColor {
         var tally: [String: (colour: NSColor, characters: Int)] = [:]
-        text.enumerateAttribute(.foregroundColor,
-                                in: NSRange(location: 0, length: text.length),
-                                options: []) { value, range, _ in
-            // The trailing fallback must already be in an RGB colourspace: `NSColor.black` is
-            // Generic Gray, and `colourKey` below reads `.redComponent`, which raises an
-            // uncatchable NSInvalidArgumentException on a grey colour.
-            let colour = ((value as? NSColor) ?? .black).usingColorSpace(.deviceRGB)
-                ?? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
-            let key = colourKey(colour)
-            tally[key] = (colour, (tally[key]?.characters ?? 0) + range.length)
+        for scope in ranges ?? [NSRange(location: 0, length: text.length)] {
+            text.enumerateAttribute(.foregroundColor,
+                                    in: scope,
+                                    options: []) { value, range, _ in
+                // The trailing fallback must already be in an RGB colourspace: `NSColor.black` is
+                // Generic Gray, and `colourKey` below reads `.redComponent`, which raises an
+                // uncatchable NSInvalidArgumentException on a grey colour.
+                let colour = ((value as? NSColor) ?? .black).usingColorSpace(.deviceRGB)
+                    ?? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+                let key = colourKey(colour)
+                tally[key] = (colour, (tally[key]?.characters ?? 0) + range.length)
+            }
         }
         // Same reason for the sRGB literal: this colour is handed to callers that may read its
         // components directly.
         return tally.values.max(by: { $0.characters < $1.characters })?.colour
             ?? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+    }
+
+    /// The stretches of text that are painted straight onto the card's fill, because they carry no
+    /// background of their own.
+    static func unbackedRanges(of text: NSAttributedString) -> [NSRange] {
+        var ranges: [NSRange] = []
+        text.enumerateAttribute(.backgroundColor,
+                                in: NSRange(location: 0, length: text.length),
+                                options: []) { value, range, _ in
+            guard let colour = (value as? NSColor)?.usingColorSpace(.deviceRGB),
+                  colour.alphaComponent > 0.01 else {
+                ranges.append(range)
+                return
+            }
+        }
+        return ranges
     }
 
     /// WCAG relative-luminance contrast ratio, 1:1 to 21:1.
@@ -139,8 +161,16 @@ enum RichTextRenderer {
 
     /// Guards against a blank card: a source that hands over light text carrying no background
     /// anywhere would otherwise rasterise to nothing at all.
+    ///
+    /// Only the runs with no background of their own are weighed, because only they land on the
+    /// fill. Tallying the rest confuses a highlight with a disappearing act: a black-on-yellow run
+    /// dragged the whole item to plain text on a dark card, discarding the very highlight that
+    /// made it legible in the first place.
     static func isLegible(_ text: NSAttributedString, on fill: NSColor) -> Bool {
-        contrastRatio(dominantForeground(of: text), fill) >= contrastFloor
+        let exposed = unbackedRanges(of: text)
+        // Every run brings its own background, so the fill is never behind any glyph.
+        guard !exposed.isEmpty else { return true }
+        return contrastRatio(dominantForeground(of: text, in: exposed), fill) >= contrastFloor
     }
 
     // MARK: - Card previews

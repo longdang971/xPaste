@@ -201,6 +201,37 @@ final class RichTextRendererTests: XCTestCase {
         assertSimilar(RichTextRenderer.dominantForeground(of: s), .black)
     }
 
+    func test_text_carrying_its_own_background_cannot_be_illegible_on_the_fill() {
+        // Black glyphs, but sat on their own yellow highlight: they never touch the card's fill,
+        // so no fill can hide them. Tallying them against the fill is measuring the wrong pair.
+        let s = NSAttributedString(string: "highlighted",
+                                   attributes: [.foregroundColor: NSColor.black,
+                                                .backgroundColor: NSColor.systemYellow])
+        XCTAssertTrue(RichTextRenderer.isLegible(s, on: .black))
+    }
+
+    func test_a_highlighted_run_does_not_flatten_the_rest_of_a_dark_card() {
+        // The observed bug: the mixed fixture renders in full in light mode, but in dark mode its
+        // one black-on-yellow run won the foreground tally, was compared against the dark card
+        // fill, and dropped the whole item — heading, colours, highlight and all — to plain text.
+        let parsed = RichTextRenderer.parse(mixedFixture())!
+        XCTAssertTrue(
+            RichTextRenderer.isLegible(parsed.text,
+                                       on: RichTextRenderer.defaultFill(forLightAppearance: false)),
+            "the runs that actually sit on the dark fill are a red heading, a blue line and a "
+                + "purple line, every one of them readable")
+    }
+
+    @MainActor
+    func test_the_mixed_item_stays_rich_in_dark_mode() async {
+        // The same assertion at the level the user sees: light and dark must show the same card.
+        let size = CGSize(width: 232, height: 154)
+        let dark = await RichTextRenderer.cardPreview(
+            for: mixedFixture(), size: size,
+            defaultFill: RichTextRenderer.defaultFill(forLightAppearance: false))
+        XCTAssertNotNil(dark.image, "dark mode flattened an item that light mode draws in full")
+    }
+
     // MARK: - Rasterisation
 
     /// The one end-to-end assertion: a black-backgrounded item must produce a bitmap that is
