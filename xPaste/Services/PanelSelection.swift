@@ -49,6 +49,32 @@ final class PanelSelection: ObservableObject {
 
     func clear() { set([]) }
 
+    /// What the selection should become once the visible row has changed underneath it.
+    ///
+    /// nil means leave it alone — something already selected is still on screen, and re-selecting
+    /// would jerk the highlight back to the front of the row for no reason. A partly surviving
+    /// multi-selection counts as alive: collapsing it to one card would quietly drop the rest of a
+    /// batch the user had already lined up.
+    ///
+    /// Otherwise the row's first card, or an empty set when the row has no results at all.
+    static func rebased(in items: [UUID], selected: Set<UUID>) -> Set<UUID>? {
+        if items.contains(where: { selected.contains($0) }) { return nil }
+        guard let first = items.first else { return [] }
+        return [first]
+    }
+
+    /// What a click into the panel's empty space leaves selected.
+    ///
+    /// That click exists to drop a multi-selection back to a single card, so it keeps the topmost
+    /// selected one — not the front of the row, which would move a highlight the user had put
+    /// somewhere deliberately. It never leaves nothing: the row would sit unhighlighted and ⏎ /
+    /// Backspace would do nothing until a card was clicked.
+    static func collapsed(in items: [UUID], selected: Set<UUID>) -> Set<UUID> {
+        if let primary = items.first(where: { selected.contains($0) }) { return [primary] }
+        guard let first = items.first else { return [] }
+        return [first]
+    }
+
     /// Which card should hold the selection once `deleted` are gone from `items`.
     ///
     /// The first survivor at or after the deleted block — the card that slides into the gap — and

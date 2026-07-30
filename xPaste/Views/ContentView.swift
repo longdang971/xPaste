@@ -198,7 +198,7 @@ struct ContentView: View {
                     }
                 }
                 if !NSEvent.modifierFlags.contains(.command) {
-                    selection.clear()
+                    collapseSelection()
                 }
             }
         })
@@ -235,11 +235,15 @@ struct ContentView: View {
             // The filter button lives in the search field, so its popover has nothing left to
             // hang off once the field folds away.
             if showFilters { showFilters = false }
-            guard !selection.isHidingPanel else { return }
-            if selection.isEmpty, let first = displayedItems.first {
-                selection.select(first.id)
-            }
+            rebaseSelection()
         }
+        // Each of these swaps the visible row out from under the selection. Handled here rather
+        // than by watching `displayedItems` itself: that would mean filtering the whole history on
+        // every body pass just to compare, and ContentView deliberately does not re-render on
+        // selection changes.
+        .onChange(of: activeTab) { _ in rebaseSelection() }
+        .onChange(of: store.searchQuery) { _ in rebaseSelection() }
+        .onChange(of: store.filters) { _ in rebaseSelection() }
         .onReceive(NotificationCenter.default.publisher(for: .panelWillHide)) { _ in
             // Only mutate when there is actually something to reset. `store.searchQuery` is
             // @Published and emits even when set to the same value, which would invalidate the
@@ -777,6 +781,28 @@ struct ContentView: View {
         } else {
             store.delete(item)
         }
+    }
+
+    /// Puts the highlight back on something real after the visible row changed underneath it.
+    ///
+    /// Never while the panel is hiding: that path clears the selection on purpose.
+    private func rebaseSelection() {
+        guard !selection.isHidingPanel else { return }
+        let items = displayedItems
+        guard let rebased = PanelSelection.rebased(in: items.map(\.id),
+                                                   selected: selection.ids) else { return }
+        selection.set(rebased)
+    }
+
+    /// A click into the panel's empty space: drop a multi-selection back to one card.
+    ///
+    /// This runs a runloop tick late, by design — it has to wait to learn whether the click landed
+    /// on a card. So it is also the last word on the selection after a tab switch or a closing
+    /// search box, and clearing here used to wipe what `rebaseSelection` had just put back.
+    private func collapseSelection() {
+        guard !selection.isHidingPanel else { return }
+        selection.set(PanelSelection.collapsed(in: displayedItems.map(\.id),
+                                               selected: selection.ids))
     }
 
     /// Deletes, then leaves the selection on whatever survives.

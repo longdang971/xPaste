@@ -61,4 +61,59 @@ final class PanelSelectionTests: XCTestCase {
     func test_an_empty_list_selects_nothing() {
         XCTAssertNil(PanelSelection.survivor(in: [], deleting: [items[0]]))
     }
+
+    // MARK: - Rebasing onto a row that changed underneath
+
+    /// Switching tab, typing a search term, adding a filter token and folding the search box away
+    /// all swap the visible row out from under the selection. An id that is no longer on screen
+    /// highlights nothing, so the panel sat with nothing selected and ⏎ / Backspace did nothing
+    /// until the user reached for the mouse.
+
+    func test_a_selection_still_on_screen_is_left_alone() {
+        XCTAssertNil(PanelSelection.rebased(in: items, selected: [items[3]]),
+                     "nil means don't touch it — re-selecting would jump the highlight to the front")
+    }
+
+    func test_a_selection_that_scrolled_out_of_the_results_moves_to_the_first() {
+        let results = [items[2], items[4]]
+        XCTAssertEqual(PanelSelection.rebased(in: results, selected: [items[0]]), [items[2]])
+    }
+
+    func test_an_empty_selection_takes_the_first_card() {
+        XCTAssertEqual(PanelSelection.rebased(in: items, selected: []), [items[0]])
+    }
+
+    func test_a_partly_surviving_multi_selection_is_kept_whole() {
+        // Two cards ⌘-clicked, one of them filtered out: collapsing to a single card here would
+        // silently drop the other from a batch paste the user had already lined up.
+        XCTAssertNil(PanelSelection.rebased(in: [items[1]], selected: [items[1], items[4]]))
+    }
+
+    func test_a_row_with_no_results_selects_nothing() {
+        XCTAssertEqual(PanelSelection.rebased(in: [], selected: [items[0]]), Set<UUID>())
+    }
+
+    // MARK: - Collapsing on a click into empty space
+
+    /// That click is meant to drop a multi-selection back to one card. It used to drop to none,
+    /// and because it runs a runloop tick late it also wiped whatever the tab switch or the
+    /// closing search box had just put back.
+
+    func test_a_multi_selection_collapses_onto_its_topmost_card() {
+        XCTAssertEqual(PanelSelection.collapsed(in: items, selected: [items[3], items[1]]),
+                       [items[1]], "the one nearest the front of the row survives, not any of them")
+    }
+
+    func test_a_single_selection_is_left_where_it_is() {
+        XCTAssertEqual(PanelSelection.collapsed(in: items, selected: [items[3]]), [items[3]],
+                       "collapsing must not jerk the highlight back to the front of the row")
+    }
+
+    func test_collapsing_with_nothing_selected_takes_the_first_card() {
+        XCTAssertEqual(PanelSelection.collapsed(in: items, selected: []), [items[0]])
+    }
+
+    func test_collapsing_an_empty_row_selects_nothing() {
+        XCTAssertEqual(PanelSelection.collapsed(in: [], selected: [items[0]]), Set<UUID>())
+    }
 }
