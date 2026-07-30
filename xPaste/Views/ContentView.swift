@@ -105,8 +105,7 @@ struct ContentView: View {
                     if selection.count > 1 {
                         showDeleteSelectedConfirm = true
                     } else {
-                        store.deleteItems(ids: selection.ids)
-                        selection.clear()
+                        deleteKeepingSelection(selection.ids)
                     }
                 }
                 .keyboardShortcut(.delete, modifiers: [])
@@ -323,8 +322,7 @@ struct ContentView: View {
             isPresented: $showDeleteSelectedConfirm
         ) {
             Button("Delete", role: .destructive) {
-                store.deleteItems(ids: selection.ids)
-                selection.clear()
+                deleteKeepingSelection(selection.ids)
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
@@ -605,7 +603,7 @@ struct ContentView: View {
             })
         }
         menu.addItem(ClosureMenuItem(title: "Delete", symbol: "trash",
-                                     key: "\u{8}") { store.delete(item) })
+                                     key: "\u{8}") { deleteOne(item) })
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: item.isPinned ? "Unpin" : "Pin",
                                      symbol: item.isPinned ? "pin.slash" : "pin") { store.togglePin(item) })
@@ -765,11 +763,37 @@ struct ContentView: View {
         CardActions(
             isPinned: item.isPinned,
             togglePin: { store.togglePin(item) },
-            delete: {
-                selection.remove(item.id)
-                store.delete(item)
-            }
+            delete: { deleteOne(item) }
         )
+    }
+
+    /// Deletes one card from the hover button or the right-click menu.
+    ///
+    /// Only a card that held the selection hands it on — deleting some other card must not move
+    /// the highlight out from under whatever the user had chosen.
+    private func deleteOne(_ item: ClipboardItem) {
+        if selection.contains(item.id) {
+            deleteKeepingSelection([item.id])
+        } else {
+            store.delete(item)
+        }
+    }
+
+    /// Deletes, then leaves the selection on whatever survives.
+    ///
+    /// Backspace used to clear the selection outright, so deleting a run of cards meant reaching
+    /// for the mouse between every one: the second press had nothing left to act on.
+    ///
+    /// The survivor is worked out before the delete, on the row as it stands — afterwards the gap
+    /// the deleted cards left is gone and there is nothing to reason from.
+    private func deleteKeepingSelection(_ ids: Set<UUID>) {
+        let heir = PanelSelection.survivor(in: displayedItems.map(\.id), deleting: ids)
+        store.deleteItems(ids: ids)
+        if let heir {
+            selection.set([heir])
+        } else {
+            selection.clear()
+        }
     }
 
     /// What a card carries when dragged out of the panel.

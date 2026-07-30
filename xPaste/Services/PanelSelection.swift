@@ -49,6 +49,20 @@ final class PanelSelection: ObservableObject {
 
     func clear() { set([]) }
 
+    /// Which card should hold the selection once `deleted` are gone from `items`.
+    ///
+    /// The first survivor at or after the deleted block — the card that slides into the gap — and
+    /// failing that the last survivor before it, for a block that ran to the end of the row. nil
+    /// only when nothing is left to select.
+    ///
+    /// Called before the delete, on the list as it stands: afterwards the deleted cards' positions
+    /// are gone and there is no gap left to reason about.
+    static func survivor(in items: [UUID], deleting deleted: Set<UUID>) -> UUID? {
+        guard let firstGap = items.firstIndex(where: { deleted.contains($0) }) else { return nil }
+        if let after = items[firstGap...].first(where: { !deleted.contains($0) }) { return after }
+        return items[..<firstGap].last(where: { !deleted.contains($0) })
+    }
+
     var isEmpty: Bool { ids.isEmpty }
     var count: Int { ids.count }
     func contains(_ id: UUID) -> Bool { ids.contains(id) }
