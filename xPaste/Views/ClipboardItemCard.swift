@@ -240,6 +240,9 @@ struct ClipboardItemCard: View {
             .textFieldStyle(.plain)
             .font(.system(size: 15, weight: .bold))
             .foregroundColor(onAccent)
+            // The caret rides the title's colour, not the system accent: a blue accent on a blue
+            // header (Chrome) leaves nothing to see.
+            .tint(onAccent)
             .focused($nameFieldFocused)
             .lineLimit(1)
             .frame(width: PanelLayout.cardBaseWidth - 108, alignment: .leading)
