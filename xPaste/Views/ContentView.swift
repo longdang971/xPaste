@@ -105,8 +105,7 @@ struct ContentView: View {
                     if selection.count > 1 {
                         showDeleteSelectedConfirm = true
                     } else {
-                        store.deleteItems(ids: selection.ids)
-                        selection.clear()
+                        deleteKeepingSelection(selection.ids)
                     }
                 }
                 .keyboardShortcut(.delete, modifiers: [])
@@ -199,7 +198,7 @@ struct ContentView: View {
                     }
                 }
                 if !NSEvent.modifierFlags.contains(.command) {
-                    selection.clear()
+                    collapseSelection()
                 }
             }
         })
@@ -236,11 +235,15 @@ struct ContentView: View {
             // The filter button lives in the search field, so its popover has nothing left to
             // hang off once the field folds away.
             if showFilters { showFilters = false }
-            guard !selection.isHidingPanel else { return }
-            if selection.isEmpty, let first = displayedItems.first {
-                selection.select(first.id)
-            }
+            rebaseSelection()
         }
+        // Each of these swaps the visible row out from under the selection. Handled here rather
+        // than by watching `displayedItems` itself: that would mean filtering the whole history on
+        // every body pass just to compare, and ContentView deliberately does not re-render on
+        // selection changes.
+        .onChange(of: activeTab) { _ in rebaseSelection() }
+        .onChange(of: store.searchQuery) { _ in rebaseSelection() }
+        .onChange(of: store.filters) { _ in rebaseSelection() }
         .onReceive(NotificationCenter.default.publisher(for: .panelWillHide)) { _ in
             // Only mutate when there is actually something to reset. `store.searchQuery` is
             // @Published and emits even when set to the same value, which would invalidate the
@@ -323,8 +326,7 @@ struct ContentView: View {
             isPresented: $showDeleteSelectedConfirm
         ) {
             Button("Delete", role: .destructive) {
-                store.deleteItems(ids: selection.ids)
-                selection.clear()
+                deleteKeepingSelection(selection.ids)
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
@@ -605,7 +607,7 @@ struct ContentView: View {
             })
         }
         menu.addItem(ClosureMenuItem(title: "Delete", symbol: "trash",
-                                     key: "\u{8}") { store.delete(item) })
+                                     key: "\u{8}") { deleteOne(item) })
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(title: item.isPinned ? "Unpin" : "Pin",
                                      symbol: item.isPinned ? "pin.slash" : "pin") { store.togglePin(item) })
@@ -765,11 +767,59 @@ struct ContentView: View {
         CardActions(
             isPinned: item.isPinned,
             togglePin: { store.togglePin(item) },
-            delete: {
-                selection.remove(item.id)
-                store.delete(item)
-            }
+            delete: { deleteOne(item) }
         )
+    }
+
+    /// Deletes one card from the hover button or the right-click menu.
+    ///
+    /// Only a card that held the selection hands it on — deleting some other card must not move
+    /// the highlight out from under whatever the user had chosen.
+    private func deleteOne(_ item: ClipboardItem) {
+        if selection.contains(item.id) {
+            deleteKeepingSelection([item.id])
+        } else {
+            store.delete(item)
+        }
+    }
+
+    /// Puts the highlight back on something real after the visible row changed underneath it.
+    ///
+    /// Never while the panel is hiding: that path clears the selection on purpose.
+    private func rebaseSelection() {
+        guard !selection.isHidingPanel else { return }
+        let items = displayedItems
+        guard let rebased = PanelSelection.rebased(in: items.map(\.id),
+                                                   selected: selection.ids) else { return }
+        selection.set(rebased)
+    }
+
+    /// A click into the panel's empty space: drop a multi-selection back to one card.
+    ///
+    /// This runs a runloop tick late, by design — it has to wait to learn whether the click landed
+    /// on a card. So it is also the last word on the selection after a tab switch or a closing
+    /// search box, and clearing here used to wipe what `rebaseSelection` had just put back.
+    private func collapseSelection() {
+        guard !selection.isHidingPanel else { return }
+        selection.set(PanelSelection.collapsed(in: displayedItems.map(\.id),
+                                               selected: selection.ids))
+    }
+
+    /// Deletes, then leaves the selection on whatever survives.
+    ///
+    /// Backspace used to clear the selection outright, so deleting a run of cards meant reaching
+    /// for the mouse between every one: the second press had nothing left to act on.
+    ///
+    /// The survivor is worked out before the delete, on the row as it stands — afterwards the gap
+    /// the deleted cards left is gone and there is nothing to reason from.
+    private func deleteKeepingSelection(_ ids: Set<UUID>) {
+        let heir = PanelSelection.survivor(in: displayedItems.map(\.id), deleting: ids)
+        store.deleteItems(ids: ids)
+        if let heir {
+            selection.set([heir])
+        } else {
+            selection.clear()
+        }
     }
 
     /// What a card carries when dragged out of the panel.

@@ -9,6 +9,16 @@ struct CardActions {
     let delete: () -> Void
 }
 
+/// What a card's `.task` is keyed on.
+///
+/// `.task(id:)` takes a single `Equatable`, and the card's work depends on two things: which item
+/// it is showing, and which appearance it is showing it in. A light/dark flip must re-run the task
+/// so the rich preview is rebuilt for the mode now on screen.
+struct CardTaskKey: Equatable {
+    let itemID: UUID
+    let isLightAppearance: Bool
+}
+
 struct ClipboardItemCard: View {
     let item: ClipboardItem
     let index: Int
@@ -29,11 +39,16 @@ struct ClipboardItemCard: View {
     @State private var linkImageChecked = false
     @State private var favicon: NSImage?
     @State private var pathImage: NSImage?
+    @State private var richPreview: RichCardPreview?
     @State private var computedAccentColor: Color?
     @State private var detectedFilePath: URL?
     @State private var detectedIsDirectory = false
     @AppStorage("linkPreviewEnabled") private var linkPreviewEnabled: Bool = true
     @Environment(\.panelScale) private var panelScale
+    /// A rich preview is a baked bitmap, so it belongs to one appearance. Reading the scheme here
+    /// makes the card rebuild — rather than keep showing yesterday's white rectangle — when the
+    /// system flips between light and dark.
+    @Environment(\.colorScheme) private var colorScheme
 
     private static var colorCache: [String: Color] = [:]
     private static var iconCache: [String: NSImage] = [:]
@@ -48,6 +63,11 @@ struct ClipboardItemCard: View {
     }()
     private static let loadedImageCache: NSCache<NSUUID, NSImage> = {
         let c = NSCache<NSUUID, NSImage>(); c.countLimit = 120; return c
+    }()
+    /// Rich previews, positive and negative alike: an item that resolved to plain text is stored
+    /// as `RichCardPreview.plain` so it is never parsed twice.
+    private static let richPreviewCache: NSCache<NSUUID, RichCardPreview> = {
+        let c = NSCache<NSUUID, RichCardPreview>(); c.countLimit = 120; return c
     }()
     private static var fileIconCache: [String: NSImage] = [:]
 
@@ -87,7 +107,10 @@ struct ClipboardItemCard: View {
         .overlay(CardSelectionBorder(itemID: item.id, isHovered: isHovered))
         .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4)
         .onHover { isHovered = $0 }
-        .task(id: item.id) {
+        // Keyed on the appearance as well as the item: `.task(id:)` takes one Equatable value, so
+        // the two are combined. A light/dark flip re-runs this and rebuilds the rich preview for
+        // the appearance now on screen.
+        .task(id: CardTaskKey(itemID: item.id, isLightAppearance: isLightAppearance)) {
             if item.type == .image {
                 if let data = item.imageData, let img = NSImage(data: data) {
                     loadedImage = img
@@ -128,6 +151,28 @@ struct ClipboardItemCard: View {
                     let image = NSImage(cgImage: cgImage, size: .zero)
                     pathImage = image
                     Self.pathImageCache.setObject(image, forKey: item.id as NSUUID)
+                }
+            }
+
+            // Built here, never in `body`: parsing RTF and laying it out is TextKit work, and a
+            // card that did it per body pass would re-measure on every panel re-layout.
+            if item.richData != nil,
+               item.type == .text || item.type == .url,
+               resolved.url == nil,
+               detectedColor == nil {
+                let light = isLightAppearance
+                if let cached = Self.richPreviewCache.object(forKey: item.id as NSUUID),
+                   cached.isUsable(underLightAppearance: light) {
+                    if richPreview !== cached { richPreview = cached }
+                } else {
+                    // The default fill is resolved for the appearance on screen, so both the
+                    // bitmap's background and the legibility verdict belong to it.
+                    let built = await RichTextRenderer.cardPreview(
+                        for: item, size: RichTextRenderer.cardPreviewSize,
+                        forLightAppearance: light,
+                        defaultFill: RichTextRenderer.defaultFill(forLightAppearance: light))
+                    Self.richPreviewCache.setObject(built, forKey: item.id as NSUUID)
+                    richPreview = built
                 }
             }
 
@@ -326,7 +371,7 @@ struct ClipboardItemCard: View {
     @ViewBuilder
     private var contentPreview: some View {
         ZStack(alignment: .topLeading) {
-            Color(NSColor.textBackgroundColor)
+            Color(nsColor: richFill ?? .textBackgroundColor)
             switch item.type {
             case .url:
                 if linkPreviewEnabled, let img = linkPreview?.image {
@@ -336,7 +381,7 @@ struct ClipboardItemCard: View {
                 } else if linkPreviewEnabled, linkPreview != nil, linkImageChecked {
                     noImagePlaceholder
                 } else {
-                    textPreview
+                    richOrTextPreview
                 }
             case .text:
                 if let pathURL = detectedFilePath {
@@ -354,7 +399,7 @@ struct ClipboardItemCard: View {
                 } else if let color = detectedColor {
                     colorPreview(color)
                 } else {
-                    textPreview
+                    richOrTextPreview
                 }
             case .image:
                 if let nsImage = loadedImage ?? Self.loadedImageCache.object(forKey: item.id as NSUUID) {
@@ -388,7 +433,7 @@ struct ClipboardItemCard: View {
             // The hover buttons take this corner while they're up: the pin button already shows
             // the pinned state, so keeping the static indicator too would just be two pins.
             if let actions, isHovered {
-                CardHoverActions(actions: actions)
+                CardHoverActions(actions: actions, fill: richFill)
                     .padding(6)
             } else if item.isPinned {
                 Image(systemName: "pin.fill")
@@ -396,6 +441,58 @@ struct ClipboardItemCard: View {
                     .foregroundColor(.red)
                     .padding(6)
             }
+        }
+    }
+
+    /// Whether the appearance the card is being drawn in is the light one.
+    private var isLightAppearance: Bool { colorScheme == .light }
+
+    /// The cached decision for this item. Reads the cache directly as well as `@State` so a card
+    /// scrolled back into view draws its preview on the first body pass, not one pass later.
+    ///
+    /// An entry built under the other appearance is a miss, not a fallback: its bitmap was baked
+    /// with the other mode's `textBackgroundColor`, and its rich-or-plain verdict was decided
+    /// against that fill. Returning nil here draws the plain text for the one body pass it takes
+    /// `.task` to rebuild, rather than leaving a white rectangle on a dark panel.
+    private var resolvedRichPreview: RichCardPreview? {
+        let entry = richPreview ?? Self.richPreviewCache.object(forKey: item.id as NSUUID)
+        guard let entry, entry.isUsable(underLightAppearance: isLightAppearance) else { return nil }
+        return entry
+    }
+
+    /// Whether this card is drawing its rich bitmap on this body pass.
+    ///
+    /// A `.url` card is excluded as soon as its link metadata arrives: from that moment the footer
+    /// is the 52pt `urlPreviewFooter` rather than the 30pt default one, so the content rect is
+    /// 132pt while the bitmap was laid out for 154pt, and `.clipped()` would cut off its bottom.
+    /// That window lasts until the image fetch returns and one of the link branches takes over.
+    /// The plain `textPreview` reflows into whatever rect it is given, so it is what draws there —
+    /// the bitmap is never resized, since having exactly one bitmap size is the point of caching.
+    ///
+    /// The condition is exactly the one `footer` switches on, so the two can never disagree.
+    private var drawsRichPreview: Bool {
+        guard resolvedRichPreview?.image != nil else { return false }
+        if item.type == .url, linkPreviewEnabled, linkPreview != nil { return false }
+        return true
+    }
+
+    /// The fill this card's preview and footer share, or nil to keep the default colours.
+    ///
+    /// Tied to `drawsRichPreview`, not merely to the cached entry: a card falling back to plain
+    /// text must not keep a black fill, or its `labelColor` text would sit on black.
+    private var richFill: NSColor? { drawsRichPreview ? resolvedRichPreview?.fill : nil }
+
+    /// The formatted preview when there is one, the plain text otherwise.
+    @ViewBuilder
+    private var richOrTextPreview: some View {
+        if drawsRichPreview, let image = resolvedRichPreview?.image {
+            // No `.resizable()`: the bitmap was laid out at exactly this size, and stretching it
+            // would distort the glyphs. Top-leading + clipped truncates the way the layout does.
+            Image(nsImage: image)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
+        } else {
+            textPreview
         }
     }
 
@@ -409,13 +506,28 @@ struct ClipboardItemCard: View {
     }
 
     private func colorPreview(_ color: Color) -> some View {
-        ZStack {
+        let tint = Self.onSwatchTint(NSColor(color))
+        return ZStack {
             color
             Text(item.text ?? "")
                 .font(.system(size: 14, weight: .medium, design: .monospaced))
-                .foregroundColor(isLightColor(color) ? Color.black.opacity(0.65) : Color.white.opacity(0.85))
+                .foregroundColor(tint)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The badge lives here rather than in a footer, because a swatch card has no footer for it
+        // to live in. Same seat it occupies on every other card: bottom-right, 12pt in.
+        .overlay(alignment: .bottomTrailing) {
+            ShortcutBadge(index: index, tint: tint)
+                .padding(.trailing, 12)
+                .padding(.bottom, 9)
+        }
+    }
+
+    /// The tint for glyphs drawn straight onto a colour swatch — the hex label and the ⌘-number
+    /// badge alike, so the two cannot disagree about whether the colour behind them is light and
+    /// leave one of them sunk into it.
+    static func onSwatchTint(_ swatch: NSColor) -> Color {
+        isLight(swatch) ? Color.black.opacity(0.65) : Color.white.opacity(0.85)
     }
 
     private func placeholder(_ name: String, color: Color) -> some View {
@@ -450,7 +562,13 @@ struct ClipboardItemCard: View {
     @ViewBuilder
     private var footer: some View {
         let hasLinkPreview = item.type == .url && linkPreviewEnabled && linkPreview != nil
-        if hasLinkPreview {
+        if detectedColor != nil {
+            // No strip at all: a swatch runs to the bottom edge, and window chrome beneath it
+            // reads as the colour stopping short of the card it is supposed to be. "7 characters"
+            // says nothing about a colour anyway. `contentPreview` claims the height instead, so
+            // the card's total is unchanged and the hex label centres on the whole block.
+            EmptyView()
+        } else if hasLinkPreview {
             urlPreviewFooter
         } else if item.type == .file || item.type == .folder || detectedFilePath != nil {
             fileFooter
@@ -507,25 +625,27 @@ struct ClipboardItemCard: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .frame(height: 30)
+        .frame(height: PanelLayout.cardFooterHeight)
         .background(Color(NSColor.controlBackgroundColor))
     }
 
     private var defaultFooter: some View {
         Text(footerLabel)
             .font(.system(size: 11))
-            .foregroundColor(.secondary)
+            .foregroundColor(Self.footerTextColor(on: richFill))
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .frame(height: 30)
+            .frame(height: PanelLayout.cardFooterHeight)
             // Overlaid rather than placed in an HStack: this label is short and centred, so it
             // can never collide with the badge, and laying the badge out inline would re-centre
             // the label in the leftover width — nudging "N characters" left on every ⌘ press.
             .overlay(alignment: .trailing) {
                 shortcutBadge.padding(.trailing, 12)
             }
-            .background(Color(NSColor.controlBackgroundColor))
+            // Paste runs the fill through the footer too: a black card whose footer stayed grey
+            // reads as a bar bolted onto the bottom.
+            .background(Color(nsColor: richFill ?? .controlBackgroundColor))
     }
 
     private var footerLabel: String { cardText.footer }
@@ -684,9 +804,33 @@ struct ClipboardItemCard: View {
     }
 
     private func isLightColor(_ color: Color) -> Bool {
-        guard let ns = NSColor(color).usingColorSpace(.deviceRGB) else { return true }
-        let luminance = 0.2126 * ns.redComponent + 0.7152 * ns.greenComponent + 0.0722 * ns.blueComponent
+        Self.isLight(NSColor(color))
+    }
+
+    /// Whether `colour` is light enough that dark text reads better on it.
+    static func isLight(_ colour: NSColor) -> Bool {
+        guard let ns = colour.usingColorSpace(.deviceRGB) else { return true }
+        let luminance = 0.2126 * ns.redComponent
+                      + 0.7152 * ns.greenComponent
+                      + 0.0722 * ns.blueComponent
         return luminance > 0.5
+    }
+
+    /// Footer text colour that stays readable on a card whose footer took a rich fill.
+    static func footerTextColor(on fill: NSColor?) -> Color {
+        guard let fill else { return .secondary }
+        return isLight(fill) ? Color.black.opacity(0.55) : Color.white.opacity(0.7)
+    }
+
+    /// Hover-button tint that stays readable on a card whose preview took a rich fill.
+    ///
+    /// Same shape as `footerTextColor(on:)`, but stronger: these are 11pt glyphs on a translucent
+    /// capsule, and on a black card the `.ultraThinMaterial` behind them renders dark grey, which
+    /// `.secondary` sinks straight into — the delete button all but vanished. With no fill the
+    /// tint stays `.secondary`, exactly as before.
+    static func hoverIconColor(on fill: NSColor?) -> Color {
+        guard let fill else { return .secondary }
+        return isLight(fill) ? Color.black.opacity(0.7) : Color.white.opacity(0.92)
     }
 }
 
@@ -728,14 +872,21 @@ private extension ClipboardContentType {
 /// costs nothing extra when the pointer is elsewhere.
 private struct CardHoverActions: View {
     let actions: CardActions
+    /// The card's rich fill, or nil when it kept the default background. The icons are tinted
+    /// against it so they stay visible on a black card.
+    let fill: NSColor?
+
+    private var iconTint: Color { ClipboardItemCard.hoverIconColor(on: fill) }
 
     var body: some View {
         HStack(spacing: 2) {
+            // The pin stays red while unpinned — that colour is what marks the state, and red
+            // reads on both a light and a dark fill.
             HoverActionButton(symbol: actions.isPinned ? "pin.slash.fill" : "pin.fill",
-                              tint: actions.isPinned ? .secondary : .red,
+                              tint: actions.isPinned ? iconTint : .red,
                               help: actions.isPinned ? "Unpin" : "Pin",
                               action: actions.togglePin)
-            HoverActionButton(symbol: "trash", tint: .secondary,
+            HoverActionButton(symbol: "trash", tint: iconTint,
                               help: "Delete", action: actions.delete)
         }
         .padding(.horizontal, 4)
@@ -775,6 +926,9 @@ private struct HoverActionButton: View {
 /// a full-panel re-layout on every press (~40ms measured, Release and Debug alike).
 private struct ShortcutBadge: View {
     let index: Int
+    /// Overridden where the badge sits on a card's own colour rather than on window chrome — a
+    /// swatch card, where `.secondary` would go muddy against a saturated fill.
+    var tint: Color = .secondary
     @ObservedObject private var watcher = ModifierWatcher.shared
 
     var body: some View {
@@ -787,7 +941,7 @@ private struct ShortcutBadge: View {
                 Text("\(index)")
                     .font(.system(size: 11))
             }
-            .foregroundColor(.secondary)
+            .foregroundColor(tint)
             .fixedSize()
             .padding(.leading, 6)
         }

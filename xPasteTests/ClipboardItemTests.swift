@@ -100,6 +100,46 @@ final class ClipboardItemTests: XCTestCase {
         XCTAssertEqual(pb.string(forType: .string), "/Users/user/a.txt\n/Users/user/b.txt")
     }
 
+    /// The premise of drawing a card's real formatting: the formatting has to survive the paste,
+    /// or the cards are advertising something the pasteboard does not deliver. Nothing else
+    /// asserted that `richData` is written at all.
+    func test_write_text_puts_its_rich_data_on_the_pasteboard() {
+        let pb = makeBoard("rich-text")
+        let styled = NSAttributedString(string: "white on black", attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .foregroundColor: NSColor.white,
+            .backgroundColor: NSColor.black,
+        ])
+        let rtf = styled.rtf(from: NSRange(location: 0, length: styled.length),
+                             documentAttributes: [:])!
+        let item = ClipboardItem(type: .text, text: styled.string, richData: rtf,
+                                 richType: NSPasteboard.PasteboardType.rtf.rawValue)
+
+        item.write(to: pb)
+
+        guard let written = pb.data(forType: .rtf) else {
+            return XCTFail("nothing was written as RTF, so a rich editor pastes plain text")
+        }
+        var docAttrs: NSDictionary?
+        guard let readBack = NSAttributedString(rtf: written, documentAttributes: &docAttrs) else {
+            return XCTFail("what was written could not be parsed back as RTF")
+        }
+        XCTAssertEqual(readBack.string, styled.string)
+
+        // The formatting itself, not just the presence of some RTF: the black run background is
+        // what makes this item look like anything on a card.
+        let background = readBack.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor
+        guard let background = background?.usingColorSpace(.sRGB) else {
+            return XCTFail("the pasted RTF carries no run background")
+        }
+        XCTAssertEqual(background.redComponent, 0, accuracy: 0.08)
+        XCTAssertEqual(background.greenComponent, 0, accuracy: 0.08)
+        XCTAssertEqual(background.blueComponent, 0, accuracy: 0.08)
+
+        // And the plain-text fallback is still there for everything that cannot read RTF.
+        XCTAssertEqual(pb.string(forType: .string), "white on black")
+    }
+
     private func fileURLItem(_ path: String) -> NSPasteboardItem {
         let pbItem = NSPasteboardItem()
         pbItem.setString(URL(fileURLWithPath: path).absoluteString, forType: .fileURL)
