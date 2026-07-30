@@ -222,6 +222,27 @@ final class RichTextRendererTests: XCTestCase {
         // Inside the 12pt padding, so it is fill and never a glyph.
         let corner = rep.colorAt(x: 2, y: 2)
         assertSimilar(corner, .black, tolerance: 0.1)
+
+        // The corner alone only proves the fill rendered. Scan the whole bitmap for pixels that
+        // are clearly not fill-coloured, which is the only thing that can prove a glyph was
+        // actually drawn: a missing `text.draw` call, or a fill painted on top of the text,
+        // would both still pass every assertion above while leaving the bitmap uniformly black.
+        guard let fillSRGB = NSColor.black.usingColorSpace(.sRGB) else {
+            return XCTFail("could not convert the fill colour to sRGB")
+        }
+        let tolerance: CGFloat = 0.2
+        var nonFillPixelCount = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let differs = abs(pixel.redComponent - fillSRGB.redComponent) > tolerance ||
+                    abs(pixel.greenComponent - fillSRGB.greenComponent) > tolerance ||
+                    abs(pixel.blueComponent - fillSRGB.blueComponent) > tolerance
+                if differs { nonFillPixelCount += 1 }
+            }
+        }
+        XCTAssertGreaterThan(nonFillPixelCount, 0,
+            "the bitmap contains only its fill colour, so no text was drawn onto it")
     }
 
     @MainActor
