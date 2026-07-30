@@ -53,7 +53,7 @@
   - `RichTextRenderer.contrastRatio(_ a: NSColor, _ b: NSColor) -> CGFloat`
   - `RichTextRenderer.isLegible(_ text: NSAttributedString, on fill: NSColor) -> Bool`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `xPasteTests/RichTextRendererTests.swift`:
 
@@ -262,7 +262,7 @@ final class RichTextRendererTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodegen generate && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' -only-testing:xPasteTests/RichTextRendererTests 2>&1 | tail -30
@@ -270,7 +270,7 @@ cd /Users/pikalong/xPaste && xcodegen generate && xcodebuild test -project xPast
 
 Expected: compile failure, `cannot find 'RichTextRenderer' in scope`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `xPaste/Services/RichTextRenderer.swift`:
 
@@ -419,7 +419,7 @@ enum RichTextRenderer {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodegen generate && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' -only-testing:xPasteTests/RichTextRendererTests 2>&1 | tail -30
@@ -429,7 +429,7 @@ Expected: `** TEST SUCCEEDED **`, 17 tests run.
 
 If `test_parses_html_and_finds_a_run_background` fails, do not weaken it — HTML is a real capture path (`captureRich` falls back to it) and a broken HTML branch would silently disable rich rendering for every HTML-only source.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/pikalong/xPaste && git add xPaste/Services/RichTextRenderer.swift xPasteTests/RichTextRendererTests.swift xPaste.xcodeproj && git commit -m "Read a clipboard item's real formatting out of its captured RTF
@@ -458,7 +458,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   - `RichTextRenderer.cardPadding: CGFloat` (value `12`)
   - `@MainActor RichTextRenderer.cardPreview(for item: ClipboardItem, size: CGSize, defaultFill: NSColor = .textBackgroundColor) async -> RichCardPreview`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append inside `RichTextRendererTests`, before the closing brace:
 
@@ -555,7 +555,7 @@ Append inside `RichTextRendererTests`, before the closing brace:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' -only-testing:xPasteTests/RichTextRendererTests 2>&1 | tail -30
@@ -563,7 +563,7 @@ cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme x
 
 Expected: compile failure, `cannot find 'RichCardPreview' in scope`.
 
-- [ ] **Step 3: Add the shared footer height**
+- [x] **Step 3: Add the shared footer height**
 
 In `xPaste/App/AppDelegate.swift`, inside `enum PanelLayout`, immediately after the `cardHeaderHeight` declaration:
 
@@ -573,7 +573,7 @@ In `xPaste/App/AppDelegate.swift`, inside `enum PanelLayout`, immediately after 
     static let cardFooterHeight: CGFloat = 30
 ```
 
-- [ ] **Step 4: Add the card entry points**
+- [x] **Step 4: Add the card entry points**
 
 Append to `xPaste/Services/RichTextRenderer.swift`, at the end of the file (outside the `enum`):
 
@@ -667,7 +667,7 @@ And inside `enum RichTextRenderer`, after the `isLegible` function:
     }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' -only-testing:xPasteTests/RichTextRendererTests 2>&1 | tail -30
@@ -677,7 +677,7 @@ Expected: `** TEST SUCCEEDED **`, 23 tests run.
 
 If `test_rasterised_preview_is_filled_with_the_dominant_background` reports a *white* corner, the fill is being drawn but overwritten, or `lockFocusFlipped` produced an unexpected coordinate space — check that `NSBezierPath(rect:).fill()` runs before `text.draw`, not after.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /Users/pikalong/xPaste && git add xPaste/Services/RichTextRenderer.swift xPaste/App/AppDelegate.swift xPasteTests/RichTextRendererTests.swift && git commit -m "Lay a card's formatted text out once into a bitmap
@@ -701,7 +701,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: `RichCardPreview`, `RichTextRenderer.cardPreview(for:size:)`, `RichTextRenderer.cardPreviewSize` from Task 2.
 - Produces: `ClipboardItemCard.isLight(_ colour: NSColor) -> Bool` and `ClipboardItemCard.footerTextColor(on fill: NSColor?) -> Color`, both static and internal so tests can reach them.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append inside `RichTextRendererTests`, before the closing brace:
 
@@ -722,7 +722,7 @@ Append inside `RichTextRendererTests`, before the closing brace:
 
 Add `import SwiftUI` to the top of the test file, after `import AppKit`.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' -only-testing:xPasteTests/RichTextRendererTests 2>&1 | tail -30
@@ -730,7 +730,7 @@ cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme x
 
 Expected: compile failure, `type 'ClipboardItemCard' has no member 'isLight'`.
 
-- [ ] **Step 3: Add the colour helpers**
+- [x] **Step 3: Add the colour helpers**
 
 In `xPaste/Views/ClipboardItemCard.swift`, replace the existing `isLightColor` function (near the end of the struct, currently `private func isLightColor(_ color: Color) -> Bool`) with:
 
@@ -755,7 +755,7 @@ In `xPaste/Views/ClipboardItemCard.swift`, replace the existing `isLightColor` f
     }
 ```
 
-- [ ] **Step 4: Add the cache and state**
+- [x] **Step 4: Add the cache and state**
 
 In `xPaste/Views/ClipboardItemCard.swift`, after the `loadedImageCache` declaration (around line 51), add:
 
@@ -773,7 +773,7 @@ And alongside the other `@State` properties (after `@State private var pathImage
     @State private var richPreview: RichCardPreview?
 ```
 
-- [ ] **Step 5: Populate it in `.task`**
+- [x] **Step 5: Populate it in `.task`**
 
 In the `.task(id: item.id)` block, immediately after the `if let imageURL { … }` block closes and before the `// Only publish a colour that had to be computed.` comment, insert:
 
@@ -795,7 +795,7 @@ In the `.task(id: item.id)` block, immediately after the `if let imageURL { … 
             }
 ```
 
-- [ ] **Step 6: Draw it**
+- [x] **Step 6: Draw it**
 
 In `xPaste/Views/ClipboardItemCard.swift`, add these two computed properties immediately before `private var textPreview: some View`:
 
@@ -842,7 +842,7 @@ Then replace both `textPreview` references inside `contentPreview` with `richOrT
 
 There are exactly two. Leave the `textPreview` property itself in place — `richOrTextPreview` falls back to it. `colorPreview` and the path branches keep their precedence, so a copied `#000000` still shows its swatch and a copied path still shows its file icon.
 
-- [ ] **Step 7: Tint the footer**
+- [x] **Step 7: Tint the footer**
 
 In `defaultFooter`, replace
 
@@ -876,7 +876,7 @@ with
 
 Also replace the literal `30` in `defaultFooter`'s and `fileFooter`'s `.frame(height: 30)` with `PanelLayout.cardFooterHeight`, so the card and the rasteriser cannot drift apart.
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' 2>&1 | tail -30
@@ -884,7 +884,7 @@ cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme x
 
 Expected: `** TEST SUCCEEDED **`. The whole suite runs here, not just the new file — `PanelPerformanceTests` and `ClipboardItemTests` must be unaffected.
 
-- [ ] **Step 9: Look at it**
+- [x] **Step 9: Look at it**
 
 ```bash
 cd /private/tmp/claude-501/-Users-pikalong/daf0fc73-0fba-4cdc-9fbb-5377144b116d/scratchpad && ./setrich dark && sleep 2 && ./setrich mixed
@@ -896,7 +896,7 @@ Then build and run the Debug app, open the panel, and confirm against Paste's sc
 cd /Users/pikalong/xPaste && xcodebuild -project xPaste.xcodeproj -scheme xPaste -configuration Debug -destination 'platform=macOS' build 2>&1 | tail -5
 ```
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 cd /Users/pikalong/xPaste && git add xPaste/Views/ClipboardItemCard.swift xPasteTests/RichTextRendererTests.swift && git commit -m "Show a card's real formatting instead of flattening it
@@ -922,7 +922,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   - `final class RichFullPreview` with `let text: NSAttributedString`, `let fill: NSColor?`
   - `@MainActor RichTextRenderer.fullPreview(for item: ClipboardItem, defaultFill: NSColor = .textBackgroundColor) -> RichFullPreview?`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append inside `RichTextRendererTests`, before the closing brace:
 
@@ -967,7 +967,7 @@ Append inside `RichTextRendererTests`, before the closing brace:
     }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' -only-testing:xPasteTests/RichTextRendererTests 2>&1 | tail -30
@@ -975,7 +975,7 @@ cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme x
 
 Expected: compile failure, `type 'RichTextRenderer' has no member 'fullPreview'`.
 
-- [ ] **Step 3: Add `fullPreview`**
+- [x] **Step 3: Add `fullPreview`**
 
 Append to `xPaste/Services/RichTextRenderer.swift`, at the end of the file:
 
@@ -1011,7 +1011,7 @@ And inside `enum RichTextRenderer`, after `cardPreview(for:size:)`:
     }
 ```
 
-- [ ] **Step 4: Add the text view**
+- [x] **Step 4: Add the text view**
 
 At the end of `xPaste/Views/ItemPreviewWindow.swift`, after `WebPreview`, add:
 
@@ -1055,7 +1055,7 @@ private struct RichTextPreview: NSViewRepresentable {
 }
 ```
 
-- [ ] **Step 5: Use it**
+- [x] **Step 5: Use it**
 
 In `PreviewPopoverContent`, add a state property next to `@State private var loadedImage: NSImage?`:
 
@@ -1102,7 +1102,7 @@ Replace the whole `textContent` property with:
 
 The popover's footer keeps its plain character/word/line count — it counts the text, not its styling.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' 2>&1 | tail -30
@@ -1110,11 +1110,11 @@ cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme x
 
 Expected: `** TEST SUCCEEDED **`, whole suite.
 
-- [ ] **Step 7: Look at it**
+- [x] **Step 7: Look at it**
 
 Build and run Debug, open the panel, hover the terminal item and press Space. The popover must show the same black background with green/yellow lines, and dragging across the text must still select it.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd /Users/pikalong/xPaste && git add xPaste/Views/ItemPreviewWindow.swift xPaste/Services/RichTextRenderer.swift xPasteTests/RichTextRendererTests.swift && git commit -m "Show formatting in the preview popover too
@@ -1136,13 +1136,13 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: the finished feature.
 - Produces: a recorded measurement in the commit message.
 
-- [ ] **Step 1: Build Debug**
+- [x] **Step 1: Build Debug**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodebuild -project xPaste.xcodeproj -scheme xPaste -configuration Debug -destination 'platform=macOS' build 2>&1 | tail -5
 ```
 
-- [ ] **Step 2: Measure the plain-text path**
+- [x] **Step 2: Measure the plain-text path**
 
 The harness injects plain synthetic items, so this run proves nothing regressed for items with no formatting.
 
@@ -1159,7 +1159,7 @@ Then, in another shell:
 
 Expected: panel open inside the 16–25ms band, 0–1 dropped frames.
 
-- [ ] **Step 3: Measure with formatted items in history**
+- [x] **Step 3: Measure with formatted items in history**
 
 Fill the history with rich items first, then repeat the measurement — this is the path that parses and rasterises.
 
@@ -1180,7 +1180,7 @@ Expected: still inside the band. The first open after a cold start pays the rast
 
 If it is outside the band, halve `cardCharLimit` to 750 and measure again. Do not accept a regression — speed is this project's first priority, and the fix is a smaller slice of text, not a slower panel.
 
-- [ ] **Step 4: Run the full suite one more time**
+- [x] **Step 4: Run the full suite one more time**
 
 ```bash
 cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme xPaste -destination 'platform=macOS' 2>&1 | tail -15
@@ -1188,7 +1188,7 @@ cd /Users/pikalong/xPaste && xcodebuild test -project xPaste.xcodeproj -scheme x
 
 Expected: `** TEST SUCCEEDED **`.
 
-- [ ] **Step 5: Commit the measurement**
+- [x] **Step 5: Commit the measurement**
 
 ```bash
 cd /Users/pikalong/xPaste && git commit --allow-empty -m "Record the open-path measurement for rich cards
@@ -1201,15 +1201,38 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 Replace both `<measured>` values with the numbers actually read from the log. If either falls outside the band, do not commit this — go back to Step 3's dial.
 
-- [ ] **Step 6: Manual checklist**
+- [x] **Step 6: Manual checklist**
 
 Verify by hand, since none of it is unit-testable:
 
-1. A card copied from a dark terminal is black edge to edge, footer included.
-2. A card copied from a light document is unchanged from before this work.
-3. A copied colour string (`#1e90ff`) still shows its swatch, not styled text.
-4. A copied file path still shows its file icon or thumbnail.
-5. A copied link still shows its link preview and URL footer.
-6. Pasting any of the above still lands with the same formatting it always did.
-7. Renaming a card (double-click the title) still works over a rich preview.
-8. The pin and delete hover buttons are still visible over a black card.
+1. ✅ A card copied from a dark terminal is black edge to edge, footer included.
+2. ✅ A card copied from a light document is unchanged from before this work.
+3. ✅ A copied colour string (`#1e90ff`) still shows its swatch, not styled text.
+4. ✅ A copied file path still shows its file icon or thumbnail.
+5. ✅ A copied link still shows its link preview and URL footer.
+6. ⬜ Pasting any of the above still lands with the same formatting it always did.
+7. ⬜ Renaming a card (double-click the title) still works over a rich preview.
+8. ✅ The pin and delete hover buttons are still visible over a black card.
+
+6 and 7 are the two that need a real hand on the mouse. The panel hides on any
+mouseDown it reads as coming from another app, and a synthetic `CGEvent` is
+exactly that, so it dismisses itself before the click lands — ⌘-number posted
+by `osascript` does not reach it either. Everything else above was photographed.
+
+## Follow-up: the legibility guard was measuring the wrong pair
+
+Found while checking 1–8 in both appearances, and fixed in
+`Stop a highlight from flattening the card it sits on`.
+
+The same styled item drew in full in light mode and as flat plain text in dark.
+`isLegible` tallied the foreground colour of *every* run — including runs
+carrying a background of their own — and compared the winner against the card's
+fill. A 24-character black-on-yellow highlight therefore won the tally, was
+measured against a fill it never touches, scored 1.1 against the 1.5 floor, and
+dropped the whole item to plain text, discarding the very highlight that made
+those glyphs readable.
+
+Only runs with no background of their own are painted onto the fill, so only
+they can be hidden by it. `dominantForeground(of:in:)` now takes an optional
+range list and `isLegible` passes it `unbackedRanges(of:)`; an empty list means
+nothing the fill could hide is on show, so the item is legible by definition.
