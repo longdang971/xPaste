@@ -199,4 +199,69 @@ final class RichTextRendererTests: XCTestCase {
         let s = NSAttributedString(string: "no colour attribute")
         assertSimilar(RichTextRenderer.dominantForeground(of: s), .black)
     }
+
+    // MARK: - Rasterisation
+
+    /// The one end-to-end assertion: a black-backgrounded item must produce a bitmap that is
+    /// actually black. Everything upstream can be right and still draw nothing.
+    @MainActor
+    func test_rasterised_preview_is_filled_with_the_dominant_background() async {
+        let size = CGSize(width: 232, height: 154)
+        let preview = await RichTextRenderer.cardPreview(
+            for: terminalFixture(), size: size, defaultFill: .white)
+
+        guard let image = preview.image else { return XCTFail("expected a rasterised preview") }
+        XCTAssertEqual(image.size.width, size.width, accuracy: 0.5)
+        XCTAssertEqual(image.size.height, size.height, accuracy: 0.5)
+        assertSimilar(preview.fill, .black)
+
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else {
+            return XCTFail("could not read the bitmap back")
+        }
+        // Inside the 12pt padding, so it is fill and never a glyph.
+        let corner = rep.colorAt(x: 2, y: 2)
+        assertSimilar(corner, .black, tolerance: 0.1)
+    }
+
+    @MainActor
+    func test_unbacked_item_still_rasterises_on_the_default_fill() async {
+        let preview = await RichTextRenderer.cardPreview(
+            for: mixedFixture(), size: CGSize(width: 232, height: 154), defaultFill: .white)
+        XCTAssertNotNil(preview.image, "styled text is worth drawing even without a fill")
+        XCTAssertNil(preview.fill, "no run background won, so the card keeps its default fill")
+    }
+
+    @MainActor
+    func test_plain_item_yields_the_plain_decision() async {
+        let plain = ClipboardItem(type: .text, text: "just text")
+        let preview = await RichTextRenderer.cardPreview(
+            for: plain, size: CGSize(width: 232, height: 154), defaultFill: .white)
+        XCTAssertNil(preview.image)
+        XCTAssertNil(preview.fill)
+    }
+
+    @MainActor
+    func test_illegible_item_yields_the_plain_decision() async {
+        // White text, no background anywhere: rasterising this would give a blank card.
+        let s = NSAttributedString(string: "invisible on white",
+                                  attributes: [.foregroundColor: NSColor.white,
+                                               .font: NSFont.systemFont(ofSize: 13)])
+        let preview = await RichTextRenderer.cardPreview(
+            for: rtfItem(s), size: CGSize(width: 232, height: 154), defaultFill: .white)
+        XCTAssertNil(preview.image)
+    }
+
+    @MainActor
+    func test_fill_is_nil_whenever_there_is_no_image() {
+        XCTAssertNil(RichCardPreview(image: nil, fill: .black).fill,
+                     "a fill without an image would tint a footer whose content is plain text")
+    }
+
+    func test_card_preview_size_is_the_content_rect() {
+        XCTAssertEqual(RichTextRenderer.cardPreviewSize.width, PanelLayout.cardBaseWidth)
+        XCTAssertEqual(RichTextRenderer.cardPreviewSize.height,
+                       PanelLayout.cardBaseHeight - PanelLayout.cardHeaderHeight
+                           - PanelLayout.cardFooterHeight)
+    }
 }

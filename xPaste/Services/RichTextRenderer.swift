@@ -135,4 +135,88 @@ enum RichTextRenderer {
     static func isLegible(_ text: NSAttributedString, on fill: NSColor) -> Bool {
         contrastRatio(dominantForeground(of: text), fill) >= contrastFloor
     }
+
+    // MARK: - Card previews
+
+    /// Inset matching the plain `textPreview`'s padding, so switching between the two does not
+    /// shift the text.
+    static let cardPadding: CGFloat = 12
+
+    static var cardPreviewSize: CGSize {
+        CGSize(width: PanelLayout.cardBaseWidth,
+               height: PanelLayout.cardBaseHeight
+                   - PanelLayout.cardHeaderHeight
+                   - PanelLayout.cardFooterHeight)
+    }
+
+    /// Always returns a decision, never nil — the caller caches either outcome.
+    ///
+    /// `defaultFill` is injectable because `NSColor.textBackgroundColor` resolves against the
+    /// current appearance: white text with no background of its own is illegible in light mode
+    /// but perfectly readable in dark. The app always passes the dynamic colour; tests pass a
+    /// fixed one so their result does not depend on the machine's appearance.
+    @MainActor
+    static func cardPreview(for item: ClipboardItem,
+                            size: CGSize,
+                            defaultFill: NSColor = .textBackgroundColor) async -> RichCardPreview {
+        let parsed: ParsedRich?
+        if item.richType == NSPasteboard.PasteboardType.rtf.rawValue {
+            parsed = await Task.detached(priority: .userInitiated) { parse(item) }.value
+        } else {
+            // The HTML importer is WebKit-backed and main-thread only.
+            parsed = parse(item)
+        }
+        guard let parsed else { return .plain }
+
+        let fill = resolveFill(runBackground: dominantBackground(of: parsed.text),
+                               documentBackground: parsed.documentBackground)
+        let effective = fill ?? defaultFill
+        guard fill != nil || isLegible(parsed.text, on: effective) else { return .plain }
+
+        let body = parsed.text.length > cardCharLimit
+            ? parsed.text.attributedSubstring(from: NSRange(location: 0, length: cardCharLimit))
+            : parsed.text
+        guard let image = rasterise(body, fill: effective, size: size) else { return .plain }
+        return RichCardPreview(image: image, fill: fill)
+    }
+
+    /// Lays the text out **once** into a bitmap.
+    ///
+    /// `lockFocusFlipped(true)` gives retina backing from the display and flipped coordinates, so
+    /// the text flows downward from the top of the rect. A drawing-handler `NSImage` would re-run
+    /// TextKit on every draw, which is the entire cost this is meant to avoid.
+    @MainActor
+    private static func rasterise(_ text: NSAttributedString,
+                                  fill: NSColor,
+                                  size: CGSize) -> NSImage? {
+        guard size.width > 2 * cardPadding, size.height > 2 * cardPadding else { return nil }
+        let image = NSImage(size: size)
+        image.lockFocusFlipped(true)
+        fill.setFill()
+        NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
+        text.draw(with: NSRect(x: cardPadding, y: cardPadding,
+                               width: size.width - 2 * cardPadding,
+                               height: size.height - 2 * cardPadding),
+                  options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        image.unlockFocus()
+        return image
+    }
+}
+
+/// A card's rich preview, or the decision not to draw one.
+///
+/// `image == nil` means "draw plain text" — a negative result worth caching, so an item that
+/// resolved to plain is never parsed again when it scrolls back into view.
+final class RichCardPreview {
+    let image: NSImage?
+    /// nil means "use `NSColor.textBackgroundColor`". Always nil when `image` is nil: a fill
+    /// without an image would tint a footer whose preview is plain text.
+    let fill: NSColor?
+
+    init(image: NSImage?, fill: NSColor?) {
+        self.image = image
+        self.fill = image == nil ? nil : fill
+    }
+
+    static let plain = RichCardPreview(image: nil, fill: nil)
 }

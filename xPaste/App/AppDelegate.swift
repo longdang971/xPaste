@@ -786,6 +786,9 @@ enum PanelLayout {
     static let cardSpacing: CGFloat = 18
     /// Height of a card's coloured header bar, measured off Paste (96 device pixels).
     static let cardHeaderHeight: CGFloat = 48
+    /// Height of a card's footer strip (the character count and ⌘-number badge). Shared with
+    /// `RichTextRenderer.cardPreviewSize` so the rasterised preview matches the content rect.
+    static let cardFooterHeight: CGFloat = 30
     /// Fixed chrome around the horizontal card row (toolbar + divider + list padding).
     /// Paste leaves 68pt above the card row and 24pt below it; `listTopPadding` below
     /// makes up the difference between 68 and the toolbar's own height.
