@@ -384,7 +384,11 @@ enum RichTextRenderer {
         text.enumerateAttribute(.foregroundColor,
                                 in: NSRange(location: 0, length: text.length),
                                 options: []) { value, range, _ in
-            let colour = (value as? NSColor)?.usingColorSpace(.deviceRGB) ?? .black
+            // The fallback has to go through deviceRGB as well. `NSColor.black` lives in Generic
+            // Gray, which cannot answer `.redComponent` — `colourKey` would raise
+            // NSInvalidArgumentException on any run with no foreground colour attribute.
+            let colour = (value as? NSColor)?.usingColorSpace(.deviceRGB)
+                ?? NSColor.black.usingColorSpace(.deviceRGB)!
             let key = colourKey(colour)
             tally[key] = (colour, (tally[key]?.characters ?? 0) + range.length)
         }
