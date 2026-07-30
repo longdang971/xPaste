@@ -298,6 +298,201 @@ final class RichTextRendererTests: XCTestCase {
                           "a dark fill needs light footer text, not the system secondary")
         XCTAssertNotEqual(ClipboardItemCard.footerTextColor(on: .black),
                           ClipboardItemCard.footerTextColor(on: .white))
+        // Distinct is not enough: swapping the two would still pass everything above while
+        // putting white footer text on a white card. Pin which colour goes with which fill.
+        XCTAssertEqual(ClipboardItemCard.footerTextColor(on: .black), Color.white.opacity(0.7),
+                       "a dark fill must take the light footer text")
+        XCTAssertEqual(ClipboardItemCard.footerTextColor(on: .white), Color.black.opacity(0.55),
+                       "a light fill must take the dark footer text")
+    }
+
+    /// The hover buttons sit on `.ultraThinMaterial`, which renders dark grey over a black card —
+    /// `.secondary` disappears into it, and the icon that disappears is delete.
+    func test_hover_icons_are_tinted_against_the_card_fill() {
+        XCTAssertEqual(ClipboardItemCard.hoverIconColor(on: nil), Color.secondary,
+                       "a card with no rich fill keeps the icons it always had")
+        XCTAssertEqual(ClipboardItemCard.hoverIconColor(on: .black), Color.white.opacity(0.92),
+                       "a black card needs near-white icons")
+        XCTAssertEqual(ClipboardItemCard.hoverIconColor(on: .white), Color.black.opacity(0.7),
+                       "a white card needs dark icons")
+    }
+
+    // MARK: - Appearance
+    //
+    // A card's rich preview is a baked bitmap, and an item with no run background of its own is
+    // painted with the *resolved* `textBackgroundColor` — white in light mode, near-black in dark.
+    // The legibility verdict is decided against that same fill. Both therefore belong to one
+    // appearance, and a flip has to rebuild them rather than keep showing the old pixels.
+
+    private func whiteTextItem() -> ClipboardItem {
+        // No background anywhere: illegible on a light default fill, perfectly readable on a dark
+        // one. This is the item whose *verdict* — not just its bitmap — depends on the appearance.
+        rtfItem(NSAttributedString(string: "white words on nothing",
+                                  attributes: [.foregroundColor: NSColor.white,
+                                               .font: NSFont.systemFont(ofSize: 13)]))
+    }
+
+    @MainActor
+    func test_card_preview_records_the_appearance_it_was_built_for() async {
+        let size = CGSize(width: 232, height: 154)
+        let light = await RichTextRenderer.cardPreview(
+            for: terminalFixture(), size: size, forLightAppearance: true, defaultFill: .white)
+        let dark = await RichTextRenderer.cardPreview(
+            for: terminalFixture(), size: size, forLightAppearance: false, defaultFill: .black)
+
+        XCTAssertTrue(light.builtForLightAppearance)
+        XCTAssertFalse(dark.builtForLightAppearance)
+    }
+
+    /// The plain decision is cached too, so it has to carry the appearance as well — otherwise a
+    /// "draw plain text" verdict taken in light mode would stick after a flip to dark.
+    @MainActor
+    func test_the_plain_decision_records_the_appearance_too() async {
+        let plain = await RichTextRenderer.cardPreview(
+            for: ClipboardItem(type: .text, text: "just text"),
+            size: CGSize(width: 232, height: 154),
+            forLightAppearance: false, defaultFill: .black)
+        XCTAssertNil(plain.image)
+        XCTAssertFalse(plain.builtForLightAppearance)
+    }
+
+    /// The staleness rule itself: this is what the card's cache reader consults, so an entry from
+    /// the other appearance is a miss rather than something to draw.
+    @MainActor
+    func test_an_entry_built_for_the_other_appearance_is_not_usable() async {
+        let builtInLight = await RichTextRenderer.cardPreview(
+            for: terminalFixture(), size: CGSize(width: 232, height: 154),
+            forLightAppearance: true, defaultFill: .white)
+
+        XCTAssertTrue(builtInLight.isUsable(underLightAppearance: true))
+        XCTAssertFalse(builtInLight.isUsable(underLightAppearance: false),
+                       "a light-mode entry must not be reused after a flip to dark")
+    }
+
+    /// Why the verdict cannot simply be cached forever: the same item is rich in one appearance
+    /// and plain in the other. This is also finding 2 — the card and the popover now agree,
+    /// because both decide against the fill of the appearance on screen.
+    @MainActor
+    func test_the_same_item_gets_opposite_verdicts_in_the_two_appearances() async {
+        let size = CGSize(width: 232, height: 154)
+        let item = whiteTextItem()
+
+        let inLight = await RichTextRenderer.cardPreview(
+            for: item, size: size, forLightAppearance: true, defaultFill: .white)
+        let inDark = await RichTextRenderer.cardPreview(
+            for: item, size: size, forLightAppearance: false, defaultFill: .black)
+
+        XCTAssertNil(inLight.image, "white text on a white default fill would be a blank card")
+        XCTAssertNotNil(inDark.image, "the same text is perfectly readable on a dark default fill")
+        // And the popover, which recomputes live, reaches the same two conclusions.
+        XCTAssertNil(RichTextRenderer.fullPreview(for: item, defaultFill: .white))
+        XCTAssertNotNil(RichTextRenderer.fullPreview(for: item, defaultFill: .black))
+    }
+
+    /// The bitmap of an unbacked item is painted with the default fill, so the pixels really do
+    /// differ between the two appearances — the stale-bitmap bug this guards against.
+    @MainActor
+    func test_an_unbacked_item_rasterises_a_different_fill_per_appearance() async {
+        let size = CGSize(width: 232, height: 154)
+        // Mid-grey text, no background: unlike the fixtures above it clears the contrast floor
+        // against both defaults, so the *only* difference between the two bitmaps is the fill.
+        let item = rtfItem(NSAttributedString(string: "grey words on nothing", attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: NSColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1),
+        ]))
+        let light = await RichTextRenderer.cardPreview(
+            for: item, size: size, forLightAppearance: true, defaultFill: .white)
+        let dark = await RichTextRenderer.cardPreview(
+            for: item, size: size, forLightAppearance: false,
+            defaultFill: NSColor(srgbRed: 0.12, green: 0.12, blue: 0.12, alpha: 1))
+
+        guard let lightCorner = cornerColour(of: light.image),
+              let darkCorner = cornerColour(of: dark.image) else {
+            return XCTFail("expected both appearances to rasterise")
+        }
+        XCTAssertTrue(ClipboardItemCard.isLight(lightCorner))
+        XCTAssertFalse(ClipboardItemCard.isLight(darkCorner))
+    }
+
+    func test_default_fill_follows_the_appearance_it_is_asked_for() {
+        XCTAssertTrue(ClipboardItemCard.isLight(
+            RichTextRenderer.defaultFill(forLightAppearance: true)),
+            "the light appearance's text background is a light colour")
+        XCTAssertFalse(ClipboardItemCard.isLight(
+            RichTextRenderer.defaultFill(forLightAppearance: false)),
+            "the dark appearance's text background is a dark colour")
+    }
+
+    /// `.task(id:)` takes one Equatable value, so the card combines the item and the appearance
+    /// into this key. If it compared equal across a flip the task would never re-run.
+    func test_card_task_key_changes_with_the_appearance() {
+        let id = UUID()
+        XCTAssertEqual(CardTaskKey(itemID: id, isLightAppearance: true),
+                       CardTaskKey(itemID: id, isLightAppearance: true))
+        XCTAssertNotEqual(CardTaskKey(itemID: id, isLightAppearance: true),
+                          CardTaskKey(itemID: id, isLightAppearance: false))
+        XCTAssertNotEqual(CardTaskKey(itemID: id, isLightAppearance: true),
+                          CardTaskKey(itemID: UUID(), isLightAppearance: true))
+    }
+
+    /// Inside the 12pt padding, so it is fill and never a glyph.
+    private func cornerColour(of image: NSImage?) -> NSColor? {
+        guard let image, let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.colorAt(x: 2, y: 2)?.usingColorSpace(.sRGB)
+    }
+
+    // MARK: - Truncation
+
+    /// `cardCharLimit` bounds the TextKit work a card pays for, and deleting it would leave every
+    /// other test green — the limit is far more text than a card can show at a normal font size,
+    /// so it is invisible in a normal bitmap.
+    ///
+    /// Tiny type is what makes it observable: at 2pt roughly 26,000 characters fit in the content
+    /// rect, so a 30,000-character string would fill the bitmap to the bottom if it were drawn
+    /// whole, while the truncated 1,500 characters occupy only the first few lines. Assert both
+    /// halves: glyphs near the top, nothing but fill in the bottom half.
+    @MainActor
+    func test_card_preview_truncates_at_the_character_limit() async {
+        let size = CGSize(width: 232, height: 154)
+        let long = String(repeating: "truncation ", count: 3_000) // 33,000 characters
+        XCTAssertGreaterThan(long.count, RichTextRenderer.cardCharLimit * 20)
+        let s = NSAttributedString(string: long, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 2, weight: .regular),
+            .foregroundColor: NSColor.white,
+            .backgroundColor: NSColor.black,
+        ])
+
+        let preview = await RichTextRenderer.cardPreview(
+            for: rtfItem(s), size: size, forLightAppearance: true, defaultFill: .white)
+        guard let image = preview.image, let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else {
+            return XCTFail("expected a rasterised preview")
+        }
+        guard let fill = NSColor.black.usingColorSpace(.sRGB) else {
+            return XCTFail("could not convert the fill colour to sRGB")
+        }
+        func isGlyph(_ x: Int, _ y: Int) -> Bool {
+            guard let px = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return false }
+            return abs(px.redComponent - fill.redComponent) > 0.2
+                || abs(px.greenComponent - fill.greenComponent) > 0.2
+                || abs(px.blueComponent - fill.blueComponent) > 0.2
+        }
+
+        var glyphRowsInTopQuarter = 0
+        var glyphRowsInBottomHalf = 0
+        for y in 0..<rep.pixelsHigh {
+            var rowHasGlyph = false
+            for x in 0..<rep.pixelsWide where isGlyph(x, y) { rowHasGlyph = true; break }
+            guard rowHasGlyph else { continue }
+            if y < rep.pixelsHigh / 4 { glyphRowsInTopQuarter += 1 }
+            if y >= rep.pixelsHigh / 2 { glyphRowsInBottomHalf += 1 }
+        }
+
+        XCTAssertGreaterThan(glyphRowsInTopQuarter, 0,
+            "the truncated slice should still have drawn text at the top of the bitmap")
+        XCTAssertEqual(glyphRowsInBottomHalf, 0,
+            "text reached the bottom half of the bitmap, so more than \(RichTextRenderer.cardCharLimit) characters were laid out")
     }
 
     // MARK: - Popover previews
