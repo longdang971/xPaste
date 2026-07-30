@@ -29,6 +29,7 @@ struct ClipboardItemCard: View {
     @State private var linkImageChecked = false
     @State private var favicon: NSImage?
     @State private var pathImage: NSImage?
+    @State private var richPreview: RichCardPreview?
     @State private var computedAccentColor: Color?
     @State private var detectedFilePath: URL?
     @State private var detectedIsDirectory = false
@@ -48,6 +49,11 @@ struct ClipboardItemCard: View {
     }()
     private static let loadedImageCache: NSCache<NSUUID, NSImage> = {
         let c = NSCache<NSUUID, NSImage>(); c.countLimit = 120; return c
+    }()
+    /// Rich previews, positive and negative alike: an item that resolved to plain text is stored
+    /// as `RichCardPreview.plain` so it is never parsed twice.
+    private static let richPreviewCache: NSCache<NSUUID, RichCardPreview> = {
+        let c = NSCache<NSUUID, RichCardPreview>(); c.countLimit = 120; return c
     }()
     private static var fileIconCache: [String: NSImage] = [:]
 
@@ -128,6 +134,22 @@ struct ClipboardItemCard: View {
                     let image = NSImage(cgImage: cgImage, size: .zero)
                     pathImage = image
                     Self.pathImageCache.setObject(image, forKey: item.id as NSUUID)
+                }
+            }
+
+            // Built here, never in `body`: parsing RTF and laying it out is TextKit work, and a
+            // card that did it per body pass would re-measure on every panel re-layout.
+            if item.richData != nil,
+               item.type == .text || item.type == .url,
+               resolved.url == nil,
+               detectedColor == nil {
+                if let cached = Self.richPreviewCache.object(forKey: item.id as NSUUID) {
+                    if richPreview == nil { richPreview = cached }
+                } else {
+                    let built = await RichTextRenderer.cardPreview(
+                        for: item, size: RichTextRenderer.cardPreviewSize)
+                    Self.richPreviewCache.setObject(built, forKey: item.id as NSUUID)
+                    richPreview = built
                 }
             }
 
@@ -326,7 +348,7 @@ struct ClipboardItemCard: View {
     @ViewBuilder
     private var contentPreview: some View {
         ZStack(alignment: .topLeading) {
-            Color(NSColor.textBackgroundColor)
+            Color(nsColor: richFill ?? .textBackgroundColor)
             switch item.type {
             case .url:
                 if linkPreviewEnabled, let img = linkPreview?.image {
@@ -336,7 +358,7 @@ struct ClipboardItemCard: View {
                 } else if linkPreviewEnabled, linkPreview != nil, linkImageChecked {
                     noImagePlaceholder
                 } else {
-                    textPreview
+                    richOrTextPreview
                 }
             case .text:
                 if let pathURL = detectedFilePath {
@@ -354,7 +376,7 @@ struct ClipboardItemCard: View {
                 } else if let color = detectedColor {
                     colorPreview(color)
                 } else {
-                    textPreview
+                    richOrTextPreview
                 }
             case .image:
                 if let nsImage = loadedImage ?? Self.loadedImageCache.object(forKey: item.id as NSUUID) {
@@ -396,6 +418,29 @@ struct ClipboardItemCard: View {
                     .foregroundColor(.red)
                     .padding(6)
             }
+        }
+    }
+
+    /// The cached decision for this item. Reads the cache directly as well as `@State` so a card
+    /// scrolled back into view draws its preview on the first body pass, not one pass later.
+    private var resolvedRichPreview: RichCardPreview? {
+        richPreview ?? Self.richPreviewCache.object(forKey: item.id as NSUUID)
+    }
+
+    /// The fill this card's preview and footer share, or nil to keep the default colours.
+    private var richFill: NSColor? { resolvedRichPreview?.fill }
+
+    /// The formatted preview when there is one, the plain text otherwise.
+    @ViewBuilder
+    private var richOrTextPreview: some View {
+        if let image = resolvedRichPreview?.image {
+            // No `.resizable()`: the bitmap was laid out at exactly this size, and stretching it
+            // would distort the glyphs. Top-leading + clipped truncates the way the layout does.
+            Image(nsImage: image)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
+        } else {
+            textPreview
         }
     }
 
@@ -507,25 +552,27 @@ struct ClipboardItemCard: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .frame(height: 30)
+        .frame(height: PanelLayout.cardFooterHeight)
         .background(Color(NSColor.controlBackgroundColor))
     }
 
     private var defaultFooter: some View {
         Text(footerLabel)
             .font(.system(size: 11))
-            .foregroundColor(.secondary)
+            .foregroundColor(Self.footerTextColor(on: richFill))
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .frame(height: 30)
+            .frame(height: PanelLayout.cardFooterHeight)
             // Overlaid rather than placed in an HStack: this label is short and centred, so it
             // can never collide with the badge, and laying the badge out inline would re-centre
             // the label in the leftover width — nudging "N characters" left on every ⌘ press.
             .overlay(alignment: .trailing) {
                 shortcutBadge.padding(.trailing, 12)
             }
-            .background(Color(NSColor.controlBackgroundColor))
+            // Paste runs the fill through the footer too: a black card whose footer stayed grey
+            // reads as a bar bolted onto the bottom.
+            .background(Color(nsColor: richFill ?? .controlBackgroundColor))
     }
 
     private var footerLabel: String { cardText.footer }
@@ -684,9 +731,22 @@ struct ClipboardItemCard: View {
     }
 
     private func isLightColor(_ color: Color) -> Bool {
-        guard let ns = NSColor(color).usingColorSpace(.deviceRGB) else { return true }
-        let luminance = 0.2126 * ns.redComponent + 0.7152 * ns.greenComponent + 0.0722 * ns.blueComponent
+        Self.isLight(NSColor(color))
+    }
+
+    /// Whether `colour` is light enough that dark text reads better on it.
+    static func isLight(_ colour: NSColor) -> Bool {
+        guard let ns = colour.usingColorSpace(.deviceRGB) else { return true }
+        let luminance = 0.2126 * ns.redComponent
+                      + 0.7152 * ns.greenComponent
+                      + 0.0722 * ns.blueComponent
         return luminance > 0.5
+    }
+
+    /// Footer text colour that stays readable on a card whose footer took a rich fill.
+    static func footerTextColor(on fill: NSColor?) -> Color {
+        guard let fill else { return .secondary }
+        return isLight(fill) ? Color.black.opacity(0.55) : Color.white.opacity(0.7)
     }
 }
 

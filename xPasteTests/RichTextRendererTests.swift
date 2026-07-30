@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import xPaste
 
 final class RichTextRendererTests: XCTestCase {
@@ -284,5 +285,18 @@ final class RichTextRendererTests: XCTestCase {
         XCTAssertEqual(RichTextRenderer.cardPreviewSize.height,
                        PanelLayout.cardBaseHeight - PanelLayout.cardHeaderHeight
                            - PanelLayout.cardFooterHeight)
+    }
+
+    // MARK: - Footer contrast
+
+    func test_footer_text_flips_with_the_fill_brightness() {
+        XCTAssertTrue(ClipboardItemCard.isLight(.white))
+        XCTAssertFalse(ClipboardItemCard.isLight(.black))
+        XCTAssertEqual(ClipboardItemCard.footerTextColor(on: nil), Color.secondary,
+                       "no fill means the footer keeps the system secondary colour")
+        XCTAssertNotEqual(ClipboardItemCard.footerTextColor(on: .black), Color.secondary,
+                          "a dark fill needs light footer text, not the system secondary")
+        XCTAssertNotEqual(ClipboardItemCard.footerTextColor(on: .black),
+                          ClipboardItemCard.footerTextColor(on: .white))
     }
 }
