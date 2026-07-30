@@ -299,4 +299,43 @@ final class RichTextRendererTests: XCTestCase {
         XCTAssertNotEqual(ClipboardItemCard.footerTextColor(on: .black),
                           ClipboardItemCard.footerTextColor(on: .white))
     }
+
+    // MARK: - Popover previews
+
+    @MainActor
+    func test_full_preview_keeps_the_whole_string_and_the_fill() {
+        guard let full = RichTextRenderer.fullPreview(
+            for: terminalFixture(), defaultFill: .white) else {
+            return XCTFail("expected a full preview")
+        }
+        XCTAssertEqual(full.text.string, terminalFixture().text,
+                       "the popover shows everything, not the card's 1500-character slice")
+        assertSimilar(full.fill, .black)
+    }
+
+    @MainActor
+    func test_full_preview_is_nil_for_a_plain_item() {
+        XCTAssertNil(RichTextRenderer.fullPreview(
+            for: ClipboardItem(type: .text, text: "plain"), defaultFill: .white))
+    }
+
+    @MainActor
+    func test_full_preview_respects_the_legibility_guard() {
+        let s = NSAttributedString(string: "invisible on white",
+                                  attributes: [.foregroundColor: NSColor.white,
+                                               .font: NSFont.systemFont(ofSize: 13)])
+        XCTAssertNil(RichTextRenderer.fullPreview(for: rtfItem(s), defaultFill: .white))
+    }
+
+    @MainActor
+    func test_full_preview_survives_a_string_longer_than_the_card_limit() {
+        let long = String(repeating: "x", count: RichTextRenderer.cardCharLimit + 500)
+        let s = NSAttributedString(string: long, attributes: [
+            .foregroundColor: NSColor.white, .backgroundColor: NSColor.black,
+            .font: NSFont.systemFont(ofSize: 13)])
+        guard let full = RichTextRenderer.fullPreview(for: rtfItem(s), defaultFill: .white) else {
+            return XCTFail("expected a full preview")
+        }
+        XCTAssertEqual(full.text.length, RichTextRenderer.cardCharLimit + 500)
+    }
 }

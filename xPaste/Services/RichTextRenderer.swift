@@ -180,6 +180,21 @@ enum RichTextRenderer {
         return RichCardPreview(image: image, fill: fill)
     }
 
+    /// The popover's counterpart to `cardPreview`: the whole string, untruncated, because a
+    /// popover exists one at a time and is where the user goes to read the thing.
+    ///
+    /// Synchronous and main-actor: the parse happens once from the popover's `.task`, never from
+    /// its `body`.
+    @MainActor
+    static func fullPreview(for item: ClipboardItem,
+                            defaultFill: NSColor = .textBackgroundColor) -> RichFullPreview? {
+        guard let parsed = parse(item) else { return nil }
+        let fill = resolveFill(runBackground: dominantBackground(of: parsed.text),
+                               documentBackground: parsed.documentBackground)
+        guard fill != nil || isLegible(parsed.text, on: defaultFill) else { return nil }
+        return RichFullPreview(text: parsed.text, fill: fill)
+    }
+
     /// Lays the text out **once** into a bitmap.
     ///
     /// `lockFocusFlipped(true)` gives retina backing from the display and flipped coordinates, so
@@ -219,4 +234,15 @@ final class RichCardPreview {
     }
 
     static let plain = RichCardPreview(image: nil, fill: nil)
+}
+
+/// The full styled string for the preview popover.
+final class RichFullPreview {
+    let text: NSAttributedString
+    let fill: NSColor?
+
+    init(text: NSAttributedString, fill: NSColor?) {
+        self.text = text
+        self.fill = fill
+    }
 }

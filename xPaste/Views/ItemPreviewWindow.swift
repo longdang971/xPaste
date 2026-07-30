@@ -7,6 +7,7 @@ struct PreviewPopoverContent: View {
     var onClose: () -> Void
 
     @State private var loadedImage: NSImage?
+    @State private var richPreview: RichFullPreview?
 
     private var title: String {
         switch item.type {
@@ -36,7 +37,14 @@ struct PreviewPopoverContent: View {
             footer
         }
         .frame(width: previewWidth, height: previewHeight)
-        .task(id: item.id) { await loadImageIfNeeded() }
+        .task(id: item.id) {
+            await loadImageIfNeeded()
+            // Parsed here, not in `body`: a large RTF re-parsed per body pass would stutter the
+            // popover for nothing.
+            if item.type == .text || item.type == .url {
+                richPreview = RichTextRenderer.fullPreview(for: item)
+            }
+        }
         .background {
             Button("") { onClose() }
                 .keyboardShortcut(.space, modifiers: [])
@@ -91,7 +99,16 @@ struct PreviewPopoverContent: View {
         }
     }
 
+    @ViewBuilder
     private var textContent: some View {
+        if let rich = richPreview {
+            RichTextPreview(text: rich.text, fill: rich.fill)
+        } else {
+            plainTextContent
+        }
+    }
+
+    private var plainTextContent: some View {
         ScrollView {
             Text(item.displayText)
                 .font(.system(size: 13))
@@ -199,4 +216,42 @@ private struct WebPreview: NSViewRepresentable {
         return web
     }
     func updateNSView(_ nsView: WKWebView, context: Context) {}
+}
+
+/// A read-only `NSTextView` showing an item's formatted text.
+///
+/// TextKit directly rather than the card's cached bitmap: here the text has to be selectable and
+/// scrollable, and only one popover exists at a time, so fidelity beats the bitmap's speed.
+private struct RichTextPreview: NSViewRepresentable {
+    let text: NSAttributedString
+    let fill: NSColor?
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = true
+        scroll.hasVerticalScroller = true
+        if let view = scroll.documentView as? NSTextView {
+            view.isEditable = false
+            view.isSelectable = true
+            view.drawsBackground = true
+            view.textContainerInset = NSSize(width: 14, height: 14)
+            view.textStorage?.setAttributedString(text)
+        }
+        apply(to: scroll)
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        if let view = scroll.documentView as? NSTextView,
+           view.textStorage?.isEqual(to: text) == false {
+            view.textStorage?.setAttributedString(text)
+        }
+        apply(to: scroll)
+    }
+
+    private func apply(to scroll: NSScrollView) {
+        let colour = fill ?? .textBackgroundColor
+        scroll.backgroundColor = colour
+        (scroll.documentView as? NSTextView)?.backgroundColor = colour
+    }
 }
