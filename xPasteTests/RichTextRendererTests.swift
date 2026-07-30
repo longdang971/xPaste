@@ -318,6 +318,18 @@ final class RichTextRendererTests: XCTestCase {
                            - PanelLayout.cardFooterHeight)
     }
 
+    // MARK: - Colour swatch cards
+
+    func test_glyphs_on_a_colour_swatch_tint_with_its_brightness() {
+        // A swatch card carries no footer strip, so the hex label and the command-number badge are
+        // both drawn straight onto the colour. One rule for both, or they disagree about whether
+        // the colour behind them is light and one of the two sinks into it.
+        XCTAssertEqual(ClipboardItemCard.onSwatchTint(.systemYellow), Color.black.opacity(0.65),
+                       "a light swatch needs dark glyphs")
+        XCTAssertEqual(ClipboardItemCard.onSwatchTint(.black), Color.white.opacity(0.85),
+                       "a dark swatch needs light ones")
+    }
+
     // MARK: - Footer contrast
 
     func test_footer_text_flips_with_the_fill_brightness() {

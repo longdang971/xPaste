@@ -506,13 +506,28 @@ struct ClipboardItemCard: View {
     }
 
     private func colorPreview(_ color: Color) -> some View {
-        ZStack {
+        let tint = Self.onSwatchTint(NSColor(color))
+        return ZStack {
             color
             Text(item.text ?? "")
                 .font(.system(size: 14, weight: .medium, design: .monospaced))
-                .foregroundColor(isLightColor(color) ? Color.black.opacity(0.65) : Color.white.opacity(0.85))
+                .foregroundColor(tint)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The badge lives here rather than in a footer, because a swatch card has no footer for it
+        // to live in. Same seat it occupies on every other card: bottom-right, 12pt in.
+        .overlay(alignment: .bottomTrailing) {
+            ShortcutBadge(index: index, tint: tint)
+                .padding(.trailing, 12)
+                .padding(.bottom, 9)
+        }
+    }
+
+    /// The tint for glyphs drawn straight onto a colour swatch — the hex label and the ⌘-number
+    /// badge alike, so the two cannot disagree about whether the colour behind them is light and
+    /// leave one of them sunk into it.
+    static func onSwatchTint(_ swatch: NSColor) -> Color {
+        isLight(swatch) ? Color.black.opacity(0.65) : Color.white.opacity(0.85)
     }
 
     private func placeholder(_ name: String, color: Color) -> some View {
@@ -547,7 +562,13 @@ struct ClipboardItemCard: View {
     @ViewBuilder
     private var footer: some View {
         let hasLinkPreview = item.type == .url && linkPreviewEnabled && linkPreview != nil
-        if hasLinkPreview {
+        if detectedColor != nil {
+            // No strip at all: a swatch runs to the bottom edge, and window chrome beneath it
+            // reads as the colour stopping short of the card it is supposed to be. "7 characters"
+            // says nothing about a colour anyway. `contentPreview` claims the height instead, so
+            // the card's total is unchanged and the hex label centres on the whole block.
+            EmptyView()
+        } else if hasLinkPreview {
             urlPreviewFooter
         } else if item.type == .file || item.type == .folder || detectedFilePath != nil {
             fileFooter
@@ -905,6 +926,9 @@ private struct HoverActionButton: View {
 /// a full-panel re-layout on every press (~40ms measured, Release and Debug alike).
 private struct ShortcutBadge: View {
     let index: Int
+    /// Overridden where the badge sits on a card's own colour rather than on window chrome — a
+    /// swatch card, where `.secondary` would go muddy against a saturated fill.
+    var tint: Color = .secondary
     @ObservedObject private var watcher = ModifierWatcher.shared
 
     var body: some View {
@@ -917,7 +941,7 @@ private struct ShortcutBadge: View {
                 Text("\(index)")
                     .font(.system(size: 11))
             }
-            .foregroundColor(.secondary)
+            .foregroundColor(tint)
             .fixedSize()
             .padding(.leading, 6)
         }
