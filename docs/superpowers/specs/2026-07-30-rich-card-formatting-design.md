@@ -66,26 +66,43 @@ final class RichCardPreview {
     let fill: NSColor?
 }
 
+/// A parsed `richData`. A class, not a tuple, so it can cross the detached-parse boundary
+/// without a Sendable warning — `NSAttributedString` is not Sendable.
+final class ParsedRich: @unchecked Sendable {
+    let text: NSAttributedString
+    let documentBackground: NSColor?
+}
+
 enum RichTextRenderer {
-    /// Parses `richData` per `richType`. Returns the string and the document background, if any.
-    /// nil when the item has no `richData`, its type is unrecognised, or it is over the size cap —
-    /// so only `.text` and `.url` items can ever produce a result.
-    static func parse(_ item: ClipboardItem) -> (text: NSAttributedString, documentBackground: NSColor?)?
+    /// Parses `richData` per `richType`. nil when the item has no `richData`, its type is
+    /// unrecognised, or it is over the size cap — so only `.text` and `.url` items can ever
+    /// produce a result.
+    static func parse(_ item: ClipboardItem) -> ParsedRich?
 
     /// The run background covering the most characters. nil when "no background" covers the most.
     static func dominantBackground(of text: NSAttributedString) -> NSColor?
+
+    /// The composition point for the two background sources, so the precedence between them is
+    /// testable without depending on what an RTF/HTML round-trip happens to preserve.
+    static func resolveFill(runBackground: NSColor?, documentBackground: NSColor?) -> NSColor?
 
     /// False when the text would be near-invisible on `fill` — see "The blank-card guard".
     static func isLegible(_ text: NSAttributedString, on fill: NSColor) -> Bool
 
     /// Always returns a decision, never nil: a rasterised preview, or `image == nil` meaning
     /// "draw plain text". The caller caches the result either way.
-    static func cardPreview(for item: ClipboardItem, size: CGSize) -> RichCardPreview
+    static func cardPreview(for item: ClipboardItem, size: CGSize,
+                            defaultFill: NSColor) async -> RichCardPreview
 
     /// The full string plus its fill, for the popover. nil to fall back to plain text.
-    static func fullPreview(for item: ClipboardItem) -> (text: NSAttributedString, fill: NSColor?)?
+    static func fullPreview(for item: ClipboardItem, defaultFill: NSColor) -> RichFullPreview?
 }
 ```
+
+`defaultFill` defaults to `NSColor.textBackgroundColor` and the app never passes anything else.
+It exists because that colour resolves against the current appearance, which would otherwise make
+the legibility guard — and every test that exercises it — depend on whether the machine is in
+light or dark mode. Tests pass a fixed colour.
 
 ### Size caps
 
@@ -131,9 +148,10 @@ hits this; it exists only to stop a blank card.
 - `.task(id: item.id)` populates it; `body` only reads it. RTF parsing runs in a
   `Task.detached`; HTML parsing and the rasterisation run on the main actor, because both use
   TextKit/WebKit.
-- The bitmap is an `NSBitmapImageRep` sized `2×` the content rect in pixels with its `size` set
-  in points, so it is drawn once at retina resolution rather than re-drawn per display pass. A
-  drawing-handler `NSImage` would re-run TextKit on every draw and defeat the whole point.
+- The bitmap is produced with `lockFocusFlipped(true)` on a plain `NSImage`, which gives retina
+  backing from the display and flipped coordinates so text flows downward from the top of the
+  rect. A drawing-handler `NSImage` would instead re-run TextKit on every draw and defeat the
+  whole point.
 - The string is truncated to 1500 characters before layout, and drawn with
   `.usesLineFragmentOrigin` + `.truncatesLastVisibleLine` inside the content rect, inset 12pt to
   match the current `textPreview` padding.
@@ -178,7 +196,9 @@ observed items were — attributed string → `rtf(from:documentAttributes:)` �
 | Terminal fixture | `dominantBackground` is black |
 | TextEdit fixture (49 black / 21 yellow / 14 none) | `dominantBackground` is black — majority, not unanimity |
 | Mixed fixture (55 none / 24 yellow) | `dominantBackground` is nil |
-| Document background only, no run backgrounds | fill falls through to the document colour |
+| `resolveFill` with a nil run background | falls through to the document colour |
+| `resolveFill` with both present | the run background wins |
+| HTML fixture with a run background | parses, and that background is found |
 | Item with no `richData` | `parse` returns nil |
 | RTF over 4 MB, HTML over 256 KB | `cardPreview` returns nil |
 | White foreground, no background anywhere | `isLegible` false, `cardPreview` nil |
