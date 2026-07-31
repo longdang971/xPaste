@@ -144,6 +144,93 @@ final class RichTextRendererTests: XCTestCase {
         assertSimilar(RichTextRenderer.dominantBackground(of: parsed.text), .black)
     }
 
+    // MARK: - The HTML importer's default font
+    //
+    // A fragment copied out of a browser carries the page's markup but not the page's stylesheet,
+    // so most of the time nothing in it names a font at all. Left alone, the WebKit importer then
+    // falls back to its own default — Times-Roman 12 — and a card drawn from a sans-serif web page
+    // comes out in a serif the user never saw.
+
+    /// Every font on `text`, in run order.
+    private func fontNames(of text: NSAttributedString) -> [String] {
+        var names: [String] = []
+        text.enumerateAttribute(.font, in: NSRange(location: 0, length: text.length),
+                                options: []) { value, _, _ in
+            names.append((value as? NSFont)?.fontName ?? "<none>")
+        }
+        return names
+    }
+
+    private func htmlItem(_ html: String, text: String = "x") -> ClipboardItem {
+        ClipboardItem(type: .text, text: text,
+                      richData: Data(html.utf8),
+                      richType: NSPasteboard.PasteboardType.html.rawValue)
+    }
+
+    func test_html_naming_no_font_does_not_fall_back_to_times() {
+        let parsed = RichTextRenderer.parse(htmlItem("<meta charset='utf-8'>Xuất trong em"))
+        guard let parsed else { return XCTFail("HTML did not parse") }
+        for name in fontNames(of: parsed.text) {
+            XCTAssertFalse(name.hasPrefix("Times"),
+                           "unstyled HTML fell back to the importer's serif default: \(name)")
+        }
+    }
+
+    func test_html_bold_run_without_a_font_stays_in_the_default_family() {
+        let parsed = RichTextRenderer.parse(htmlItem("<meta charset='utf-8'>abc <b>đậm</b> def"))
+        guard let parsed else { return XCTFail("HTML did not parse") }
+        let names = fontNames(of: parsed.text)
+        XCTAssertEqual(names.count, 3, "expected plain/bold/plain runs, got \(names)")
+        XCTAssertFalse(names.contains { $0.hasPrefix("Times") }, "\(names)")
+    }
+
+    /// The substitution is a *default*, so anything the fragment does name must still win.
+    func test_html_that_names_a_font_keeps_it() {
+        let html = "<meta charset='utf-8'><span style=\"font-family:Georgia,serif;font-size:20px\">Xuất</span>"
+        guard let parsed = RichTextRenderer.parse(htmlItem(html)) else {
+            return XCTFail("HTML did not parse")
+        }
+        let font = parsed.text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(font?.fontName, "Georgia")
+        XCTAssertEqual(font?.pointSize, 20)
+    }
+
+    func test_html_monospaced_code_keeps_its_monospaced_font() {
+        guard let parsed = RichTextRenderer.parse(
+            htmlItem("<meta charset='utf-8'><pre><code>let x = 1</code></pre>")) else {
+            return XCTFail("HTML did not parse")
+        }
+        let font = parsed.text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(font?.fontName, "Courier")
+    }
+
+    /// The prelude must not disturb anything else the importer reads off the fragment.
+    func test_the_default_font_does_not_disturb_run_backgrounds() {
+        let html = "<meta charset='utf-8'><span style=\"background-color:#000000;color:#ffffff\">dark run</span>"
+        guard let parsed = RichTextRenderer.parse(htmlItem(html, text: "dark run")) else {
+            return XCTFail("HTML did not parse")
+        }
+        XCTAssertEqual(parsed.text.string, "dark run")
+        assertSimilar(RichTextRenderer.dominantBackground(of: parsed.text), .black)
+    }
+
+    /// The cap is there to bound the WebKit importer's work, so it has to be measured against
+    /// what the source actually sent, not against the prelude we bolt on.
+    func test_the_prelude_does_not_count_towards_the_html_cap() {
+        let body = String(repeating: "a", count: RichTextRenderer.htmlByteCap)
+        let item = htmlItem(body, text: body)
+        XCTAssertNotNil(RichTextRenderer.parse(item))
+        XCTAssertNil(RichTextRenderer.parse(htmlItem(body + "a", text: body)))
+    }
+
+    /// RTF always ships a font table, so it must be handed to the parser untouched.
+    func test_rtf_fonts_are_left_alone() {
+        let parsed = RichTextRenderer.parse(terminalFixture())
+        guard let parsed else { return XCTFail("RTF did not parse") }
+        let font = parsed.text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertTrue(font?.isFixedPitch == true, "monospaced RTF lost its font: \(font as Any)")
+    }
+
     // MARK: - The fill rule
 
     func test_all_black_runs_give_a_black_fill() {
