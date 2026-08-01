@@ -219,9 +219,9 @@ private struct GeneralTab: View {
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
-    private let keepLabels = ["Day", "Week", "Month", "Year", "Forever"]
+    private let keepLabels = HistoryRetention.labels
     private var keepDescription: String {
-        keepHistoryIndex == 4
+        keepHistoryIndex == HistoryRetention.lastIndex
             ? "Items are kept forever until you remove them."
             : "Unpinned items older than 1 \(keepLabels[keepHistoryIndex].lowercased()) are removed automatically. Pinned items are always kept."
     }
@@ -279,7 +279,7 @@ private struct GeneralTab: View {
                                 get: { Double(keepHistoryIndex) },
                                 set: { keepHistoryIndex = Int($0.rounded()) }
                             ),
-                            in: 0...4, step: 1
+                            in: 0...Double(HistoryRetention.lastIndex), step: 1
                         )
                         HStack(spacing: 0) {
                             ForEach(Array(keepLabels.enumerated()), id: \.offset) { idx, label in
@@ -759,67 +759,5 @@ private struct IgnoredAppsList: View {
         UserDefaults.standard.set(ids, forKey: key)
         selection = nil
         reload()
-    }
-}
-
-private struct HotkeyRecorderButton: View {
-    @AppStorage("hotkeyDisplay") private var display: String = "⌘⇧V"
-    @State private var recording = false
-    @State private var monitor: Any?
-
-    var body: some View {
-        Button {
-            recording ? stop() : start()
-        } label: {
-            Text(recording ? "Type shortcut…" : display)
-                .font(.system(size: 12, weight: .medium))
-                .frame(minWidth: 96)
-        }
-        .buttonStyle(.bordered)
-        .tint(recording ? Color.accentColor : nil)
-        .onDisappear(perform: stop)
-    }
-
-    private func start() {
-        recording = true
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handle(event)
-            return nil
-        }
-    }
-
-    private func stop() {
-        recording = false
-        if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
-    }
-
-    private func handle(_ event: NSEvent) {
-        if event.keyCode == 53 { stop(); return }
-
-        var carbon = 0
-        let flags = event.modifierFlags
-        if flags.contains(.command) { carbon |= cmdKey }
-        if flags.contains(.option)  { carbon |= optionKey }
-        if flags.contains(.control) { carbon |= controlKey }
-        if flags.contains(.shift)   { carbon |= shiftKey }
-
-        guard carbon != 0,
-              let chars = event.charactersIgnoringModifiers, !chars.isEmpty
-        else { return }
-
-        UserDefaults.standard.set(Int(event.keyCode), forKey: "hotkeyKeyCode")
-        UserDefaults.standard.set(carbon, forKey: "hotkeyModifiers")
-        display = symbols(flags) + chars.uppercased()
-        stop()
-        NotificationCenter.default.post(name: .hotkeyChanged, object: nil)
-    }
-
-    private func symbols(_ flags: NSEvent.ModifierFlags) -> String {
-        var s = ""
-        if flags.contains(.control) { s += "⌃" }
-        if flags.contains(.option)  { s += "⌥" }
-        if flags.contains(.shift)   { s += "⇧" }
-        if flags.contains(.command) { s += "⌘" }
-        return s
     }
 }

@@ -4,7 +4,7 @@ A fast, native clipboard manager for macOS. xPaste lives in your menu bar,
 keeps a searchable history of everything you copy, and pastes it back into any
 app with a single shortcut.
 
-Built with SwiftUI + AppKit. Version 1.1.2 · Powered by LQ Team.
+Built with SwiftUI + AppKit. Version 1.1.4 · Powered by LQ Team.
 
 ## Features
 

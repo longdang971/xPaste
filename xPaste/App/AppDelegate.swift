@@ -99,8 +99,9 @@ private extension Comparable {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem?
+    private var onboardingWindow: NSWindow?
     private var panel: ClipboardPanel?
     private var panelVisible = false
     private var hotKeyRef: EventHotKeyRef?
@@ -178,7 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         DispatchQueue.main.async { [weak self] in
-            self?.promptAccessibilityOnFirstLaunchIfNeeded()
+            self?.startFirstLaunchFlow()
         }
 
         ClipboardStore.shared.onPendingChange = { [weak self] in self?.schedulePrewarm() }
@@ -271,6 +272,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cycle()
     }
 
+    /// First launch shows Quick Start; the Accessibility prompt waits until it's dismissed so
+    /// the user never faces two setup dialogs stacked on top of each other.
+    private func startFirstLaunchFlow() {
+        let defaults = UserDefaults.standard
+        // Installs that already went through the older first-launch prompt are past setup —
+        // don't greet them with Quick Start after an update.
+        if defaults.bool(forKey: "didPromptAccessibility") {
+            defaults.set(true, forKey: "didCompleteOnboarding")
+        }
+        guard !defaults.bool(forKey: "didCompleteOnboarding") else {
+            promptAccessibilityOnFirstLaunchIfNeeded()
+            return
+        }
+        showOnboardingWindow()
+    }
+
+    private func showOnboardingWindow() {
+        if onboardingWindow == nil {
+            let controller = NSHostingController(
+                rootView: OnboardingView(onContinue: { [weak self] in
+                    self?.onboardingWindow?.close()
+                })
+            )
+            let window = NSWindow(contentViewController: controller)
+            window.isReleasedWhenClosed = false
+            window.title = "Quick Start"
+            window.styleMask = [.titled, .closable, .fullSizeContentView]
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.setContentSize(OnboardingView.windowSize)
+            window.center()
+            window.delegate = self
+            onboardingWindow = window
+        }
+        onboardingWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let closing = notification.object as? NSWindow, closing === onboardingWindow else { return }
+        onboardingWindow = nil
+        UserDefaults.standard.set(true, forKey: "didCompleteOnboarding")
+        // Closing with the red button counts as finishing setup, so the Accessibility prompt
+        // follows either way — after the window is actually gone.
+        DispatchQueue.main.async { [weak self] in
+            self?.promptAccessibilityOnFirstLaunchIfNeeded()
+        }
+    }
+
     private func promptAccessibilityOnFirstLaunchIfNeeded() {
         let defaults = UserDefaults.standard
         let key = "didPromptAccessibility"
@@ -316,6 +367,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // won't launch a second instance) routes here instead. Show the panel so double-clicking the
     // app icon in /Applications behaves like the hotkey.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if onboardingWindow?.isVisible == true {
+            onboardingWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return true
+        }
         if settingsWindow?.isVisible == true { return true }
         if !panelVisible { showPanel() }
         return true
@@ -478,11 +534,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The panel stays out of the way until first-launch setup is finished — otherwise the
+    /// hotkey the user is in the middle of recording would slide it over Quick Start.
+    private var onboardingIsPresented: Bool { onboardingWindow?.isVisible == true }
+
     @objc func togglePanel(_ sender: AnyObject? = nil) {
         if panelVisible { hidePanel() } else { showPanel() }
     }
 
     private func showPanel() {
+        guard !onboardingIsPresented else {
+            // Bring the setup window back to the front instead, so the ignored hotkey still
+            // points at what the user has to deal with first.
+            onboardingWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         PerfLog.begin("open")
         // Republish anything that piled up while hidden, before the first layout reads it.
         ClipboardStore.shared.publishingSuppressed = false
@@ -756,8 +823,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerHotKeyFromDefaults() {
         if let ref = hotKeyRef { UnregisterEventHotKey(ref); hotKeyRef = nil }
-        let keyCode = UserDefaults.standard.object(forKey: "hotkeyKeyCode") as? Int ?? kVK_ANSI_V
-        let modifiers = UserDefaults.standard.object(forKey: "hotkeyModifiers") as? Int ?? (cmdKey | shiftKey)
+        let keyCode = UserDefaults.standard.object(forKey: HotkeyDefaults.keyCodeKey) as? Int
+            ?? HotkeyDefaults.keyCode
+        let modifiers = UserDefaults.standard.object(forKey: HotkeyDefaults.modifiersKey) as? Int
+            ?? HotkeyDefaults.modifiers
         let hotKeyID = EventHotKeyID(signature: 0x434C4D47, id: 1)
         RegisterEventHotKey(
             UInt32(keyCode),

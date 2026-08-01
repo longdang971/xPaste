@@ -91,7 +91,7 @@ struct ClipboardItem: Identifiable, Codable {
         if let types = pasteboard.types,
            types.contains(where: { $0 == .tiff || $0 == .png }),
            let image = NSImage(pasteboard: pasteboard),
-           let compressed = image.compressedJPEGData(maxBytes: 1_000_000) {
+           let compressed = image.compressedData(maxBytes: 1_000_000) {
             return ClipboardItem(type: .image, imageData: compressed)
         }
 

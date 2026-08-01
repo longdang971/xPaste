@@ -99,8 +99,18 @@ struct ClipboardItemCard: View {
         let accent = appAccentColor
         VStack(spacing: 0) {
             cardHeader(accent)
-            contentPreview
-            footer
+            if contentFlowsUnderFooter {
+                // The text owns the whole block and the footer floats over it. Stacking rather
+                // than splitting is what lets a long item keep flowing past the character count.
+                ZStack(alignment: .bottom) {
+                    contentPreview
+                    bottomFade
+                    footer
+                }
+            } else {
+                contentPreview
+                footer
+            }
         }
         .frame(width: PanelLayout.cardBaseWidth, height: PanelLayout.cardBaseHeight)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -403,9 +413,7 @@ struct ClipboardItemCard: View {
                 }
             case .image:
                 if let nsImage = loadedImage ?? Self.loadedImageCache.object(forKey: item.id as NSUUID) {
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    imagePreview(nsImage)
                 } else {
                     placeholder("photo", color: .purple)
                 }
@@ -482,6 +490,36 @@ struct ClipboardItemCard: View {
     /// text must not keep a black fill, or its `labelColor` text would sit on black.
     private var richFill: NSColor? { drawsRichPreview ? resolvedRichPreview?.fill : nil }
 
+    /// Whether this card's content runs on beneath the footer instead of stopping above it.
+    ///
+    /// Only text does. An image, a file icon or a colour swatch sliding under its own caption
+    /// reads as a layout mistake; text running on reads as "there is more of this", which is what
+    /// it means, and is how Paste draws the same card.
+    ///
+    /// The URL clause matches `drawsRichPreview`'s: once link metadata arrives the footer grows to
+    /// 52pt and shows a title, and nothing should be flowing under that.
+    private var contentFlowsUnderFooter: Bool {
+        guard item.type == .text || item.type == .url else { return false }
+        guard detectedColor == nil, detectedFilePath == nil else { return false }
+        if item.type == .url, linkPreviewEnabled, linkPreview != nil { return false }
+        return true
+    }
+
+    /// The card's own colour, faded in from nothing over the bottom of the block, so the text
+    /// dissolves into the footer rather than being chopped off by it.
+    ///
+    /// Taller than the footer strip on purpose: the fade has to start well above the character
+    /// count, or the last full-strength line sits right against it and the card looks cropped.
+    private var bottomFade: some View {
+        LinearGradient(
+            colors: [Color(nsColor: richFill ?? .textBackgroundColor).opacity(0),
+                     Color(nsColor: richFill ?? .textBackgroundColor)],
+            startPoint: .top, endPoint: .bottom
+        )
+        .frame(height: PanelLayout.cardFooterHeight + 40)
+        .allowsHitTesting(false)
+    }
+
     /// The formatted preview when there is one, the plain text otherwise.
     @ViewBuilder
     private var richOrTextPreview: some View {
@@ -500,7 +538,9 @@ struct ClipboardItemCard: View {
         Text(cardText.preview)
             .font(.system(size: 13))
             .foregroundColor(Color(NSColor.labelColor))
-            .lineLimit(7)
+            // Ten fills the block now that it reaches the bottom of the card; the last couple of
+            // lines land under the fade, which is the point — the text trails off rather than stops.
+            .lineLimit(10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(12)
     }
@@ -529,6 +569,95 @@ struct ClipboardItemCard: View {
     static func onSwatchTint(_ swatch: NSColor) -> Color {
         isLight(swatch) ? Color.black.opacity(0.65) : Color.white.opacity(0.85)
     }
+
+    /// An image card: the picture fitted whole onto an alpha chequerboard, running all the way to
+    /// the bottom edge with its pixel dimensions floating over it.
+    ///
+    /// Fitted, never filled — stretching a square icon across a wider card is the difference the
+    /// eye catches first. The chequerboard is what says "these pixels are transparent"; without it
+    /// a cut-out logo and a logo on a white plate are the same card.
+    private func imagePreview(_ nsImage: NSImage) -> some View {
+        ZStack {
+            Image(nsImage: Self.checkerboard(light: isLightAppearance))
+                .resizable(resizingMode: .tile)
+            Image(nsImage: nsImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The bottom row occupies exactly the strip a footer would: same height, same 12pt inset.
+        // That is what keeps the ⌘-number badge from jumping when the selection moves between an
+        // image card and a text one — on both, it ends up on the same line, the same distance in.
+        .overlay(alignment: .bottom) {
+            ZStack {
+                if let px = Self.pixelSize(of: nsImage) {
+                    floatingPill {
+                        // `verbatim`: interpolating an Int into `Text` formats it for the locale,
+                        // and a Vietnamese one turns 3200 into "3.200". Pixel counts are not that
+                        // kind of number — nobody groups the digits of an image's width.
+                        Text(verbatim: "\(px.width) × \(px.height)")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.primary)
+                    }
+                }
+                // Laid out separately from the dimensions rather than beside them, so those stay
+                // centred on the card whether or not ⌘ is down instead of sliding left when it is.
+                // The badge decides its own visibility — it is what observes the modifier keys.
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    ShortcutBadge(index: index, tint: .primary, floating: true)
+                        // The capsule's own inset comes off the margin: it is the digits that have
+                        // to line up with the other cards, not the pill drawn around them.
+                        .padding(.trailing, 12 - Self.pillHorizontalInset)
+                }
+            }
+            .frame(height: PanelLayout.cardFooterHeight)
+        }
+    }
+
+    /// A label that sits on top of a card's own content rather than on a strip of chrome.
+    private func floatingPill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .padding(.horizontal, Self.pillHorizontalInset)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(.ultraThinMaterial))
+    }
+
+    /// How far a floating pill's capsule reaches past the text inside it. Shared with the badge,
+    /// which subtracts it from its own margin so the digits line up with the other cards.
+    fileprivate static let pillHorizontalInset: CGFloat = 9
+
+    /// Pixel dimensions, read off the bitmap: `NSImage.size` is in points and reports half the
+    /// numbers for anything captured on a 2x display.
+    private static func pixelSize(of image: NSImage) -> (width: Int, height: Int)? {
+        guard let width = image.representations.map(\.pixelsWide).max(),
+              let height = image.representations.map(\.pixelsHigh).max(),
+              width > 0, height > 0
+        else { return nil }
+        return (width, height)
+    }
+
+    /// The tiled alpha chequerboard, baked once per appearance.
+    ///
+    /// Baked rather than drawn in SwiftUI: it never changes, and a `Canvas` per image card would
+    /// repaint it on every panel layout — see the note on this file's other caches.
+    static func checkerboard(light: Bool) -> NSImage {
+        if let cached = checkerboardCache[light] { return cached }
+        let square: CGFloat = 8
+        let side = square * 2
+        let image = NSImage(size: NSSize(width: side, height: side))
+        image.lockFocus()
+        (light ? NSColor(white: 1.00, alpha: 1) : NSColor(white: 0.17, alpha: 1)).setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: side, height: side)).fill()
+        (light ? NSColor(white: 0.90, alpha: 1) : NSColor(white: 0.24, alpha: 1)).setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: square, height: square)).fill()
+        NSBezierPath(rect: NSRect(x: square, y: square, width: square, height: square)).fill()
+        image.unlockFocus()
+        checkerboardCache[light] = image
+        return image
+    }
+
+    private static var checkerboardCache: [Bool: NSImage] = [:]
 
     private func placeholder(_ name: String, color: Color) -> some View {
         Image(systemName: name)
@@ -567,6 +696,11 @@ struct ClipboardItemCard: View {
             // reads as the colour stopping short of the card it is supposed to be. "7 characters"
             // says nothing about a colour anyway. `contentPreview` claims the height instead, so
             // the card's total is unchanged and the hex label centres on the whole block.
+            EmptyView()
+        } else if item.type == .image {
+            // Same reasoning: the picture runs to the bottom edge and carries its dimensions in a
+            // floating pill. A strip here would crop the picture to say "28 KB", which is the one
+            // thing about an image nobody is looking for.
             EmptyView()
         } else if hasLinkPreview {
             urlPreviewFooter
@@ -616,7 +750,7 @@ struct ClipboardItemCard: View {
         let path = item.fileURLs?.first?.path ?? item.text ?? ""
         return HStack(spacing: 0) {
             Text(path)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -631,7 +765,7 @@ struct ClipboardItemCard: View {
 
     private var defaultFooter: some View {
         Text(footerLabel)
-            .font(.system(size: 11))
+            .font(.system(size: 12))
             .foregroundColor(Self.footerTextColor(on: richFill))
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 12)
@@ -643,9 +777,13 @@ struct ClipboardItemCard: View {
             .overlay(alignment: .trailing) {
                 shortcutBadge.padding(.trailing, 12)
             }
-            // Paste runs the fill through the footer too: a black card whose footer stayed grey
-            // reads as a bar bolted onto the bottom.
-            .background(Color(nsColor: richFill ?? .controlBackgroundColor))
+            // Nothing of its own behind a card whose text flows under it — the gradient below the
+            // label is the background, and an opaque strip here would chop the text off again.
+            // Elsewhere (an image card) the strip is real: Paste runs the fill through it too,
+            // because a black card whose footer stayed grey reads as a bar bolted onto the bottom.
+            .background(contentFlowsUnderFooter
+                        ? Color.clear
+                        : Color(nsColor: richFill ?? .controlBackgroundColor))
     }
 
     private var footerLabel: String { cardText.footer }
@@ -929,21 +1067,32 @@ private struct ShortcutBadge: View {
     /// Overridden where the badge sits on a card's own colour rather than on window chrome — a
     /// swatch card, where `.secondary` would go muddy against a saturated fill.
     var tint: Color = .secondary
+    /// Wraps the badge in a translucent capsule, for the cards that have no footer strip to put
+    /// it on and float it over the picture instead.
+    var floating = false
     @ObservedObject private var watcher = ModifierWatcher.shared
 
     var body: some View {
         if watcher.flags.contains(.command), index <= 9 {
-            HStack(spacing: 4) {
+            let label = HStack(spacing: 4) {
                 if watcher.flags.contains(.shift) {
                     Image(systemName: "text.alignleft")
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                 }
                 Text("\(index)")
                     .font(.system(size: 11))
             }
             .foregroundColor(tint)
             .fixedSize()
-            .padding(.leading, 6)
+
+            if floating {
+                label
+                    .padding(.horizontal, ClipboardItemCard.pillHorizontalInset)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(.ultraThinMaterial))
+            } else {
+                label.padding(.leading, 6)
+            }
         }
     }
 }

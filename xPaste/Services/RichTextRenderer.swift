@@ -18,10 +18,15 @@ final class ParsedRich: @unchecked Sendable {
 
 /// Turns a clipboard item's captured RTF/HTML into something drawable.
 ///
-/// The rules here were read off Paste's own panel: three items were copied, photographed, and the
-/// arithmetic reverse-engineered. The one that matters is `dominantBackground` — Paste fills a
-/// whole card from the *run* backgrounds of the text, not from any document attribute, which is
-/// why a terminal transcript fills a card black even though its RTF sets no document background.
+/// The card keeps its ordinary surface and every run paints its own background behind its own
+/// glyphs — a terminal transcript comes back as dark boxes hugging each line on an otherwise white
+/// card, a highlighted sentence as a yellow box around exactly that sentence.
+///
+/// This was checked against Paste by copying a mixed RTF document out of TextEdit (bold heading,
+/// yellow highlight, coloured text, two terminal lines) and photographing the card it built: white
+/// body, white footer, one box per backed run. An earlier reading of the same panel concluded that
+/// the majority run background floods the whole card, and that is what this file used to do; the
+/// TextEdit sample shows it does not.
 enum RichTextRenderer {
     /// RTF parsing is off the main thread, so this cap only bounds memory and work, not latency.
     static let rtfByteCap = 4_000_000
@@ -81,34 +86,17 @@ enum RichTextRenderer {
 
     // MARK: - Choosing the fill
 
-    /// The run background covering the most characters, or nil when "no background" covers the
-    /// most. Measured against Paste: 49 black of 84 characters wins the card even though 21 are
-    /// yellow and 14 carry no background at all.
-    static func dominantBackground(of text: NSAttributedString) -> NSColor? {
-        var tally: [String: (colour: NSColor, characters: Int)] = [:]
-        var unbacked = 0
-
-        text.enumerateAttribute(.backgroundColor,
-                                in: NSRange(location: 0, length: text.length),
-                                options: []) { value, range, _ in
-            guard let colour = (value as? NSColor)?.usingColorSpace(.deviceRGB),
-                  colour.alphaComponent > 0.01 else {
-                unbacked += range.length
-                return
-            }
-            let key = colourKey(colour)
-            tally[key] = (colour, (tally[key]?.characters ?? 0) + range.length)
-        }
-
-        guard let winner = tally.values.max(by: { $0.characters < $1.characters }),
-              winner.characters > unbacked
-        else { return nil }
-        return winner.colour
-    }
-
-    /// Run backgrounds win; a document background is only consulted when no run has one.
-    static func resolveFill(runBackground: NSColor?, documentBackground: NSColor?) -> NSColor? {
-        runBackground ?? documentBackground
+    /// The colour the card is painted with, or nil to keep the ordinary card surface.
+    ///
+    /// Only a *document* background counts. Run backgrounds are deliberately not consulted: they
+    /// are drawn behind their own glyphs by the text system, and promoting the most popular one to
+    /// the whole card is what made a terminal transcript arrive as a solid black tile.
+    ///
+    /// A document background is a different claim — the source saying "the page this came from was
+    /// this colour" — and it is the only thing standing between light unbacked text and an
+    /// invisible card, so it is still honoured.
+    static func resolveFill(documentBackground: NSColor?) -> NSColor? {
+        documentBackground
     }
 
     /// Two runs whose colours differ only by colour-space round-tripping must tally as one.
@@ -149,18 +137,42 @@ enum RichTextRenderer {
 
     /// The stretches of text that are painted straight onto the card's fill, because they carry no
     /// background of their own.
+    ///
+    /// Whitespace is left out. It draws nothing either way, and counting it decided the opposite of
+    /// what the eye sees: a terminal transcript backs every glyph but leaves its indentation and
+    /// line breaks unbacked, so tallying those spaces put "light text on a white card" in front of
+    /// the legibility guard and dropped the item to plain text — throwing away the very boxes that
+    /// made it readable.
     static func unbackedRanges(of text: NSAttributedString) -> [NSRange] {
         var ranges: [NSRange] = []
+        let string = text.string as NSString
         text.enumerateAttribute(.backgroundColor,
                                 in: NSRange(location: 0, length: text.length),
                                 options: []) { value, range, _ in
-            guard let colour = (value as? NSColor)?.usingColorSpace(.deviceRGB),
-                  colour.alphaComponent > 0.01 else {
-                ranges.append(range)
-                return
-            }
+            if let colour = (value as? NSColor)?.usingColorSpace(.deviceRGB),
+               colour.alphaComponent > 0.01 { return }
+            ranges.append(contentsOf: glyphBearingRanges(within: range, of: string))
         }
         return ranges
+    }
+
+    /// Splits a range into the stretches that contain something visible, dropping the whitespace
+    /// between them.
+    private static func glyphBearingRanges(within range: NSRange, of string: NSString) -> [NSRange] {
+        let blank = CharacterSet.whitespacesAndNewlines
+        var out: [NSRange] = []
+        var cursor = range
+        while cursor.length > 0 {
+            let start = string.rangeOfCharacter(from: blank.inverted, options: [], range: cursor)
+            guard start.location != NSNotFound else { break }
+            let tail = NSRange(location: start.location,
+                               length: NSMaxRange(cursor) - start.location)
+            let nextBlank = string.rangeOfCharacter(from: blank, options: [], range: tail)
+            let end = nextBlank.location == NSNotFound ? NSMaxRange(cursor) : nextBlank.location
+            out.append(NSRange(location: start.location, length: end - start.location))
+            cursor = NSRange(location: end, length: NSMaxRange(range) - end)
+        }
+        return out
     }
 
     /// WCAG relative-luminance contrast ratio, 1:1 to 21:1.
@@ -199,11 +211,15 @@ enum RichTextRenderer {
     /// shift the text.
     static let cardPadding: CGFloat = 12
 
+    /// Everything below the header, footer strip included.
+    ///
+    /// The text is laid out *through* the footer rather than stopping above it, so a long item
+    /// keeps flowing and fades out behind the character count instead of ending on a hard edge a
+    /// line early. The card overlays the footer on top of these pixels and fades them out; see
+    /// `ClipboardItemCard.contentFlowsUnderFooter`.
     static var cardPreviewSize: CGSize {
         CGSize(width: PanelLayout.cardBaseWidth,
-               height: PanelLayout.cardBaseHeight
-                   - PanelLayout.cardHeaderHeight
-                   - PanelLayout.cardFooterHeight)
+               height: PanelLayout.cardBaseHeight - PanelLayout.cardHeaderHeight)
     }
 
     /// The `NSColor.textBackgroundColor` of one specific appearance, resolved to a static colour.
@@ -247,8 +263,7 @@ enum RichTextRenderer {
         }
         guard let parsed else { return .plain(forLightAppearance: forLightAppearance) }
 
-        let fill = resolveFill(runBackground: dominantBackground(of: parsed.text),
-                               documentBackground: parsed.documentBackground)
+        let fill = resolveFill(documentBackground: parsed.documentBackground)
         let effective = fill ?? defaultFill
         guard fill != nil || isLegible(parsed.text, on: effective) else {
             return .plain(forLightAppearance: forLightAppearance)
@@ -273,8 +288,7 @@ enum RichTextRenderer {
     static func fullPreview(for item: ClipboardItem,
                             defaultFill: NSColor = .textBackgroundColor) -> RichFullPreview? {
         guard let parsed = parse(item) else { return nil }
-        let fill = resolveFill(runBackground: dominantBackground(of: parsed.text),
-                               documentBackground: parsed.documentBackground)
+        let fill = resolveFill(documentBackground: parsed.documentBackground)
         guard fill != nil || isLegible(parsed.text, on: defaultFill) else { return nil }
         return RichFullPreview(text: parsed.text, fill: fill)
     }
@@ -293,10 +307,13 @@ enum RichTextRenderer {
         image.lockFocusFlipped(true)
         fill.setFill()
         NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
+        // No `.truncatesLastVisibleLine`: the card fades its own bottom out, and an ellipsis
+        // hanging in the middle of that fade says "cut off here" where the fade already says
+        // "there is more". `cardCharLimit` is what bounds the layout work, not this option.
         text.draw(with: NSRect(x: cardPadding, y: cardPadding,
                                width: size.width - 2 * cardPadding,
                                height: size.height - 2 * cardPadding),
-                  options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+                  options: [.usesLineFragmentOrigin])
         image.unlockFocus()
         return image
     }

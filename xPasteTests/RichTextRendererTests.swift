@@ -7,9 +7,10 @@ final class RichTextRendererTests: XCTestCase {
 
     // MARK: - Fixtures
     //
-    // These three replicate exactly the items that were copied and photographed in Paste's own
-    // panel, which is where the fill rule in the spec comes from. Keep the character counts:
-    // the majority arithmetic is the point of the second and third fixtures.
+    // These three replicate the items that were copied and photographed in Paste's own panel,
+    // which is where the drawing rules come from. The character counts are pinned below because
+    // several tests are stated in terms of "most of the string" and would quietly change meaning
+    // if a fixture were edited.
 
     /// A terminal transcript: every character carries a black run background. 78 chars.
     private func terminalFixture() -> ClipboardItem {
@@ -64,6 +65,12 @@ final class RichTextRendererTests: XCTestCase {
         let data = s.rtf(from: NSRange(location: 0, length: s.length), documentAttributes: [:])!
         return ClipboardItem(type: .text, text: s.string, richData: data,
                              richType: NSPasteboard.PasteboardType.rtf.rawValue)
+    }
+
+    /// The background the importer kept for the first run — what the HTML tests are really asking
+    /// about, now that no code anywhere tallies backgrounds across the string.
+    private func runBackground(of text: NSAttributedString) -> NSColor? {
+        text.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor
     }
 
     /// RTF colour writing round-trips through a colour table, so components can drift a little.
@@ -141,7 +148,7 @@ final class RichTextRendererTests: XCTestCase {
         guard let parsed = RichTextRenderer.parse(item) else {
             return XCTFail("HTML did not parse")
         }
-        assertSimilar(RichTextRenderer.dominantBackground(of: parsed.text), .black)
+        assertSimilar(runBackground(of: parsed.text), .black)
     }
 
     // MARK: - The HTML importer's default font
@@ -211,7 +218,7 @@ final class RichTextRendererTests: XCTestCase {
             return XCTFail("HTML did not parse")
         }
         XCTAssertEqual(parsed.text.string, "dark run")
-        assertSimilar(RichTextRenderer.dominantBackground(of: parsed.text), .black)
+        assertSimilar(runBackground(of: parsed.text), .black)
     }
 
     /// The cap is there to bound the WebKit importer's work, so it has to be measured against
@@ -233,34 +240,43 @@ final class RichTextRendererTests: XCTestCase {
 
     // MARK: - The fill rule
 
-    func test_all_black_runs_give_a_black_fill() {
-        let parsed = RichTextRenderer.parse(terminalFixture())!
-        assertSimilar(RichTextRenderer.dominantBackground(of: parsed.text), .black)
+    func test_run_backgrounds_never_flood_the_card() {
+        // Every one of the terminal fixture's 78 characters is backed black, and the textEdit
+        // fixture backs a clear majority of its 84. Neither turns the card into a black tile:
+        // the black arrives as boxes behind the glyphs, which is what Paste draws.
+        for item in [terminalFixture(), textEditFixture(), mixedFixture()] {
+            let parsed = RichTextRenderer.parse(item)!
+            XCTAssertNil(RichTextRenderer.resolveFill(documentBackground: parsed.documentBackground))
+        }
     }
 
-    func test_majority_background_wins_over_minority_and_unbacked_runs() {
-        let parsed = RichTextRenderer.parse(textEditFixture())!
-        assertSimilar(RichTextRenderer.dominantBackground(of: parsed.text), .black)
-    }
-
-    func test_unbacked_majority_keeps_the_default_fill() {
-        let parsed = RichTextRenderer.parse(mixedFixture())!
-        XCTAssertNil(RichTextRenderer.dominantBackground(of: parsed.text))
-    }
-
-    func test_document_background_is_only_a_fallback() {
-        XCTAssertEqual(
-            RichTextRenderer.resolveFill(runBackground: .red, documentBackground: .blue), .red)
-        XCTAssertEqual(
-            RichTextRenderer.resolveFill(runBackground: nil, documentBackground: .blue), .blue)
-        XCTAssertNil(
-            RichTextRenderer.resolveFill(runBackground: nil, documentBackground: nil))
+    func test_a_document_background_still_fills_the_card() {
+        // The one background that is a statement about the page rather than about a span of text.
+        XCTAssertEqual(RichTextRenderer.resolveFill(documentBackground: .blue), .blue)
+        XCTAssertNil(RichTextRenderer.resolveFill(documentBackground: nil))
     }
 
     func test_fully_transparent_background_counts_as_no_background() {
         let s = NSAttributedString(string: "clear run",
                                    attributes: [.backgroundColor: NSColor.clear])
-        XCTAssertNil(RichTextRenderer.dominantBackground(of: s))
+        XCTAssertEqual(RichTextRenderer.unbackedRanges(of: s).reduce(0) { $0 + $1.length }, 8,
+                       "a transparent background leaves both words sitting on the card fill")
+    }
+
+    func test_whitespace_between_backed_runs_is_not_exposed_to_the_fill() {
+        // A terminal transcript backs every glyph but leaves its indentation unbacked. Counting
+        // those spaces asked whether white text is readable on a white card — it is not — and
+        // dropped the whole item to plain text, discarding the boxes that made it readable.
+        let mono = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let s = NSMutableAttributedString()
+        s.append(NSAttributedString(string: "    ", attributes: [
+            .font: mono, .foregroundColor: NSColor.white]))
+        s.append(NSAttributedString(string: "build ok", attributes: [
+            .font: mono, .foregroundColor: NSColor.white, .backgroundColor: NSColor.black]))
+
+        XCTAssertTrue(RichTextRenderer.unbackedRanges(of: s).isEmpty,
+                      "indentation draws nothing, so it is not exposed to anything")
+        XCTAssertTrue(RichTextRenderer.isLegible(s, on: .white))
     }
 
     // MARK: - Legibility guard
@@ -321,10 +337,10 @@ final class RichTextRendererTests: XCTestCase {
 
     // MARK: - Rasterisation
 
-    /// The one end-to-end assertion: a black-backgrounded item must produce a bitmap that is
-    /// actually black. Everything upstream can be right and still draw nothing.
+    /// The one end-to-end assertion, and the whole point of the change: a terminal transcript on a
+    /// light card must come back as a *white* bitmap carrying black boxes, not as a black tile.
     @MainActor
-    func test_rasterised_preview_is_filled_with_the_dominant_background() async {
+    func test_rasterised_preview_keeps_the_card_fill_and_draws_the_run_boxes() async {
         let size = CGSize(width: 232, height: 154)
         let preview = await RichTextRenderer.cardPreview(
             for: terminalFixture(), size: size, defaultFill: .white)
@@ -332,36 +348,28 @@ final class RichTextRendererTests: XCTestCase {
         guard let image = preview.image else { return XCTFail("expected a rasterised preview") }
         XCTAssertEqual(image.size.width, size.width, accuracy: 0.5)
         XCTAssertEqual(image.size.height, size.height, accuracy: 0.5)
-        assertSimilar(preview.fill, .black)
+        XCTAssertNil(preview.fill, "a run background must never become the card's own fill")
 
         guard let tiff = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff) else {
             return XCTFail("could not read the bitmap back")
         }
-        // Inside the 12pt padding, so it is fill and never a glyph.
-        let corner = rep.colorAt(x: 2, y: 2)
-        assertSimilar(corner, .black, tolerance: 0.1)
+        // Inside the 12pt padding, so it is card fill and never a glyph or a run box.
+        assertSimilar(rep.colorAt(x: 2, y: 2), .white, tolerance: 0.1)
 
-        // The corner alone only proves the fill rendered. Scan the whole bitmap for pixels that
-        // are clearly not fill-coloured, which is the only thing that can prove a glyph was
-        // actually drawn: a missing `text.draw` call, or a fill painted on top of the text,
-        // would both still pass every assertion above while leaving the bitmap uniformly black.
-        guard let fillSRGB = NSColor.black.usingColorSpace(.sRGB) else {
-            return XCTFail("could not convert the fill colour to sRGB")
-        }
-        let tolerance: CGFloat = 0.2
-        var nonFillPixelCount = 0
+        // The corner alone would also pass if nothing had been drawn at all. Count the dark
+        // pixels: they can only come from the run backgrounds the fixture asks for.
+        var dark = 0, light = 0
         for y in 0..<rep.pixelsHigh {
             for x in 0..<rep.pixelsWide {
-                guard let pixel = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-                let differs = abs(pixel.redComponent - fillSRGB.redComponent) > tolerance ||
-                    abs(pixel.greenComponent - fillSRGB.greenComponent) > tolerance ||
-                    abs(pixel.blueComponent - fillSRGB.blueComponent) > tolerance
-                if differs { nonFillPixelCount += 1 }
+                guard let p = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let luma = 0.299 * p.redComponent + 0.587 * p.greenComponent + 0.114 * p.blueComponent
+                if luma < 0.25 { dark += 1 } else if luma > 0.75 { light += 1 }
             }
         }
-        XCTAssertGreaterThan(nonFillPixelCount, 0,
-            "the bitmap contains only its fill colour, so no text was drawn onto it")
+        XCTAssertGreaterThan(dark, 200, "the black run backgrounds were never drawn")
+        XCTAssertGreaterThan(light, dark,
+            "the card is mostly boxes rather than mostly card — the fill flooded it again")
     }
 
     @MainActor
@@ -398,11 +406,16 @@ final class RichTextRendererTests: XCTestCase {
                      "a fill without an image would tint a footer whose content is plain text")
     }
 
-    func test_card_preview_size_is_the_content_rect() {
+    func test_card_preview_runs_the_full_height_below_the_header() {
+        // The footer is *not* subtracted: the text is laid out through it and fades out behind
+        // the character count, so a long item keeps flowing instead of stopping a line early.
         XCTAssertEqual(RichTextRenderer.cardPreviewSize.width, PanelLayout.cardBaseWidth)
         XCTAssertEqual(RichTextRenderer.cardPreviewSize.height,
-                       PanelLayout.cardBaseHeight - PanelLayout.cardHeaderHeight
-                           - PanelLayout.cardFooterHeight)
+                       PanelLayout.cardBaseHeight - PanelLayout.cardHeaderHeight)
+        XCTAssertGreaterThan(RichTextRenderer.cardPreviewSize.height,
+                             PanelLayout.cardBaseHeight - PanelLayout.cardHeaderHeight
+                                 - PanelLayout.cardFooterHeight,
+                             "the preview must cover the footer strip, not stop above it")
     }
 
     // MARK: - Colour swatch cards
@@ -599,7 +612,9 @@ final class RichTextRendererTests: XCTestCase {
               let rep = NSBitmapImageRep(data: tiff) else {
             return XCTFail("expected a rasterised preview")
         }
-        guard let fill = NSColor.black.usingColorSpace(.sRGB) else {
+        // The card fill, not the text's own background: anything that differs from it — a glyph or
+        // one of the black run boxes — is proof that text was laid out at that height.
+        guard let fill = NSColor.white.usingColorSpace(.sRGB) else {
             return XCTFail("could not convert the fill colour to sRGB")
         }
         func isGlyph(_ x: Int, _ y: Int) -> Bool {
@@ -635,7 +650,9 @@ final class RichTextRendererTests: XCTestCase {
         }
         XCTAssertEqual(full.text.string, terminalFixture().text,
                        "the popover shows everything, not the card's 1500-character slice")
-        assertSimilar(full.fill, .black)
+        XCTAssertNil(full.fill,
+                     "the popover keeps its own surface too — the transcript's black arrives as "
+                        + "run boxes, exactly as it does on the card")
     }
 
     @MainActor

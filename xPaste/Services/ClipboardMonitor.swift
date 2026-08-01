@@ -76,7 +76,7 @@ final class ClipboardMonitor {
            types.contains(where: { $0 == .tiff || $0 == .png }),
            let image = NSImage(pasteboard: pb) {
             Task.detached(priority: .userInitiated) {
-                guard let compressed = image.compressedJPEGData(maxBytes: 1_000_000) else { return }
+                guard let compressed = image.compressedData(maxBytes: 1_000_000) else { return }
                 var item = ClipboardItem(type: .image, imageData: compressed)
                 item.sourceAppBundleID = sourceBundleID
                 await MainActor.run { ClipboardStore.shared.add(item) }
