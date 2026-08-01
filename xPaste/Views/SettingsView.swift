@@ -56,6 +56,9 @@ struct SettingsView: View {
     }
 
     @State private var tab: Tab = .general
+    /// Bumped every time the window is shown. It is part of the scroll view's identity, so a
+    /// reopened window is parked at the top even when it reopens on the tab it closed on.
+    @State private var visit = 0
 
     var body: some View {
         HStack(spacing: 0) {
@@ -65,6 +68,12 @@ struct SettingsView: View {
         }
         .frame(width: 800, height: 480)
         .background(WindowConfigurator())
+        // The window outlives a visit, and so does this view's state — see AppDelegate's note on
+        // why it is reset here rather than by rebuilding the window.
+        .onReceive(NotificationCenter.default.publisher(for: .settingsWindowWillShow)) { _ in
+            tab = .general
+            visit += 1
+        }
     }
 
     private var sidebar: some View {
@@ -120,6 +129,11 @@ struct SettingsView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Keyed on the tab so switching to one gets a fresh scroll view, parked at the top.
+        // A single ScrollView keeps its offset across a content swap, which left Privacy opening
+        // half way down whenever General had been scrolled to the bottom first. The visit count
+        // is in the key for the same reason across a close and reopen, where the tab is unchanged.
+        .id("\(tab.rawValue)-\(visit)")
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }

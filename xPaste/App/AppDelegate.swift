@@ -24,6 +24,7 @@ extension Notification.Name {
     static let hotkeyChanged        = Notification.Name("com.user.xPaste.hotkeyChanged")
     static let pasteNumberedItem    = Notification.Name("com.user.xPaste.pasteNumberedItem")
     static let openSettingsWindow   = Notification.Name("com.user.xPaste.openSettingsWindow")
+    static let settingsWindowWillShow = Notification.Name("com.user.xPaste.settingsWindowWillShow")
     static let menuBarIconChanged   = Notification.Name("com.user.xPaste.menuBarIconChanged")
     static let screenSharingVisibilityChanged = Notification.Name("com.user.xPaste.screenSharingVisibilityChanged")
 }
@@ -793,6 +794,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         // The Settings window shows live history counts, so it needs the store publishing.
         ClipboardStore.shared.publishingSuppressed = false
+        // The window and its hosting controller are kept between visits so it reopens where the
+        // user left it on screen — but its selected tab is SwiftUI @State and survives with it,
+        // so a visit that ended on Privacy reopened on Privacy. Tell the view a new visit is
+        // starting; resetting here rather than rebuilding the window keeps the position.
+        NotificationCenter.default.post(name: .settingsWindowWillShow, object: nil)
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
