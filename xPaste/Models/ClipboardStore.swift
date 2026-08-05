@@ -46,6 +46,15 @@ final class ClipboardStore: ObservableObject {
         didSet { invalidateCaches() }
     }
 
+    /// The part of the search box that cards paint yellow.
+    ///
+    /// Only the free text: `img:` and `app:chrome` narrow the list by an item's type or its source
+    /// app, neither of which is a string written anywhere on the card, so there is nothing on a
+    /// card for them to mark.
+    var highlightTerm: String {
+        searchQuery.isEmpty ? "" : SearchQuery.parse(searchQuery).text
+    }
+
     /// Type / app / date switches from the filter popover, applied on top of `searchQuery`.
     @Published var filters = SearchFilters() {
         didSet { invalidateCaches() }

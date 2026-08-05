@@ -6,6 +6,10 @@ struct LinkPreviewData {
     let imageURL: URL?
     let image: NSImage?
     let domain: String?
+    /// The URL named a picture rather than a page. The card draws the picture itself instead of
+    /// treating it as a scraped `og:image`, which is what decides whether it may be shrunk to a
+    /// logo: a link to a small or square photograph is still a photograph.
+    var isDirectImage: Bool = false
 }
 
 private struct CachedLinkMeta: Codable {
@@ -14,6 +18,9 @@ private struct CachedLinkMeta: Codable {
     let imageURL: URL?
     let domain: String?
     var faviconURL: URL?
+    // Optional rather than defaulted: synthesised `Codable` has no notion of a property default,
+    // so a non-optional here would fail to decode every entry already on disk.
+    var isDirectImage: Bool?
 }
 
 actor LinkPreviewService {
@@ -49,21 +56,50 @@ actor LinkPreviewService {
         return URL(string: s, relativeTo: base)?.absoluteURL
     }
 
+    /// Whether a response body is a picture rather than a page.
+    ///
+    /// Worth checking explicitly because the HTML path cannot fail: `.isoLatin1` maps every byte
+    /// to a character, so JPEG bytes decode into a "document" that the `og:` regexes simply find
+    /// nothing in — leaving a link card with no title where the picture should be.
+    static func isDirectImage(mimeType: String?) -> Bool {
+        mimeType?.lowercased().hasPrefix("image/") ?? false
+    }
+
     func fetchMetadata(_ url: URL) async -> LinkPreviewData? {
         if let cached = metaCache[url] {
-            return LinkPreviewData(title: cached.title, imageURL: cached.imageURL, image: nil, domain: cached.domain)
+            return LinkPreviewData(title: cached.title, imageURL: cached.imageURL, image: nil,
+                                   domain: cached.domain,
+                                   isDirectImage: cached.isDirectImage ?? false)
         }
 
         var req = URLRequest(url: url, timeoutInterval: 8)
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+              (resp as? HTTPURLResponse)?.statusCode == 200
+        else { return nil }
+
+        let domain = url.host?.replacingOccurrences(of: "www.", with: "")
+
+        // A URL that names a picture is its own preview: the image URL is the link itself, and the
+        // bytes are already here, so seed the image cache rather than fetch the same file twice.
+        // Decodable, not merely declared: an `image/svg+xml` that `NSImage` cannot open falls
+        // through to the scrape below and keeps the favicon card it used to get.
+        if Self.isDirectImage(mimeType: resp.mimeType), let image = NSImage(data: data) {
+            imageCache.setObject(image, forKey: url as NSURL)
+            var meta = CachedLinkMeta(url: url, title: nil, imageURL: url, domain: domain)
+            meta.isDirectImage = true
+            metaCache[url] = meta
+            persistToDisk(meta)
+            evictDiskIfNeeded()
+            return LinkPreviewData(title: nil, imageURL: url, image: nil, domain: domain,
+                                   isDirectImage: true)
+        }
+
+        guard let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
         else { return nil }
 
         let title = ogMeta("og:title", in: html) ?? ogMeta("twitter:title", in: html) ?? pageTitle(in: html)
         let imgStr = ogMeta("og:image", in: html) ?? ogMeta("twitter:image", in: html)
-        let domain = url.host?.replacingOccurrences(of: "www.", with: "")
         var ogImageURL: URL?
         if let s = imgStr { ogImageURL = Self.resolvedURL(s, relativeTo: url) }
         let favURL = htmlFaviconURL(in: html, relativeTo: url)

@@ -16,6 +16,12 @@ final class ParsedRich: @unchecked Sendable {
     }
 }
 
+/// A parse result, nil included, so the cache can remember that an item has no rich text.
+final class ParsedRichBox {
+    let value: ParsedRich?
+    init(_ value: ParsedRich?) { self.value = value }
+}
+
 /// Turns a clipboard item's captured RTF/HTML into something drawable.
 ///
 /// The card keeps its ordinary surface and every run paints its own background behind its own
@@ -58,6 +64,27 @@ enum RichTextRenderer {
         "<style>html{font-family:-apple-system,'Helvetica Neue',Helvetica,sans-serif;font-size:13px}</style>".utf8)
 
     // MARK: - Parsing
+
+    /// Parses, remembering the answer — including "this one has none".
+    ///
+    /// The parse is the expensive half and it does not depend on the search box, so re-running it
+    /// per keystroke would be pure waste. For HTML it is worse than waste: `NSAttributedString`'s
+    /// HTML importer is WebKit-backed and main-thread only, so an uncached parse puts a WebKit
+    /// document build on the panel's main thread for every character typed.
+    ///
+    /// Negative results are cached too, in a box, because `NSCache` cannot hold nil — otherwise an
+    /// item whose `richData` does not parse would be re-attempted on every keystroke, which is the
+    /// exact case this cache exists to prevent.
+    static func cachedParse(_ item: ClipboardItem) -> ParsedRich? {
+        if let boxed = parseCache.object(forKey: item.id as NSUUID) { return boxed.value }
+        let parsed = parse(item)
+        parseCache.setObject(ParsedRichBox(parsed), forKey: item.id as NSUUID)
+        return parsed
+    }
+
+    private static let parseCache: NSCache<NSUUID, ParsedRichBox> = {
+        let c = NSCache<NSUUID, ParsedRichBox>(); c.countLimit = 120; return c
+    }()
 
     static func parse(_ item: ClipboardItem) -> ParsedRich? {
         guard item.type == .text || item.type == .url,
@@ -253,30 +280,44 @@ enum RichTextRenderer {
     static func cardPreview(for item: ClipboardItem,
                             size: CGSize,
                             forLightAppearance: Bool = true,
-                            defaultFill: NSColor = .textBackgroundColor) async -> RichCardPreview {
+                            defaultFill: NSColor = .textBackgroundColor,
+                            highlightTerm: String = "") async -> RichCardPreview {
         let parsed: ParsedRich?
-        if item.richType == NSPasteboard.PasteboardType.rtf.rawValue {
-            parsed = await Task.detached(priority: .userInitiated) { parse(item) }.value
+        if parseCache.object(forKey: item.id as NSUUID) != nil {
+            // Already parsed — a re-bake for a changed search term, so there is nothing to hop
+            // threads for. This is the path every keystroke after the first one takes.
+            parsed = cachedParse(item)
+        } else if item.richType == NSPasteboard.PasteboardType.rtf.rawValue {
+            parsed = await Task.detached(priority: .userInitiated) { cachedParse(item) }.value
         } else {
             // The HTML importer is WebKit-backed and main-thread only.
-            parsed = parse(item)
+            parsed = cachedParse(item)
         }
-        guard let parsed else { return .plain(forLightAppearance: forLightAppearance) }
+        guard let parsed else {
+            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm)
+        }
 
         let fill = resolveFill(documentBackground: parsed.documentBackground)
         let effective = fill ?? defaultFill
         guard fill != nil || isLegible(parsed.text, on: effective) else {
-            return .plain(forLightAppearance: forLightAppearance)
+            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm)
         }
 
-        let body = parsed.text.length > cardCharLimit
+        let truncated = parsed.text.length > cardCharLimit
             ? parsed.text.attributedSubstring(from: NSRange(location: 0, length: cardCharLimit))
             : parsed.text
+        // Marked after truncating, so the work is bounded by what the card can show rather than by
+        // the length of the thing that was copied.
+        let body = highlightTerm.isEmpty
+            ? truncated
+            : SearchHighlight.marked(truncated, term: highlightTerm,
+                                     forLightAppearance: forLightAppearance)
         guard let image = rasterise(body, fill: effective, size: size) else {
-            return .plain(forLightAppearance: forLightAppearance)
+            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm)
         }
         return RichCardPreview(image: image, fill: fill,
-                               builtForLightAppearance: forLightAppearance)
+                               builtForLightAppearance: forLightAppearance,
+                               builtForTerm: highlightTerm)
     }
 
     /// The popover's counterpart to `cardPreview`: the whole string, untruncated, because a
@@ -336,23 +377,30 @@ final class RichCardPreview {
     /// taken against that same fill. A cached entry recorded for the other appearance is
     /// therefore stale — the reader treats it as a miss and rebuilds.
     let builtForLightAppearance: Bool
+    /// The search term baked into this bitmap, "" for none.
+    ///
+    /// The mark is drawn into the pixels, so an entry built for one term cannot be shown for
+    /// another — the reader treats a mismatch as a miss, exactly as it does for the appearance.
+    let builtForTerm: String
 
-    init(image: NSImage?, fill: NSColor?, builtForLightAppearance: Bool = true) {
+    init(image: NSImage?, fill: NSColor?, builtForLightAppearance: Bool = true,
+         builtForTerm: String = "") {
         self.image = image
         self.fill = image == nil ? nil : fill
         self.builtForLightAppearance = builtForLightAppearance
+        self.builtForTerm = builtForTerm
     }
 
-    /// Whether this entry can still be shown under `lightAppearance`.
+    /// Whether this entry can still be shown under `lightAppearance` for `term`.
     ///
     /// Entries carrying a real run background do not actually depend on the appearance, but a
     /// flip is rare and rebuilding them too is far simpler than tracking which ones do.
-    func isUsable(underLightAppearance lightAppearance: Bool) -> Bool {
-        builtForLightAppearance == lightAppearance
+    func isUsable(underLightAppearance lightAppearance: Bool, term: String = "") -> Bool {
+        builtForLightAppearance == lightAppearance && builtForTerm == term
     }
 
-    static func plain(forLightAppearance light: Bool) -> RichCardPreview {
-        RichCardPreview(image: nil, fill: nil, builtForLightAppearance: light)
+    static func plain(forLightAppearance light: Bool, term: String = "") -> RichCardPreview {
+        RichCardPreview(image: nil, fill: nil, builtForLightAppearance: light, builtForTerm: term)
     }
 }
 

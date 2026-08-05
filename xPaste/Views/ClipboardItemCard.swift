@@ -17,6 +17,9 @@ struct CardActions {
 struct CardTaskKey: Equatable {
     let itemID: UUID
     let isLightAppearance: Bool
+    /// The search term the card's work was done for. A formatted card bakes the highlight into its
+    /// bitmap, so a new term is new work — the same way a light/dark flip is.
+    var highlightTerm: String = ""
 }
 
 struct ClipboardItemCard: View {
@@ -29,6 +32,9 @@ struct ClipboardItemCard: View {
     var isRenaming: Bool = false
     /// Called once when editing ends: the new name, or nil if the user cancelled.
     var onRenameEnd: ((String?) -> Void)? = nil
+    /// The search box's free text, washed yellow wherever it appears on this card. Empty when no
+    /// search is running, which is what keeps the attributed-string work off the normal path.
+    var highlightTerm: String = ""
 
     @State private var isHovered = false
     @State private var draftName = ""
@@ -43,6 +49,7 @@ struct ClipboardItemCard: View {
     @State private var computedAccentColor: Color?
     @State private var detectedFilePath: URL?
     @State private var detectedIsDirectory = false
+    @State private var fileText: String?
     @AppStorage("linkPreviewEnabled") private var linkPreviewEnabled: Bool = true
     @Environment(\.panelScale) private var panelScale
     /// A rich preview is a baked bitmap, so it belongs to one appearance. Reading the scheme here
@@ -63,6 +70,12 @@ struct ClipboardItemCard: View {
     }()
     private static let loadedImageCache: NSCache<NSUUID, NSImage> = {
         let c = NSCache<NSUUID, NSImage>(); c.countLimit = 120; return c
+    }()
+    /// The opening of each item's file, for the ones that turned out to be text. Bounded like the
+    /// image caches, and for the same reason: a card scrolled out of view must not keep its file
+    /// resident for the session.
+    private static let fileTextCache: NSCache<NSUUID, NSString> = {
+        let c = NSCache<NSUUID, NSString>(); c.countLimit = 120; return c
     }()
     /// Rich previews, positive and negative alike: an item that resolved to plain text is stored
     /// as `RichCardPreview.plain` so it is never parsed twice.
@@ -120,7 +133,8 @@ struct ClipboardItemCard: View {
         // Keyed on the appearance as well as the item: `.task(id:)` takes one Equatable value, so
         // the two are combined. A light/dark flip re-runs this and rebuilds the rich preview for
         // the appearance now on screen.
-        .task(id: CardTaskKey(itemID: item.id, isLightAppearance: isLightAppearance)) {
+        .task(id: CardTaskKey(itemID: item.id, isLightAppearance: isLightAppearance,
+                              highlightTerm: highlightTerm)) {
             if item.type == .image {
                 if let data = item.imageData, let img = NSImage(data: data) {
                     loadedImage = img
@@ -164,6 +178,27 @@ struct ClipboardItemCard: View {
                 }
             }
 
+            // A file the system had no thumbnail for may still be readable. Skipped when a picture
+            // was just decoded — that already answers what the card shows, and the sniff would only
+            // read 8KB of JPEG to conclude it is not text.
+            if imageURL == nil,
+               let textURL = Self.fileTextSource(type: item.type, fileURLs: item.fileURLs,
+                                                 detectedPath: resolved.url,
+                                                 detectedIsDirectory: resolved.isDir) {
+                if let cached = Self.fileTextCache.object(forKey: item.id as NSUUID) {
+                    if fileText == nil { fileText = cached as String }
+                } else if let text = await Task.detached(priority: .utility, operation: {
+                    TextFileReader.read(textURL, maxBytes: 8192)
+                }).value {
+                    // Capped the same way `cardText` caps an item's own text: a card shows a dozen
+                    // lines, and handing `Text` the whole 8KB would re-measure all of it on every
+                    // panel re-layout.
+                    let capped = String(text.prefix(Self.previewCharLimit))
+                    fileText = capped
+                    Self.fileTextCache.setObject(capped as NSString, forKey: item.id as NSUUID)
+                }
+            }
+
             // Built here, never in `body`: parsing RTF and laying it out is TextKit work, and a
             // card that did it per body pass would re-measure on every panel re-layout.
             if item.richData != nil,
@@ -172,7 +207,7 @@ struct ClipboardItemCard: View {
                detectedColor == nil {
                 let light = isLightAppearance
                 if let cached = Self.richPreviewCache.object(forKey: item.id as NSUUID),
-                   cached.isUsable(underLightAppearance: light) {
+                   cached.isUsable(underLightAppearance: light, term: highlightTerm) {
                     if richPreview !== cached { richPreview = cached }
                 } else {
                     // The default fill is resolved for the appearance on screen, so both the
@@ -180,7 +215,8 @@ struct ClipboardItemCard: View {
                     let built = await RichTextRenderer.cardPreview(
                         for: item, size: RichTextRenderer.cardPreviewSize,
                         forLightAppearance: light,
-                        defaultFill: RichTextRenderer.defaultFill(forLightAppearance: light))
+                        defaultFill: RichTextRenderer.defaultFill(forLightAppearance: light),
+                        highlightTerm: highlightTerm)
                     Self.richPreviewCache.setObject(built, forKey: item.id as NSUUID)
                     richPreview = built
                 }
@@ -215,7 +251,8 @@ struct ClipboardItemCard: View {
                     title: linkPreview?.title,
                     imageURL: linkPreview?.imageURL,
                     image: img,
-                    domain: linkPreview?.domain
+                    domain: linkPreview?.domain,
+                    isDirectImage: linkPreview?.isDirectImage ?? false
                 )
             }
             linkImageChecked = true
@@ -385,9 +422,18 @@ struct ClipboardItemCard: View {
             switch item.type {
             case .url:
                 if linkPreviewEnabled, let img = linkPreview?.image {
-                    Image(nsImage: img)
-                        .resizable()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if drawsDirectImage {
+                        // The picture is the content, not an illustration scraped off a page, so
+                        // this is an image card outright — dimensions and all. The size rule below
+                        // would park a small or square photograph on the logo plate.
+                        imagePreview(img)
+                    } else if Self.isLogoSized(img) {
+                        logoPreview(img)
+                    } else {
+                        Image(nsImage: img)
+                            .resizable()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 } else if linkPreviewEnabled, linkPreview != nil, linkImageChecked {
                     noImagePlaceholder
                 } else {
@@ -399,6 +445,8 @@ struct ClipboardItemCard: View {
                         Image(nsImage: img)
                             .resizable()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let text = resolvedFileText {
+                        fileTextPreview(text)
                     } else {
                         Image(nsImage: fileIcon(pathURL.path))
                             .resizable()
@@ -422,6 +470,8 @@ struct ClipboardItemCard: View {
                     Image(nsImage: img)
                         .resizable()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let text = resolvedFileText {
+                    fileTextPreview(text)
                 } else if let url = item.fileURLs?.first {
                     Image(nsImage: fileIcon(url.path))
                         .resizable()
@@ -464,7 +514,9 @@ struct ClipboardItemCard: View {
     /// `.task` to rebuild, rather than leaving a white rectangle on a dark panel.
     private var resolvedRichPreview: RichCardPreview? {
         let entry = richPreview ?? Self.richPreviewCache.object(forKey: item.id as NSUUID)
-        guard let entry, entry.isUsable(underLightAppearance: isLightAppearance) else { return nil }
+        guard let entry,
+              entry.isUsable(underLightAppearance: isLightAppearance, term: highlightTerm)
+        else { return nil }
         return entry
     }
 
@@ -534,8 +586,67 @@ struct ClipboardItemCard: View {
         }
     }
 
+    /// The opening of a text file, drawn the way a text item is drawn.
+    ///
+    /// Monospaced: what lands here is JSON, source, config and logs, where the indentation is part
+    /// of the meaning. It stops above the footer instead of flowing under it the way `textPreview`
+    /// does — this card's footer is the file's path, which is not something to read text through.
+    private func fileTextPreview(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundColor(Color(NSColor.labelColor))
+            .lineLimit(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(12)
+    }
+
+    /// This item's file text, from `@State` or straight from the cache.
+    ///
+    /// Reads the cache too, for the same reason `resolvedRichPreview` does: a card scrolled back
+    /// into view then draws its text on the first body pass rather than one pass later.
+    private var resolvedFileText: String? {
+        fileText ?? Self.fileTextCache.object(forKey: item.id as NSUUID) as String?
+    }
+
+    /// The file whose contents this card should show, or nil to keep the document icon.
+    ///
+    /// Static so it can be checked directly: the read happens in `.task` while the drawing happens
+    /// in `body`, and the two have to agree about which file is on screen.
+    static func fileTextSource(type: ClipboardContentType, fileURLs: [URL]?,
+                               detectedPath: URL?, detectedIsDirectory: Bool) -> URL? {
+        if type == .file, let urls = fileURLs, urls.count == 1 { return urls[0] }
+        // A folder has no contents to read, and a multi-file item has no room to say which of them
+        // you would be reading.
+        if type == .text, let path = detectedPath, !detectedIsDirectory { return path }
+        return nil
+    }
+
+    /// The wash behind a search hit, taken from the same place the baked bitmaps take theirs so
+    /// the two cannot drift into painting different yellows on adjacent cards.
+    private var searchHighlightFill: Color {
+        Color(nsColor: SearchHighlight.fill(forLightAppearance: isLightAppearance))
+    }
+
+    /// `string` as `Text`, with every search hit on a yellow wash.
+    ///
+    /// Returns `Text` rather than a view so callers keep applying their own font, colour and line
+    /// limit exactly as before. With no search running it hands back a plain `Text` and builds no
+    /// attributed string at all — the panel's normal state must cost what it always did.
+    private func highlighted(_ string: String) -> Text {
+        guard !highlightTerm.isEmpty else { return Text(string) }
+        let runs = SearchHighlight.split(string, term: highlightTerm)
+        guard runs.contains(where: \.isMatch) else { return Text(string) }
+        var result = AttributedString()
+        for run in runs {
+            var piece = AttributedString(run.text)
+            if run.isMatch { piece.backgroundColor = searchHighlightFill }
+            result.append(piece)
+        }
+        return Text(result)
+    }
+
     private var textPreview: some View {
-        Text(cardText.preview)
+        highlighted(cardText.preview)
             .font(.system(size: 13))
             .foregroundColor(Color(NSColor.labelColor))
             // Ten fills the block now that it reaches the bottom of the card; the last couple of
@@ -597,7 +708,7 @@ struct ClipboardItemCard: View {
                         // kind of number — nobody groups the digits of an image's width.
                         Text(verbatim: "\(px.width) × \(px.height)")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.primary)
+                            .foregroundColor(.secondary)
                     }
                 }
                 // Laid out separately from the dimensions rather than beside them, so those stay
@@ -605,8 +716,8 @@ struct ClipboardItemCard: View {
                 // The badge decides its own visibility — it is what observes the modifier keys.
                 HStack(spacing: 0) {
                     Spacer(minLength: 0)
-                    ShortcutBadge(index: index, tint: .primary, floating: true)
-                        // The capsule's own inset comes off the margin: it is the digits that have
+                    ShortcutBadge(index: index, tint: .secondary, floating: true)
+                        // The pill's own inset comes off the margin: it is the digits that have
                         // to line up with the other cards, not the pill drawn around them.
                         .padding(.trailing, 12 - Self.pillHorizontalInset)
                 }
@@ -620,12 +731,17 @@ struct ClipboardItemCard: View {
         content()
             .padding(.horizontal, Self.pillHorizontalInset)
             .padding(.vertical, 4)
-            .background(Capsule().fill(.ultraThinMaterial))
+            .background(RoundedRectangle(cornerRadius: Self.pillCornerRadius, style: .continuous)
+                .fill(.ultraThinMaterial))
     }
 
-    /// How far a floating pill's capsule reaches past the text inside it. Shared with the badge,
-    /// which subtracts it from its own margin so the digits line up with the other cards.
+    /// How far a floating pill reaches past the text inside it. Shared with the badge, which
+    /// subtracts it from its own margin so the digits line up with the other cards.
     fileprivate static let pillHorizontalInset: CGFloat = 9
+
+    /// The corner of a floating pill. Shared with the badge for the same reason as the inset: the
+    /// two sit on one line, and a difference between them reads as a mistake rather than a style.
+    fileprivate static let pillCornerRadius: CGFloat = 4
 
     /// Pixel dimensions, read off the bitmap: `NSImage.size` is in points and reports half the
     /// numbers for anything captured on a 2x display.
@@ -666,26 +782,78 @@ struct ClipboardItemCard: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @ViewBuilder
     private var noImagePlaceholder: some View {
-        ZStack {
-            // Paste puts the tint on the preview and leaves the footer plain; this used to be
-            // the other way round, which read as an inverted card next to it.
-            mutedBackground
-            if let fav = favicon {
-                Image(nsImage: fav)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 72, height: 72)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .shadow(color: .black.opacity(0.10), radius: 6, x: 0, y: 3)
-            } else {
+        if let fav = favicon {
+            logoPreview(fav)
+        } else {
+            ZStack {
+                // Paste puts the tint on the preview and leaves the footer plain; this used to be
+                // the other way round, which read as an inverted card next to it.
+                mutedBackground
                 Image("no_image")
                     .resizable()
                     .scaledToFit()
                     .frame(width: 120, height: 90)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// A logo drawn as one: sitting at icon size on the muted plate rather than stretched across
+    /// the card. Shared by the favicon fallback and by the `og:image` that turns out to be an icon,
+    /// so a site with both ends up with the same card either way.
+    private func logoPreview(_ image: NSImage) -> some View {
+        ZStack {
+            mutedBackground
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 72, height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.10), radius: 6, x: 0, y: 3)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Whether a link that points straight at a picture is drawing as an image card.
+    ///
+    /// Such a card is an image card in every visible respect — chequerboard, pixel dimensions, no
+    /// footer strip — while the item underneath stays a `.url`, so double-clicking it still pastes
+    /// the link rather than the picture.
+    ///
+    /// The image itself has to have arrived. Metadata lands one assignment earlier, and dropping
+    /// the footer in that gap leaves a card with no footer and nothing to fill the strip it gave up.
+    ///
+    /// Static so `contentPreview` and `footer` can switch on the same call: if one of them decided
+    /// there was no footer strip while the other drew one, the dimensions pill would land on top of
+    /// it — the same trap the `drawsRichPreview` comment describes.
+    static func drawsAsImageCard(type: ClipboardContentType,
+                                 linkPreviewEnabled: Bool,
+                                 preview: LinkPreviewData?) -> Bool {
+        type == .url && linkPreviewEnabled
+            && preview?.isDirectImage == true && preview?.image != nil
+    }
+
+    private var drawsDirectImage: Bool {
+        Self.drawsAsImageCard(type: item.type, linkPreviewEnabled: linkPreviewEnabled,
+                              preview: linkPreview)
+    }
+
+    /// Whether a link's `og:image` is a logo rather than a cover picture.
+    ///
+    /// Two tells, either one enough. Small: a Chrome Web Store listing serves the extension's own
+    /// 128px icon under `og:image`, and blowing that up to fill the card is the blurred rectangle
+    /// this rule exists to prevent. Square: cover art is cut to 1200×630 and its kin, while icons
+    /// and avatars are square — so a square image is a logo whatever its resolution.
+    ///
+    /// An image with no readable bitmap takes the logo treatment too. Drawing it small costs some
+    /// card; drawing it large on a guess costs the thing being fixed here.
+    static func isLogoSized(_ image: NSImage) -> Bool {
+        guard let px = pixelSize(of: image) else { return true }
+        if max(px.width, px.height) < 300 { return true }
+        let ratio = Double(px.width) / Double(px.height)
+        return ratio > 0.8 && ratio < 1.25
     }
 
     @ViewBuilder
@@ -697,10 +865,13 @@ struct ClipboardItemCard: View {
             // says nothing about a colour anyway. `contentPreview` claims the height instead, so
             // the card's total is unchanged and the hex label centres on the whole block.
             EmptyView()
-        } else if item.type == .image {
+        } else if item.type == .image || drawsDirectImage {
             // Same reasoning: the picture runs to the bottom edge and carries its dimensions in a
             // floating pill. A strip here would crop the picture to say "28 KB", which is the one
             // thing about an image nobody is looking for.
+            //
+            // A link straight to a picture is included: it is showing the picture, so it wants the
+            // picture's footer. The URL is still what gets pasted — only the chrome changes.
             EmptyView()
         } else if hasLinkPreview {
             urlPreviewFooter
@@ -726,11 +897,11 @@ struct ClipboardItemCard: View {
     private var urlPreviewFooter: some View {
         HStack(alignment: .bottom, spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(linkPreview?.title ?? item.text ?? "")
+                highlighted(linkPreview?.title ?? item.text ?? "")
                     .font(.system(size: 13, weight: .bold))
                     .lineLimit(1)
                     .foregroundColor(Color(NSColor.labelColor))
-                Text(item.text ?? "")
+                highlighted(item.text ?? "")
                     .font(.system(size: 10))
                     .lineLimit(1)
                     .foregroundColor(.secondary)
@@ -749,7 +920,7 @@ struct ClipboardItemCard: View {
     private var fileFooter: some View {
         let path = item.fileURLs?.first?.path ?? item.text ?? ""
         return HStack(spacing: 0) {
-            Text(path)
+            highlighted(path)
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
@@ -1067,7 +1238,7 @@ private struct ShortcutBadge: View {
     /// Overridden where the badge sits on a card's own colour rather than on window chrome — a
     /// swatch card, where `.secondary` would go muddy against a saturated fill.
     var tint: Color = .secondary
-    /// Wraps the badge in a translucent capsule, for the cards that have no footer strip to put
+    /// Wraps the badge in a translucent pill, for the cards that have no footer strip to put
     /// it on and float it over the picture instead.
     var floating = false
     @ObservedObject private var watcher = ModifierWatcher.shared
@@ -1089,7 +1260,9 @@ private struct ShortcutBadge: View {
                 label
                     .padding(.horizontal, ClipboardItemCard.pillHorizontalInset)
                     .padding(.vertical, 4)
-                    .background(Capsule().fill(.ultraThinMaterial))
+                    .background(RoundedRectangle(cornerRadius: ClipboardItemCard.pillCornerRadius,
+                                                 style: .continuous)
+                        .fill(.ultraThinMaterial))
             } else {
                 label.padding(.leading, 6)
             }

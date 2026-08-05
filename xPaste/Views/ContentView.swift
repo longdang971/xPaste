@@ -479,7 +479,8 @@ struct ContentView: View {
                                 item: item, index: index + 1, isCopied: copiedID == item.id,
                                 actions: cardActions(for: item),
                                 isRenaming: renameItemID == item.id,
-                                onRenameEnd: { endRename($0) }
+                                onRenameEnd: { endRename($0) },
+                                highlightTerm: store.highlightTerm
                             )
                             .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { _, _ in toggleSelection(item.id) })
                             .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { point, size in
@@ -523,7 +524,8 @@ struct ContentView: View {
                             item: item, index: index + 1, isCopied: copiedID == item.id,
                             actions: cardActions(for: item),
                             isRenaming: renameItemID == item.id,
-                            onRenameEnd: { endRename($0) }
+                            onRenameEnd: { endRename($0) },
+                            highlightTerm: store.highlightTerm
                         )
                         .frame(maxWidth: .infinity)
                         .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { _, _ in toggleSelection(item.id) })

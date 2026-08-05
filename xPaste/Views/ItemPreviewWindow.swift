@@ -8,6 +8,7 @@ struct PreviewPopoverContent: View {
 
     @State private var loadedImage: NSImage?
     @State private var richPreview: RichFullPreview?
+    @State private var fileText: String?
     @Environment(\.colorScheme) private var colorScheme
 
     private var title: String {
@@ -48,6 +49,7 @@ struct PreviewPopoverContent: View {
             if item.type == .text || item.type == .url {
                 richPreview = RichTextRenderer.fullPreview(for: item)
             }
+            await loadFileTextIfNeeded()
         }
         .background {
             Button("") { onClose() }
@@ -148,11 +150,44 @@ struct PreviewPopoverContent: View {
                         .controlSize(.small)
                 }
             }
-            Spacer()
+            if let fileText {
+                Divider()
+                // The same `NSTextView` the text items use, rather than a `Text` in a `ScrollView`:
+                // this pane holds up to 256KB, which TextTkit pages and SwiftUI would lay out whole.
+                RichTextPreview(text: Self.monospaced(fileText), fill: nil)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, -14)
+                    .padding(.bottom, -14)
+            } else {
+                Spacer()
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    /// Monospaced because what lands here is JSON, source, config and logs, where the indentation
+    /// carries meaning that a proportional font throws away.
+    private static func monospaced(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: NSColor.labelColor,
+        ])
+    }
+
+    /// The file behind a single-file item, read only if it turns out to be text.
+    ///
+    /// Far more than the card reads: this pane scrolls, so it can show a whole config file rather
+    /// than its opening. Multi-file items are left alone — there is no room to say which file the
+    /// pane belongs to.
+    private func loadFileTextIfNeeded() async {
+        guard item.type == .file, let urls = item.fileURLs, urls.count == 1, fileText == nil
+        else { return }
+        let url = urls[0]
+        fileText = await Task.detached(priority: .userInitiated) {
+            TextFileReader.read(url, maxBytes: 262_144)
+        }.value
     }
 
     @ViewBuilder
