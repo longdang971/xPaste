@@ -14,6 +14,7 @@
 		1A359C360DACE753B834527A /* SearchFiltersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E4E46D1E6868C0841F315CD /* SearchFiltersTests.swift */; };
 		1F58A497734B1B16387B6586 /* Bundle+Version.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10392B74706508DA48EA7480 /* Bundle+Version.swift */; };
 		232EF8790E86112F3204EF67 /* TextFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BB186F271DE2F66DC8547C /* TextFileReader.swift */; };
+		26007E233FD2A049C4BC36B8 /* AXTextSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 344EFB5415ADCF676579FF61 /* AXTextSelection.swift */; };
 		2629EAB3660A7996C36FA580 /* VisualEffectBlur.swift in Sources */ = {isa = PBXBuildFile; fileRef = 733FA40DAFDCEF9D2073E7BC /* VisualEffectBlur.swift */; };
 		2F7ED5A2C11A74DCEE2A4522 /* FilterPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D1A520708631522EC71B50 /* FilterPopover.swift */; };
 		36D1D914A64791896C6BA966 /* NSImage+Compress.swift in Sources */ = {isa = PBXBuildFile; fileRef = E82CAAB3832FCA2A676416E2 /* NSImage+Compress.swift */; };
@@ -61,6 +62,7 @@
 		DFE275AB5DC1FD71DEFEAA31 /* SearchFilters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4836ECB62756EC68D6160CF0 /* SearchFilters.swift */; };
 		E5C57E8FEC2489DB312AD188 /* PanelSlideGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32E1124DE2D62E699871D803 /* PanelSlideGeometryTests.swift */; };
 		E708BE78E0121B07680CE58D /* HotkeyRecorderButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A607B4A8D2B02DCCF0E7E5 /* HotkeyRecorderButton.swift */; };
+		E8DE24745EF30151A95DED7F /* AXTextSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3909597696AC92E5A5CF0A8 /* AXTextSelectionTests.swift */; };
 		EC123A15D559171EA0E7A02A /* ClipboardStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23DE041CE5171E0778614CC5 /* ClipboardStoreTests.swift */; };
 		EF36E1ED0EC2F2FF3026D9AF /* PanelSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D94625AC15E9694AF14C9DB4 /* PanelSelectionTests.swift */; };
 		F1D7FC7395A8659E929376EC /* RichTextRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE74587C82BFC319854ABEB /* RichTextRendererTests.swift */; };
@@ -96,6 +98,7 @@
 		324750236A13DDDA63254D96 /* DragPasteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragPasteTests.swift; sourceTree = "<group>"; };
 		32E1124DE2D62E699871D803 /* PanelSlideGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelSlideGeometryTests.swift; sourceTree = "<group>"; };
 		34214476375F7EF2B4930BEE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		344EFB5415ADCF676579FF61 /* AXTextSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXTextSelection.swift; sourceTree = "<group>"; };
 		370DDE27D87B92CBEE7B7CE0 /* PerfLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfLog.swift; sourceTree = "<group>"; };
 		40FD74C57665C51AB4D94042 /* xPaste.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = xPaste.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		41248045341DED6FB9DC054A /* FilterPopoverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterPopoverTests.swift; sourceTree = "<group>"; };
@@ -136,6 +139,7 @@
 		EA1736950F6841CE896F0B0D /* ClipboardMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardMonitor.swift; sourceTree = "<group>"; };
 		EC0F8032F243CCABB2DAD7D2 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
 		F2FB132D93A8BFAE5ECA53C2 /* ClipboardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStore.swift; sourceTree = "<group>"; };
+		F3909597696AC92E5A5CF0A8 /* AXTextSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXTextSelectionTests.swift; sourceTree = "<group>"; };
 		F3BA3F59C53175864F9C26E4 /* FilterTokenLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterTokenLayoutTests.swift; sourceTree = "<group>"; };
 		F7B6AD1278EBD32FC4CEE1C3 /* HistoryRetention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryRetention.swift; sourceTree = "<group>"; };
 		FAB7223E4D9C78D2DC3190BB /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
@@ -186,6 +190,7 @@
 		86FFE7AE467A52B15F1CFDF3 /* xPasteTests */ = {
 			isa = PBXGroup;
 			children = (
+				F3909597696AC92E5A5CF0A8 /* AXTextSelectionTests.swift */,
 				666D180932C3A400D4A14ABF /* ClipboardItemTests.swift */,
 				23DE041CE5171E0778614CC5 /* ClipboardStoreTests.swift */,
 				1C0BAE8F76DBDABDA23190BE /* ColorParserTests.swift */,
@@ -216,6 +221,7 @@
 			children = (
 				0A9A03461D38597ED8BCC7D8 /* AccessibilityPermission.swift */,
 				C73920B6711E77128C1867C5 /* AppNameResolver.swift */,
+				344EFB5415ADCF676579FF61 /* AXTextSelection.swift */,
 				EA1736950F6841CE896F0B0D /* ClipboardMonitor.swift */,
 				60C8768B3042119107630D95 /* ColorParser.swift */,
 				2B6B8C7090D5D23BC636C762 /* DragPaste.swift */,
@@ -393,6 +399,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				26007E233FD2A049C4BC36B8 /* AXTextSelection.swift in Sources */,
 				D545F074BD74FB5C96751C27 /* AccessibilityPermission.swift in Sources */,
 				FB9D1C1E32E2847F9F2D6539 /* AppDelegate.swift in Sources */,
 				B8776C784FE37CCDB284B1EB /* AppNameResolver.swift in Sources */,
@@ -435,6 +442,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E8DE24745EF30151A95DED7F /* AXTextSelectionTests.swift in Sources */,
 				5B285C5C89DE854BD0A96A5F /* ClipboardItemTests.swift in Sources */,
 				EC123A15D559171EA0E7A02A /* ClipboardStoreTests.swift in Sources */,
 				78CA7E921DFE367FA939EC88 /* ColorParserTests.swift in Sources */,
