@@ -43,139 +43,19 @@ Spec: `docs/superpowers/specs/2026-08-09-drag-to-paste-design.md`
 
 ---
 
-### Task 0: Spike — can a drag survive the panel being ordered out, and how is a cancel detected?
+### Task 0: Spike — DONE
 
-Two unknowns block the design. Answer both with a real drag before writing any production code.
+Both questions were answered with a throwaway drag source and a synthetic drag; the findings are
+written up in the spec's "What the spike settled" section.
 
-**Files:**
-- Modify (temporarily): `xPaste/App/AppDelegate.swift`
-- Scratch: `/private/tmp/claude-501/-Users-pikalong/*/scratchpad/dragger.swift`
-
-**Interfaces:**
-- Consumes: nothing.
-- Produces: two decisions recorded in this plan and in the spec — (a) `orderOut` during a session is
-  safe, or the panel must instead go to `alphaValue = 0` until the session ends; (b) a cancelled drag
-  is recognisable from `NSApp.currentEvent` at `draggingSession(_:endedAt:operation:)` time.
-
-- [ ] **Step 1: Add a throwaway drag source to the panel's content view**
-
-In `setupPanel()`, after `p.barView = slider`, temporarily attach a spike view to `slider`:
-
-```swift
-#if DEBUG
-if ProcessInfo.processInfo.environment["XPASTE_DRAG_SPIKE"] == "1" {
-    let spike = DragSpikeView(frame: slider.bounds)
-    spike.autoresizingMask = [.width, .height]
-    slider.addSubview(spike)
-}
-#endif
-```
-
-And at the bottom of the file:
-
-```swift
-#if DEBUG
-/// Throwaway: answers whether a dragging session survives its source window being ordered out,
-/// and what `NSApp.currentEvent` looks like when a drag is cancelled with Escape.
-private final class DragSpikeView: NSView, NSDraggingSource {
-    override func mouseDragged(with event: NSEvent) {
-        let item = NSDraggingItem(pasteboardWriter: NSString("spike"))
-        item.setDraggingFrame(NSRect(x: 0, y: 0, width: 120, height: 60),
-                              contents: NSImage(named: NSImage.cautionName))
-        let session = beginDraggingSession(with: [item], event: event, source: self)
-        NSLog("dragspike: session started %@", session)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NSLog("dragspike: ordering the window out now")
-            self.window?.orderOut(nil)
-        }
-    }
-
-    func draggingSession(_ session: NSDraggingSession,
-                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        [.copy, .generic]
-    }
-
-    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
-        NSLog("dragspike: moved to %@", NSStringFromPoint(screenPoint))
-    }
-
-    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
-                         operation: NSDragOperation) {
-        let e = NSApp.currentEvent
-        NSLog("dragspike: ended at %@ operation %lu currentEvent type %ld keyCode %d",
-              NSStringFromPoint(screenPoint), operation.rawValue,
-              e?.type.rawValue ?? -1, Int(e?.keyCode ?? 999))
-    }
-}
-#endif
-```
-
-- [ ] **Step 2: Build and run the spike with a synthetic drag**
-
-```bash
-cd /Users/pikalong/xPaste && xcodebuild -project xPaste.xcodeproj -scheme xPaste -configuration Debug build 2>&1 | grep -E "error:|BUILD"
-```
-
-Write the drag driver next to the existing `clicker`:
-
-```swift
-// dragger.swift — mouseDown, a run of mouseDragged, then mouseUp or Escape.
-import CoreGraphics
-import Foundation
-let a = CommandLine.arguments
-let x1 = Double(a[1])!, y1 = Double(a[2])!, x2 = Double(a[3])!, y2 = Double(a[4])!
-let delay = Double(a[5])!, cancel = a.count > 6 && a[6] == "cancel"
-Thread.sleep(forTimeInterval: delay)
-let src = CGEventSource(stateID: .hidSystemState)
-func post(_ type: CGEventType, _ p: CGPoint) {
-    CGEvent(mouseEventSource: src, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?
-        .post(tap: .cghidEventTap)
-}
-post(.mouseMoved, CGPoint(x: x1, y: y1)); usleep(50_000)
-post(.leftMouseDown, CGPoint(x: x1, y: y1)); usleep(60_000)
-for i in 1...20 {
-    let t = Double(i) / 20
-    post(.leftMouseDragged, CGPoint(x: x1 + (x2 - x1) * t, y: y1 + (y2 - y1) * t))
-    usleep(25_000)
-}
-if cancel {
-    CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: true)?.post(tap: .cghidEventTap)
-    CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: false)?.post(tap: .cghidEventTap)
-    usleep(200_000)
-}
-post(.leftMouseUp, CGPoint(x: x2, y: y2))
-```
-
-Compile it, then run the app with `XPASTE_PERF=1 XPASTE_AUTOOPEN=1 XPASTE_DWELL=8
-XPASTE_DRAG_SPIKE=1`, drive a drag from a card up into another window, and read the log:
-
-```bash
-/usr/bin/log show --predicate 'process == "xPaste"' --last 60s --info | grep dragspike
-```
-
-Expected, if the session survives: `moved to` lines keep arriving **after** "ordering the window out
-now", and `ended at` reports the release point.
-
-- [ ] **Step 3: Repeat with `cancel` to see what a cancelled drag looks like**
-
-Run the same drag with the trailing `cancel` argument. Record the `currentEvent type` and `keyCode`
-from the `ended at` line. `NSEvent.EventType.keyDown` is `10`; Escape is keyCode `53`.
-
-- [ ] **Step 4: Record both answers**
-
-Append the findings to the "Risk to settle first" section of
-`docs/superpowers/specs/2026-08-09-drag-to-paste-design.md`, replacing the open question with what
-was measured. If the session did **not** survive `orderOut`, also change the spec's decision to the
-`alphaValue = 0` fallback, and note it here in Task 5 Step 3.
-
-- [ ] **Step 5: Remove the spike and commit the findings**
-
-Revert the `AppDelegate.swift` changes entirely (the spike view and the `setupPanel` hook). Keep
-`dragger.swift` in the scratch directory — later tasks use it.
-
-```bash
-cd /Users/pikalong/xPaste && git add docs && git commit -m "Record what the drag spike settled"
-```
+- **A session survives its source window being ordered out.** `movedTo` kept firing after the
+  `orderOut`, right to the release point. `hidePanel()` on drag begin stands; the `alphaValue = 0`
+  fallback is not needed.
+- **A synthetic release cannot end a session.** Neither event tap, with or without
+  `mouseEventClickState`, produced `draggingSession(_:endedAt:operation:)`; only a physical release
+  does. This changed two things below: the cancel test is *positive* (Task 5), and the end-to-end
+  verification drives the tail of the pipeline through a debug hook rather than a synthetic drop
+  (Tasks 5 and 6).
 
 ---
 
@@ -1066,9 +946,12 @@ final class CardDragSourceView: NSView, NSDraggingSource {
                          operation: NSDragOperation) {
         guard let plan = draggingPlan else { return }
         draggingPlan = nil
-        // Escape cancels a session, and the event that ended it is the one still current. A release
-        // ends it with a mouse-up; anything else means the drag was abandoned.
-        let cancelled = NSApp.currentEvent?.type != .leftMouseUp
+        // A cancelled drag and a drop nobody accepted both arrive with an empty operation, so the
+        // only discriminator is the event that ended the session. The test is positive — Escape and
+        // nothing else — because the spike could not verify it by machine, and the two mistakes are
+        // not equal: reading Escape as a release pastes something undoable, while reading a release
+        // as Escape would make the feature look dead.
+        let cancelled = NSApp.currentEvent?.type == .keyDown && NSApp.currentEvent?.keyCode == 53
         let shift = NSEvent.modifierFlags.contains(.shift)
         onEnded(plan, screenPoint, operation, shift, cancelled)
     }

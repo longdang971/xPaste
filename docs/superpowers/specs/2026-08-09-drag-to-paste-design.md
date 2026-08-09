@@ -140,14 +140,34 @@ character count is the same, which is what the target inserted.
 | Multi-item plan with ⇧ | Still joined plain text — "rich" has no meaning for a group |
 | Selecting the pasted text fails (Chrome, Electron, anything that refuses the AX write) | Silent. The caret stays at the end, as after any paste. No error, no retry. |
 
-## Risk to settle first
+## What the spike settled
 
 The panel is ordered out **while the session is running**, and the session was begun from a view
-inside that window. A dragging session belongs to the application rather than to a window, so this
-should hold — but AppKit may cancel a drag whose source window disappears. **Step 0 of the
-implementation is a spike that answers this with a real drag before any other code is written.** If
-the drag does die, the fallback is to leave the window in place at `alphaValue = 0` for the duration
-and order it out when the session ends, which meets the same goal of not covering the drop target.
+inside that window, so the first question was whether AppKit cancels a drag whose source window
+disappears. A throwaway drag source, driven by a synthetic drag, answered it: `movedTo` callbacks
+keep arriving all the way to the release point after the window has been ordered out. **Hiding the
+panel is safe**, and the `alphaValue = 0` fallback is not needed.
+
+The same spike found something that changes how a cancel is detected and how this gets verified: **a
+`CGEvent`-synthesised release does not end a dragging session.** The session follows synthetic
+`leftMouseDragged` events faithfully — the `movedTo` points traced the injected path exactly — but
+neither a synthetic `leftMouseUp` (on either event tap, with or without `mouseEventClickState`) nor a
+synthetic Escape ever produced `draggingSession(_:endedAt:operation:)`. Only a physical button
+release ends it.
+
+Two consequences:
+
+- **Cancel detection is defensive.** A cancelled drag and a drop nobody accepted both arrive as
+  `operation == []`, so the discriminator is `NSApp.currentEvent`. Since that could not be verified by
+  machine, the test is *positive*: a cancel is `keyDown` with keyCode 53 and nothing else. Every other
+  case pastes. The asymmetry is deliberate — mistaking Escape for a release pastes something the user
+  can undo, while mistaking a release for Escape would make the whole feature look dead.
+- **The gesture cannot be verified end to end automatically.** What can be, and is: the entire tail
+  of the pipeline, from "a drag ended at this point" through target resolution, the pasteboard write,
+  `⌘V` and the selection pass. A debug hook (`XPASTE_DRAGEND`, env-gated exactly like the existing
+  `XPASTE_AUTOOPEN` harness) calls the end-of-drag handler directly with a screen point. The drag
+  gesture itself — press, threshold, drag image, session start — is left to the manual checklist,
+  with the spike's evidence that a session starts and tracks correctly.
 
 ## Verification
 
