@@ -846,15 +846,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         togglePanel()
     }
 
-    @objc private func handlePasteItem() {
+    /// Pastes into the target application, optionally one the caller names.
+    ///
+    /// A keyboard paste means "the app the panel was opened in front of". A drag out of the panel
+    /// names the app it was released over instead, and asks for the pasted text to be left selected —
+    /// see `DragPaste`. Both arrive through the same notification so there is only ever one paste
+    /// path to keep working.
+    @objc private func handlePasteItem(_ note: Notification) {
         guard AccessibilityPermission.isTrusted else {
             hidePanel()
             AccessibilityPermission.requestSystemPrompt()
             AccessibilityPermission.openSystemSettings()
             return
         }
-        let target = previousApp
+        let named = (note.userInfo?["targetPID"] as? pid_t)
+            .flatMap { NSRunningApplication(processIdentifier: $0) }
+        let target = named ?? previousApp
         let targetPID = target?.processIdentifier ?? 0
+        // Only a drag asks for this: it is what leaves the pasted text selected, ready to be typed
+        // straight over.
+        let selectLength = note.userInfo?["selectLength"] as? Int
         // Slide the panel closed (down) and refocus the target app, then post ⌘V after a short
         // settle delay. The reorder-freeze that used to make this janky is fixed, so the close
         // animation stays smooth even during a paste.
@@ -872,6 +883,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             } else {
                 keyDown?.post(tap: .cghidEventTap)
                 keyUp?.post(tap: .cghidEventTap)
+            }
+            guard let selectLength, targetPID > 0 else { return }
+            // Long enough for the target to have processed the keystroke and moved its caret; the
+            // selection is read back from wherever that ended up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) {
+                AXTextSelection.selectPastedText(pid: targetPID, length: selectLength)
             }
         }
     }
