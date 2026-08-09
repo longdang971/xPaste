@@ -38,6 +38,7 @@
 		9018FB559242258AA8633AF0 /* FileTextCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D08294BBA3FCD6DC07F00EA7 /* FileTextCardTests.swift */; };
 		90E35D7707B487788A05C689 /* PanelGlassBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30634DC9FCDAD9128BD49514 /* PanelGlassBackground.swift */; };
 		931AEF302B3E6A7C4C55F1C4 /* ClipboardMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA1736950F6841CE896F0B0D /* ClipboardMonitor.swift */; };
+		938F8150EF2434AE70D8D610 /* CardDragSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58FD03BC0700D3C0C38A5756 /* CardDragSource.swift */; };
 		93C4A1A0547BF2161CB20633 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAB7223E4D9C78D2DC3190BB /* OnboardingView.swift */; };
 		9B44B923AE4C20043534D837 /* FilterPopoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41248045341DED6FB9DC054A /* FilterPopoverTests.swift */; };
 		A21822C371D5EDBB16D5FBCE /* DragPasteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 324750236A13DDDA63254D96 /* DragPasteTests.swift */; };
@@ -108,6 +109,7 @@
 		47CD9BF54E42FC2A5BDCC5EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		4836ECB62756EC68D6160CF0 /* SearchFilters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchFilters.swift; sourceTree = "<group>"; };
 		56DC1FD216AF061320A8A99A /* ItemPreviewWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemPreviewWindow.swift; sourceTree = "<group>"; };
+		58FD03BC0700D3C0C38A5756 /* CardDragSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardDragSource.swift; sourceTree = "<group>"; };
 		60C8768B3042119107630D95 /* ColorParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorParser.swift; sourceTree = "<group>"; };
 		65E374CF2A060621970BC638 /* TextFileReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextFileReaderTests.swift; sourceTree = "<group>"; };
 		666D180932C3A400D4A14ABF /* ClipboardItemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardItemTests.swift; sourceTree = "<group>"; };
@@ -180,6 +182,7 @@
 		5B7EE6DCBE141FD01A223305 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				58FD03BC0700D3C0C38A5756 /* CardDragSource.swift */,
 				B042F21E05C8F577B1BC3631 /* ClipboardItemCard.swift */,
 				D87256E82B8E13BFED6DF205 /* ContentView.swift */,
 				C1D1A520708631522EC71B50 /* FilterPopover.swift */,
@@ -410,6 +413,7 @@
 				FB9D1C1E32E2847F9F2D6539 /* AppDelegate.swift in Sources */,
 				B8776C784FE37CCDB284B1EB /* AppNameResolver.swift in Sources */,
 				1F58A497734B1B16387B6586 /* Bundle+Version.swift in Sources */,
+				938F8150EF2434AE70D8D610 /* CardDragSource.swift in Sources */,
 				83D0FDE628516CFDBBCD443C /* ClipboardItem.swift in Sources */,
 				D4C31C87769C671EEE6BF12E /* ClipboardItemCard.swift in Sources */,
 				931AEF302B3E6A7C4C55F1C4 /* ClipboardMonitor.swift in Sources */,

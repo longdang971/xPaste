@@ -21,6 +21,13 @@ extension Notification.Name {
     static let panelDidHide         = Notification.Name("com.user.xPaste.panelDidHide")
     static let cmdClickInPanel      = Notification.Name("com.user.xPaste.cmdClickInPanel")
     static let doubleClickInPanel   = Notification.Name("com.user.xPaste.doubleClickInPanel")
+    static let dragOutOfPanel       = Notification.Name("com.user.xPaste.dragOutOfPanel")
+    static let panelDragBegan       = Notification.Name("com.user.xPaste.panelDragBegan")
+    static let panelDragCancelled   = Notification.Name("com.user.xPaste.panelDragCancelled")
+    /// Test hook: stands in for a drag that ended at a screen point. Only ever posted by the
+    /// env-gated harness, because a synthetic mouse release cannot end a real dragging session —
+    /// see the spec for what the spike found.
+    static let simulateDragEnd      = Notification.Name("com.user.xPaste.simulateDragEnd")
     static let hotkeyChanged        = Notification.Name("com.user.xPaste.hotkeyChanged")
     static let pasteNumberedItem    = Notification.Name("com.user.xPaste.pasteNumberedItem")
     static let openSettingsWindow   = Notification.Name("com.user.xPaste.openSettingsWindow")
@@ -36,6 +43,9 @@ private class ClipboardPanel: NSPanel {
     /// The view the bar is drawn in. The window is taller than the bar while the reveal runs, so
     /// anything reasoning about where the top of the panel is has to ask this, not the window.
     weak var barView: NSView?
+
+    /// Where the current press started, while it could still turn into a drag out of the panel.
+    private var pressOrigin: NSPoint?
 
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
@@ -57,6 +67,10 @@ private class ClipboardPanel: NSPanel {
                 )
                 return
             }
+            // A plain press might still become a drag out of the panel. A ⌘-press is
+            // multi-selection and a double-click pastes, so neither of those is ever a drag — both
+            // have already returned above.
+            pressOrigin = event.locationInWindow
             let loc = event.locationInWindow
             let barTop = barView?.frame.maxY ?? frame.height
             if let hit = contentView?.hitTest(loc),
@@ -81,6 +95,23 @@ private class ClipboardPanel: NSPanel {
                     return
                 }
             }
+
+        case .leftMouseDragged:
+            if let origin = pressOrigin,
+               DragPaste.exceedsThreshold(from: origin, to: event.locationInWindow) {
+                pressOrigin = nil
+                // The card is found from where the press started, not from where the pointer is
+                // now: by this point it has already left the card it began on.
+                NotificationCenter.default.post(
+                    name: .dragOutOfPanel,
+                    object: nil,
+                    userInfo: ["locationInWindow": origin, "event": event]
+                )
+                return
+            }
+
+        case .leftMouseUp:
+            pressOrigin = nil
 
         default:
             break
@@ -170,6 +201,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleAlertShown),
             name: .clipboardAlertShown, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handlePanelDragBegan),
+            name: .panelDragBegan, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handlePanelDragCancelled),
+            name: .panelDragCancelled, object: nil
         )
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleAlertHidden),
@@ -280,6 +319,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // the run is to check that clicks still land where they should.
                     let dwell = ProcessInfo.processInfo.environment["XPASTE_DWELL"]
                         .flatMap { Double($0) } ?? 1.0
+                    // `XPASTE_DRAGEND=x,y[,shift]` stands in for a drag released at that screen
+                    // point. The gesture itself cannot be synthesised — a CGEvent release does not
+                    // end a dragging session — so this is how the paste-and-select tail of the
+                    // pipeline gets verified by machine.
+                    if let spec = ProcessInfo.processInfo.environment["XPASTE_DRAGEND"] {
+                        let parts = spec.split(separator: ",").map(String.init)
+                        if parts.count >= 2, let x = Double(parts[0]), let y = Double(parts[1]) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                                PerfLog.note("simulating a drag ended at \(x),\(y)")
+                                NotificationCenter.default.post(
+                                    name: .simulateDragEnd, object: nil,
+                                    userInfo: ["screenPoint": NSPoint(x: x, y: y),
+                                               "shift": parts.count > 2 && parts[2] == "shift"]
+                                )
+                            }
+                        }
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + dwell) {
                         self.hidePanel()
                         done += 1
@@ -837,6 +893,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func removeMonitors() {
         if let m = mouseMonitor { NSEvent.removeMonitor(m); mouseMonitor = nil }
         if let m = keyMonitor   { NSEvent.removeMonitor(m); keyMonitor = nil }
+    }
+
+    /// The panel gets out of the way for the length of a drag: it covers the strip of screen the
+    /// item may be headed for, and leaving it up afterwards means reaching for Escape every time.
+    /// Verified safe — a dragging session survives its source window being ordered out.
+    @objc private func handlePanelDragBegan() { hidePanel() }
+
+    /// Escape during a drag puts everything back, the panel included. Nothing has been written to the
+    /// pasteboard at this point: that only happens once a drag has ended in a paste.
+    @objc private func handlePanelDragCancelled() {
+        guard !panelVisible else { return }
+        showPanel()
     }
 
     @objc private func handleAlertShown()  { alertIsPresented = true  }

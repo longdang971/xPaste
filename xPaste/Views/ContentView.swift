@@ -261,6 +261,14 @@ struct ContentView: View {
             // Drop a half-finished rename rather than reopening the panel into edit mode.
             if renameItemID != nil { renameItemID = nil }
         }
+        // Test hook, inert unless the perf harness is running: see `.simulateDragEnd`.
+        .onReceive(NotificationCenter.default.publisher(for: .simulateDragEnd)) { note in
+            guard PerfLog.enabled,
+                  let point = note.userInfo?["screenPoint"] as? NSPoint,
+                  let item = displayedItems.first else { return }
+            finishDrag(dragPlan(for: item), at: point, operation: [],
+                       shiftHeld: note.userInfo?["shift"] as? Bool ?? false, cancelled: false)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .pasteNumberedItem)) { note in
             guard let number = note.userInfo?["number"] as? Int,
                   let item = item(numbered: number) else { return }
@@ -487,7 +495,13 @@ struct ContentView: View {
                                 handleDoubleClick(on: item, at: point, in: size)
                             })
                             .onTapGesture(count: 1) { selectItem(item) }
-                            .onDrag { dragProvider(for: item) }
+                            .overlay(CardDragSource(
+                                plan: { dragPlan(for: item) },
+                                onEnded: { plan, point, operation, shift, cancelled in
+                                    finishDrag(plan, at: point, operation: operation,
+                                               shiftHeld: shift, cancelled: cancelled)
+                                }
+                            ))
                             .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                             .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
                                 PreviewPopoverContent(item: item) { previewItemID = nil }
@@ -533,7 +547,13 @@ struct ContentView: View {
                                 handleDoubleClick(on: item, at: point, in: size)
                             })
                         .onTapGesture(count: 1) { selectItem(item) }
-                        .onDrag { dragProvider(for: item) }
+                        .overlay(CardDragSource(
+                            plan: { dragPlan(for: item) },
+                            onEnded: { plan, point, operation, shift, cancelled in
+                                finishDrag(plan, at: point, operation: operation,
+                                           shiftHeld: shift, cancelled: cancelled)
+                            }
+                        ))
                         .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                         .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
                             PreviewPopoverContent(item: item) { previewItemID = nil }
@@ -824,33 +844,64 @@ struct ContentView: View {
         }
     }
 
-    /// What a card carries when dragged out of the panel.
+    /// What a drag out of the panel carries. Read at the moment the drag starts, so a selection
+    /// changed since the card was built is the one that travels.
+    private func dragPlan(for item: ClipboardItem) -> DragPaste.Plan {
+        DragPaste.plan(dragging: item,
+                       selection: selection.ids,
+                       displayed: displayedItems,
+                       accessibilityTrusted: accessibilityTrusted)
+    }
+
+    /// A drag has ended.
     ///
-    /// Files and images are offered as their real file so Finder accepts the drop and image-aware
-    /// apps still get pixels; links go as a URL so browsers and note apps make them clickable.
-    private func dragProvider(for item: ClipboardItem) -> NSItemProvider {
-        switch item.type {
-        case .file, .folder:
-            if let url = item.fileURLs?.first, let provider = NSItemProvider(contentsOf: url) {
-                return provider
-            }
-        case .image:
-            if let url = ClipboardStore.shared.imageURL(for: item.id),
-               FileManager.default.fileExists(atPath: url.path),
-               let provider = NSItemProvider(contentsOf: url) {
-                return provider
-            }
-            if let data = item.imageData, let image = NSImage(data: data) {
-                return NSItemProvider(object: image)
-            }
-        case .url:
-            if let text = item.text, let url = URL(string: text) {
-                return NSItemProvider(object: url as NSURL)
-            }
-        case .text:
-            break
+    /// Nothing has touched the pasteboard until this point, which is what lets a cancelled drag leave
+    /// the user's clipboard exactly as it was.
+    private func finishDrag(_ plan: DragPaste.Plan, at point: NSPoint,
+                            operation: NSDragOperation, shiftHeld: Bool, cancelled: Bool) {
+        guard !cancelled else {
+            NotificationCenter.default.post(name: .panelDragCancelled, object: nil)
+            return
         }
-        return NSItemProvider(object: (item.text ?? item.displayText) as NSString)
+        // The target took the drop and has already done the work — a file copied into Finder, a
+        // picture dropped into an upload zone. Pasting on top of that would deliver it twice.
+        if plan.kind == .native, !operation.isEmpty {
+            reorderAfterDrag(plan)
+            return
+        }
+        guard let content = DragPaste.content(
+            for: plan,
+            shiftHeld: shiftHeld,
+            alwaysPlainText: UserDefaults.standard.bool(forKey: "alwaysPastePlainText"),
+            separator: .stored()
+        ) else { return }
+
+        ClipboardMonitor.shared.markNextChangeAsOwn()
+        switch content {
+        case let .item(item):
+            item.write(to: .general)
+        case let .plain(text):
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.setString(text, forType: .string)
+        }
+
+        var info: [String: Any] = [:]
+        // The release point names the application; failing that, the app the panel was opened in
+        // front of, which is almost always the one meant anyway.
+        if let pid = DropTargetResolver.pid(under: point) { info["targetPID"] = pid }
+        if let length = DragPaste.selectableLength(of: content) { info["selectLength"] = length }
+        NotificationCenter.default.post(name: .pasteClipboardItem, object: nil, userInfo: info)
+        reorderAfterDrag(plan)
+    }
+
+    /// Brings the dragged item back to the front of the history, which is what ⏎ and a double-click
+    /// already do and dragging did not. The panel is hidden by now, so the store is not publishing
+    /// and this costs no layout.
+    private func reorderAfterDrag(_ plan: DragPaste.Plan) {
+        guard let first = plan.items.first,
+              let live = store.items.first(where: { $0.id == first.id }) else { return }
+        store.moveToTop(live)
     }
 
     private func copyItem(_ item: ClipboardItem) {
