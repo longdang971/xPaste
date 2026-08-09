@@ -199,3 +199,23 @@ it must not get worse.
 Electron app to see whether the selection pass takes; dragging an image onto a web upload zone;
 dragging a file into Finder; a multi-item drag; ⇧ on release; Escape mid-drag leaving the clipboard
 untouched; and the left, right and top panel positions.
+
+## What the verification found
+
+- **Both behaviours the feature exists for are confirmed.** With `ALPHA REPLACEME OMEGA` in TextEdit
+  and `REPLACEME` selected through Accessibility, a simulated release over that window left
+  `ALPHA <the card's text> OMEGA` — the selection was **replaced**, not appended to — and
+  `kAXSelectedText` came back as exactly the pasted text, so it **is left selected**.
+- **The gesture wiring works.** A synthetic drag out of a card hid the panel, which is only possible
+  if the panel noticed the drag, the right card claimed it, and the session started.
+- **The drag image is real pixels**, checked by rendering a hosted layer-backed view and reading the
+  centre pixel back. Screen captures do not include drag images, so this could not have been settled
+  by screenshot.
+- **No regression in the panel's mouse handling**: a single click still selects a card and a ⌘-click
+  still adds to the selection rather than replacing it.
+- **No performance regression.** Measured by building the commit before this work and the commit
+  after it, then running them alternately: both produced the same figures (one stall per reveal,
+  30-48ms). Note this is *not* the panel's real performance — the same binaries measured 19-32ms with
+  zero dropped frames an hour earlier on a quieter machine. The absolute numbers here are dominated by
+  whatever else the machine is doing, which is why the comparison had to be run interleaved rather
+  than against figures from an earlier session.
