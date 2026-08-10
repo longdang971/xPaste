@@ -541,12 +541,8 @@ struct ContentView: View {
                             onRenameEnd: { endRename($0) },
                             highlightTerm: store.highlightTerm
                         )
-                        .frame(maxWidth: .infinity)
-                        .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { _, _ in toggleSelection(item.id) })
-                        .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { point, size in
-                                handleDoubleClick(on: item, at: point, in: size)
-                            })
-                        .onTapGesture(count: 1) { selectItem(item) }
+                        // Hugging the card rather than the row: in this layout the row is wider than
+                        // the card, and the drag image is cropped to whatever this overlay covers.
                         .overlay(CardDragSource(
                             plan: { dragPlan(for: item) },
                             onEnded: { plan, point, operation, shift, cancelled in
@@ -554,6 +550,12 @@ struct ContentView: View {
                                            shiftHeld: shift, cancelled: cancelled)
                             }
                         ))
+                        .frame(maxWidth: .infinity)
+                        .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { _, _ in toggleSelection(item.id) })
+                        .overlay(PanelClickOverlay(notification: .doubleClickInPanel) { point, size in
+                                handleDoubleClick(on: item, at: point, in: size)
+                            })
+                        .onTapGesture(count: 1) { selectItem(item) }
                         .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                         .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
                             PreviewPopoverContent(item: item) { previewItemID = nil }

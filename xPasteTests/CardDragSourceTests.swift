@@ -165,6 +165,23 @@ final class CardDragSourceTests: XCTestCase {
                              "cropping to the lower half must give the blue half")
     }
 
+    /// The card has rounded corners, so the picture must not carry the panel's background in its
+    /// own — that arrived as four white spikes around an otherwise rounded card.
+    func testTheDragImageHasNoOpaqueCorners() {
+        let overlay = hostedOverlay(Color.red, size: NSSize(width: 232, height: 232))
+        guard let rep = bitmap(CardDragSourceView.snapshot(of: overlay, badge: 1))
+        else { return XCTFail("no drag image") }
+        let corners = [(2, 2), (rep.pixelsWide - 3, 2),
+                       (2, rep.pixelsHigh - 3), (rep.pixelsWide - 3, rep.pixelsHigh - 3)]
+        for (x, y) in corners {
+            XCTAssertLessThan(rep.colorAt(x: x, y: y)?.alphaComponent ?? 1, 0.1,
+                              "the corner at \(x),\(y) must be transparent")
+        }
+        XCTAssertGreaterThan(rep.colorAt(x: rep.pixelsWide / 2,
+                                        y: rep.pixelsHigh / 2)?.alphaComponent ?? 0, 0.9,
+                             "the middle of the card must still be painted")
+    }
+
     func testAViewWithNoSizeHasNoDragImage() {
         let overlay = hostedOverlay(Color.red, size: NSSize(width: 40, height: 40),
                                     overlayFrame: .zero)

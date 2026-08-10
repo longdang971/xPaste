@@ -57,6 +57,10 @@ struct ClipboardItemCard: View {
     /// system flips between light and dark.
     @Environment(\.colorScheme) private var colorScheme
 
+    /// The card's corner. Shared because the drag image masks itself with the same number — a
+    /// mismatch there shows up as the panel's background peeking out of the card's corners.
+    static let cornerRadius: CGFloat = 14
+
     private static var colorCache: [String: Color] = [:]
     private static var iconCache: [String: NSImage] = [:]
     private static var unresolvedBundleIDs: Set<String> = []
@@ -126,7 +130,7 @@ struct ClipboardItemCard: View {
             }
         }
         .frame(width: PanelLayout.cardBaseWidth, height: PanelLayout.cardBaseHeight)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .overlay(CardSelectionBorder(itemID: item.id, isHovered: isHovered))
         .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4)
         .onHover { isHovered = $0 }
@@ -1286,7 +1290,7 @@ private struct CardSelectionBorder: View {
     @ObservedObject private var selection = PanelSelection.shared
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+        RoundedRectangle(cornerRadius: ClipboardItemCard.cornerRadius, style: .continuous)
             .stroke((isHovered || selection.contains(itemID)) ? Color.accentColor : .clear,
                     lineWidth: 3)
     }

@@ -113,7 +113,21 @@ final class CardDragSourceView: NSView, NSDraggingSource {
         [.copy, .generic]
     }
 
+    /// Set while the drag runs if Escape is pressed, which is what cancelling looks like.
+    ///
+    /// Watched with a *global* monitor because that is the only thing that sees the key: measured
+    /// against a real session, a local monitor received nothing at all (AppKit's drag loop does not
+    /// route key events through the application's own dispatch) and `NSApp.currentEvent` at
+    /// `endedAt` was never the keystroke either. A global monitor needs Accessibility, which this
+    /// path already requires — a drag only defers its paste when Accessibility is granted.
+    private var escapePressed = false
+    private var escapeMonitor: Any?
+
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        escapePressed = false
+        escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { self?.escapePressed = true }
+        }
         // A deferred paste is refused by every application on purpose, so AppKit treats every one of
         // these drags as failed and, by default, animates the image back to where it started before
         // ending the session. `endedAt` — and therefore the paste — waited on that animation:
@@ -126,13 +140,9 @@ final class CardDragSourceView: NSView, NSDraggingSource {
                          operation: NSDragOperation) {
         guard let plan = draggingPlan else { return }
         draggingPlan = nil
-        // A cancelled drag and a drop nobody accepted both arrive with an empty operation, so the
-        // only thing left to tell them apart is the event that ended the session. The test is
-        // positive — Escape and nothing else — because the two mistakes are not equal: reading
-        // Escape as a release pastes something the user can undo, while reading a release as Escape
-        // would make the whole feature look dead.
-        let ending = NSApp.currentEvent
-        let cancelled = ending?.type == .keyDown && ending?.keyCode == 53
+        // A cancelled drag and a drop nobody accepted both arrive with an empty operation, so
+        // Escape has to be caught while the drag is still running — see `escapePressed`.
+        let cancelled = escapePressed
         let shift = NSEvent.modifierFlags.contains(.shift)
         onEnded(plan, screenPoint, operation, shift, cancelled)
     }
@@ -196,9 +206,35 @@ final class CardDragSourceView: NSView, NSDraggingSource {
         hostLayer.render(in: ctx)
 
         guard let cg = ctx.makeImage() else { return nil }
-        let image = NSImage(cgImage: cg, size: card.size)
+        // The crop is a rectangle, so it caught the panel's own background in the card's rounded
+        // corners — four white spikes around an otherwise rounded card. Mask them back off.
+        let radius = ClipboardItemCard.cornerRadius * (card.width / PanelLayout.cardBaseWidth)
+        guard let image = rounded(cg, size: card.size, radius: radius, scale: scale)
+        else { return nil }
         guard count > 1 else { return image }
         return withBadge(count, on: image)
+    }
+
+    /// Re-draws the picture with the card's own rounded corners, leaving the corners transparent.
+    private static func rounded(_ image: CGImage, size: NSSize, radius: CGFloat,
+                                scale: CGFloat) -> NSImage? {
+        guard let ctx = CGContext(data: nil,
+                                  width: Int((size.width * scale).rounded()),
+                                  height: Int((size.height * scale).rounded()),
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)
+        else { return nil }
+        ctx.scaleBy(x: scale, y: scale)
+        let rect = NSRect(origin: .zero, size: size)
+        // A plain circular rounding rather than the squircle the card is clipped with: the two are
+        // indistinguishable at this radius, and there is no public path for a continuous curve.
+        ctx.addPath(CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius,
+                           transform: nil))
+        ctx.clip()
+        ctx.draw(image, in: rect)
+        guard let cg = ctx.makeImage() else { return nil }
+        return NSImage(cgImage: cg, size: size)
     }
 
     /// The `NSHostingView` this view is inside, which is the one holding SwiftUI's drawn content.
