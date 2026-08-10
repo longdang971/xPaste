@@ -55,46 +55,41 @@ enum PerfLog {
         runStart = 0
     }
 
-    // MARK: - Frame timing
+    // MARK: - Main-thread idle watch
 
-    private static var frameTimes: [CFAbsoluteTime] = []
-    private static var frameWork: [Double] = []
+    /// Whether the main thread stayed free while the render server ran the reveal.
+    ///
+    /// The reveal is a Core Animation now, so there are no per-frame ticks left to time — the
+    /// question is no longer "how long did our frame take" but "did we get out of the way". This
+    /// ticks a timer that does nothing but record when it fired: a clean run is evenly spaced, and
+    /// anything the main thread does during the animation shows up as one long gap.
+    private static var idleTimer: Timer?
+    private static var idleTicks: [CFAbsoluteTime] = []
 
-    static func frameTick() {
+    static func beginIdleWatch() {
         guard enabled else { return }
-        frameTimes.append(CFAbsoluteTimeGetCurrent())
+        idleTimer?.invalidate()
+        idleTicks.removeAll(keepingCapacity: true)
+        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { _ in
+            idleTicks.append(CFAbsoluteTimeGetCurrent())
+        }
+        idleTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
-    /// Times the actual per-frame move, separately from when the timer fired.
-    static func frameWork<T>(_ body: () -> T) -> T {
-        guard enabled else { return body() }
-        let start = CFAbsoluteTimeGetCurrent()
-        let result = body()
-        frameWork.append((CFAbsoluteTimeGetCurrent() - start) * 1000)
-        return result
-    }
-
-    static func beginFrames() {
-        guard enabled else { return }
-        frameTimes.removeAll(keepingCapacity: true)
-    }
-
-    /// Reports how evenly the slide's 120Hz timer actually fired. A stall on the main thread
-    /// shows up here as one long gap — the frames the animation lost.
-    static func endFrames(_ label: String) {
-        guard enabled, frameTimes.count > 1 else { return }
+    static func endIdleWatch(_ label: String) {
+        guard enabled, idleTimer != nil else { return }
+        idleTimer?.invalidate()
+        idleTimer = nil
+        guard idleTicks.count > 1 else { return }
         var gaps: [Double] = []
-        for i in 1..<frameTimes.count {
-            gaps.append((frameTimes[i] - frameTimes[i - 1]) * 1000)
+        for i in 1..<idleTicks.count {
+            gaps.append((idleTicks[i] - idleTicks[i - 1]) * 1000)
         }
         let late = gaps.filter { $0 > 12 }
-        let worst = gaps.max() ?? 0
-        let span = (frameTimes.last! - frameTimes.first!) * 1000
-        let workAvg = frameWork.isEmpty ? 0 : frameWork.reduce(0, +) / Double(frameWork.count)
-        let workMax = frameWork.max() ?? 0
-        logger.info("--- \(label, privacy: .public) frames: \(frameTimes.count) over \(span, format: .fixed(precision: 1))ms, worst gap \(worst, format: .fixed(precision: 1))ms, late(>12ms): \(late.count) \(late.map { String(format: "%.1f", $0) }.joined(separator: ","), privacy: .public) | move cost avg \(workAvg, format: .fixed(precision: 2))ms max \(workMax, format: .fixed(precision: 2))ms | per-frame \(frameWork.map { String(format: "%.1f", $0) }.joined(separator: " "), privacy: .public)")
-        frameTimes.removeAll(keepingCapacity: true)
-        frameWork.removeAll(keepingCapacity: true)
+        let span = (idleTicks.last! - idleTicks.first!) * 1000
+        logger.info("--- \(label, privacy: .public) main thread: \(idleTicks.count) ticks over \(span, format: .fixed(precision: 1))ms, worst gap \(gaps.max() ?? 0, format: .fixed(precision: 1))ms, late(>12ms): \(late.count) \(late.map { String(format: "%.1f", $0) }.joined(separator: ","), privacy: .public)")
+        idleTicks.removeAll(keepingCapacity: true)
     }
 
     /// One-off note, outside any run.

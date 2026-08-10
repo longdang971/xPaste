@@ -21,6 +21,13 @@ extension Notification.Name {
     static let panelDidHide         = Notification.Name("com.user.xPaste.panelDidHide")
     static let cmdClickInPanel      = Notification.Name("com.user.xPaste.cmdClickInPanel")
     static let doubleClickInPanel   = Notification.Name("com.user.xPaste.doubleClickInPanel")
+    static let dragOutOfPanel       = Notification.Name("com.user.xPaste.dragOutOfPanel")
+    static let panelDragBegan       = Notification.Name("com.user.xPaste.panelDragBegan")
+    static let panelDragCancelled   = Notification.Name("com.user.xPaste.panelDragCancelled")
+    /// Test hook: stands in for a drag that ended at a screen point. Only ever posted by the
+    /// env-gated harness, because a synthetic mouse release cannot end a real dragging session —
+    /// see the spec for what the spike found.
+    static let simulateDragEnd      = Notification.Name("com.user.xPaste.simulateDragEnd")
     static let hotkeyChanged        = Notification.Name("com.user.xPaste.hotkeyChanged")
     static let pasteNumberedItem    = Notification.Name("com.user.xPaste.pasteNumberedItem")
     static let openSettingsWindow   = Notification.Name("com.user.xPaste.openSettingsWindow")
@@ -32,6 +39,13 @@ extension Notification.Name {
 private class ClipboardPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// The view the bar is drawn in. The window is taller than the bar while the reveal runs, so
+    /// anything reasoning about where the top of the panel is has to ask this, not the window.
+    weak var barView: NSView?
+
+    /// Where the current press started, while it could still turn into a drag out of the panel.
+    private var pressOrigin: NSPoint?
 
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
@@ -53,10 +67,15 @@ private class ClipboardPanel: NSPanel {
                 )
                 return
             }
+            // A plain press might still become a drag out of the panel. A ⌘-press is
+            // multi-selection and a double-click pastes, so neither of those is ever a drag — both
+            // have already returned above.
+            pressOrigin = event.locationInWindow
             let loc = event.locationInWindow
+            let barTop = barView?.frame.maxY ?? frame.height
             if let hit = contentView?.hitTest(loc),
                !(hit is NSTextView),
-               loc.y < frame.height - 75 {
+               loc.y < barTop - 75 {
                 makeFirstResponder(nil)
             }
 
@@ -77,10 +96,38 @@ private class ClipboardPanel: NSPanel {
                 }
             }
 
+        case .leftMouseDragged:
+            if let origin = pressOrigin,
+               DragPaste.exceedsThreshold(from: origin, to: event.locationInWindow) {
+                pressOrigin = nil
+                // The card is found from where the press started, not from where the pointer is
+                // now: by this point it has already left the card it began on.
+                NotificationCenter.default.post(
+                    name: .dragOutOfPanel,
+                    object: nil,
+                    userInfo: ["locationInWindow": origin, "event": event]
+                )
+                return
+            }
+
+        case .leftMouseUp:
+            pressOrigin = nil
+
         default:
             break
         }
         super.sendEvent(event)
+    }
+}
+
+/// The panel's content view, deliberately larger than the bar drawn inside it.
+///
+/// It exists so the window can stay still while the bar slides, and it must never claim a click of
+/// its own: the area beside the bar is the slide's runway, and at rest it can sit over the Dock.
+private final class PanelContainerView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === self ? nil : hit
     }
 }
 
@@ -111,12 +158,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var keyMonitor: Any?
     private var previousApp: NSRunningApplication?
     private var alertIsPresented = false
-    private var frameAnimTimer: Timer?
-    /// The screen the panel was last shown on. Captured once per show so the frame, the
-    /// off-screen slide target, and the card scale are all computed against the same display.
+    /// The screen the panel was last shown on. Captured once per show so the bar's frame, the
+    /// runway it slides along, and the card scale are all computed against the same display.
     private var activeScreen: NSScreen?
     /// Fires a short while after copies stop arriving, to lay the hidden panel out ahead of time.
     private var prewarmTimer: Timer?
+    /// The SwiftUI content itself. Its frame never changes, so the reveal costs SwiftUI nothing.
+    private var panelHost: NSView?
+    /// The view the reveal animates: it carries the bar and slides along the runway inside a
+    /// stationary window. See `slideGeometry(for:)`.
+    private var panelSlider: NSView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -150,6 +201,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleAlertShown),
             name: .clipboardAlertShown, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handlePanelDragBegan),
+            name: .panelDragBegan, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handlePanelDragCancelled),
+            name: .panelDragCancelled, object: nil
         )
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleAlertHidden),
@@ -228,8 +287,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         PerfLog.end()
     }
 
-    /// Opens and closes the panel on a timer so the open path can be measured without a human
-    /// on the hotkey. Only ever runs under `XPASTE_PERF=1 XPASTE_AUTOOPEN=<n>`.
+    /// Opens and closes the panel on a timer so the open path can be measured without a human on
+    /// the hotkey. Only ever runs under `XPASTE_PERF=1 XPASTE_AUTOOPEN=<n>`; `XPASTE_DWELL=<secs>`
+    /// holds each open for longer, which is what makes synthetic clicks into the panel possible.
     private func startPerfHarnessIfRequested() {
         guard PerfLog.enabled,
               let rounds = ProcessInfo.processInfo.environment["XPASTE_AUTOOPEN"].flatMap({ Int($0) }),
@@ -255,7 +315,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                     self.showPanel()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    // How long the panel is left open. Long enough to be clicked, when the point of
+                    // the run is to check that clicks still land where they should.
+                    let dwell = ProcessInfo.processInfo.environment["XPASTE_DWELL"]
+                        .flatMap { Double($0) } ?? 1.0
+                    // `XPASTE_DRAGEND=x,y[,shift]` stands in for a drag released at that screen
+                    // point. The gesture itself cannot be synthesised — a CGEvent release does not
+                    // end a dragging session — so this is how the paste-and-select tail of the
+                    // pipeline gets verified by machine.
+                    if let spec = ProcessInfo.processInfo.environment["XPASTE_DRAGEND"] {
+                        let parts = spec.split(separator: ",").map(String.init)
+                        if parts.count >= 2, let x = Double(parts[0]), let y = Double(parts[1]) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                                PerfLog.note("simulating a drag ended at \(x),\(y)")
+                                NotificationCenter.default.post(
+                                    name: .simulateDragEnd, object: nil,
+                                    userInfo: ["screenPoint": NSPoint(x: x, y: y),
+                                               "shift": parts.count > 2 && parts[2] == "shift"]
+                                )
+                            }
+                        }
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + dwell) {
                         self.hidePanel()
                         done += 1
                         if done < rounds { cycle() } else {
@@ -429,6 +510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func setupPanel() {
         let rootView = ContentView().environmentObject(ClipboardStore.shared)
         let hostingView = NSHostingView(rootView: rootView)
+        self.panelHost = hostingView
         // The panel sizes itself from the screen, never from its content. Left at the default,
         // NSHostingView pushes SwiftUI's min/max size onto the window as size constraints, which
         // costs a full `sizeThatFits` pass over the whole tree on every layout — measured at 6%
@@ -453,7 +535,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         p.hidesOnDeactivate = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.sharingType = UserDefaults.standard.bool(forKey: "showDuringScreenSharing") ? .readOnly : .none
-        p.contentView = hostingView
+
+        // The bar is not the window's whole content any more: it rides on a slider inside a
+        // container that also covers the runway the bar travels along. That is what lets the reveal
+        // be a Core Animation translate of the slider rather than a per-frame move of the window —
+        // see `slideGeometry(for:)` for why moving the window is what made the reveal stutter.
+        let slider = NSView(frame: NSRect(origin: .zero, size: panelFrame().size))
+        slider.wantsLayer = true
+        slider.addSubview(hostingView)
+        hostingView.frame = slider.bounds
+        hostingView.autoresizingMask = [.width, .height]
+        self.panelSlider = slider
+
+        let container = PanelContainerView(frame: NSRect(origin: .zero, size: panelFrame().size))
+        container.wantsLayer = true
+        container.addSubview(slider)
+        p.contentView = container
+        p.barView = slider
         // Without this, showing the panel sends AppKit hunting for a first responder itself
         // (`_selectFirstKeyView`), and what it finds is the search field — which lives in the
         // toolbar at opacity 0 whether the search box is open or not. It then calls `selectText:`
@@ -488,12 +586,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// still flashed it on screen for a frame.
     private func renderPanelOffScreen(_ panel: NSPanel) {
         panel.alphaValue = 0
-        panel.setFrame(offscreenFrame(for: panelFrame()), display: false, animate: false)
+        // Parked in exactly the state an open expects to find: stretched over the bar and its
+        // runway, with the bar at the far end of it. Every later open then finds the window already
+        // the right size and only has to order it in — see `stretchPanel`.
+        let geo = slideGeometry(for: panelFrame())
+        stretchPanel(geo)
+        parkBarOffScreen(geo)
         panel.orderFrontRegardless()
         panel.displayIfNeeded()
         // Establish first responder here too: NSWindow remembers it across orderOut, so the
         // per-open call finds it already set and costs nothing.
-        panel.makeFirstResponder(panel.contentView)
+        panel.makeFirstResponder(panelHost)
         panel.orderOut(nil)
         panel.alphaValue = 1
     }
@@ -567,14 +670,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let scale = PanelLayout.scale(for: activeScreen)
         if ClipboardStore.shared.panelScale != scale { ClipboardStore.shared.panelScale = scale }
         let target = panelFrame()
-        let start  = offscreenFrame(for: target)
+        let geo = slideGeometry(for: target)
         PerfLog.mark("screen+frames")
 
         panelVisible = true
         addMonitors()
         PerfLog.mark("addMonitors")
 
-        panel.setFrame(start, display: false, animate: false)
+        // The window is placed once, stretched over the bar and its runway, and does not move
+        // again for the whole reveal. The bar is parked at the far end of that runway, so the
+        // window can be ordered in with nothing of it on screen yet.
+        stretchPanel(geo)
+        parkBarOffScreen(geo)
         PerfLog.mark("setFrame")
         panel.orderFrontRegardless()
         PerfLog.mark("orderFrontRegardless")
@@ -597,20 +704,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // because the responder it finds is not the one that forwards those keys. Deferring it
         // to just after the slide starts instead steals frames from the slide (measured 9-11
         // frames instead of 12-14).
-        panel.makeFirstResponder(panel.contentView)
+        panel.makeFirstResponder(panelHost)
         PerfLog.mark("makeFirstResponder")
         NotificationCenter.default.post(name: .panelDidOpen, object: nil)
         PerfLog.mark("post panelDidOpen")
 
-        // Start the slide on the NEXT runloop tick so the off-screen `start` frame is committed
-        // and painted first — otherwise the very first open can begin mid-way (from the middle).
+        // Hand the reveal over on the NEXT runloop tick, so the window's placement and the bar's
+        // parked position are committed and painted first — otherwise the very first open can
+        // begin mid-way.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.panelVisible, self.panel != nil else { return }
             // Everything between the previous mark and this one is work the main thread did on
             // its own after showPanel returned: SwiftUI's layout/render pass, chiefly.
             PerfLog.mark("runloop turn (SwiftUI layout+render)")
             PerfLog.end()
-            self.slidePanel(from: start, to: target, duration: 0.11, easeOut: true)
+            self.revealPanel(geo, hiding: false, duration: Self.revealDuration) { [weak self] in
+                // Back to exactly the bar's own frame the moment it has arrived, so the runway
+                // stops covering anything — see `PanelContainerView`.
+                self?.collapsePanelToBar(target)
+            }
             // Housekeeping that nothing on the first frame depends on. Running it here keeps it
             // out of the window between the hotkey and the panel starting to move.
             ClipboardStore.shared.targetAppName = self.previousApp?.localizedName
@@ -622,10 +734,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.post(name: .panelWillHide, object: nil)
         removeMonitors()
         panelVisible = false
-        guard let p = panel else { return }
+        guard panel != nil else { return }
 
-        let end = offscreenFrame(for: panelFrame())
-        slidePanel(from: p.frame, to: end, duration: 0.10, easeOut: false) { [weak self] in
+        // Give the runway back before animating onto it. The bar keeps its place on screen — only
+        // the window around it grows — so this is invisible.
+        let geo = slideGeometry(for: panelFrame())
+        stretchPanel(geo)
+        // On the NEXT runloop turn, for the same reason the reveal waits one: Core Animation takes an
+        // animation's starting point from what is currently *on screen*, and the staging above has
+        // not been committed to the render server yet. Animating in the same turn interpolated from
+        // the bar's old position to itself — a hide that ran for its full 100ms and moved nothing, so
+        // the panel simply vanished when the window was ordered out. Measured on the presentation
+        // layer; the model was right the whole time, which is why the idle-watch timing looked fine.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.panelVisible else { return }
+            self.animateHide(geo)
+        }
+    }
+
+    private func animateHide(_ geo: PanelLayout.PanelSlideGeometry) {
+        revealPanel(geo, hiding: true, duration: Self.hideDuration) { [weak self] in
             guard self?.panelVisible == false else { return }
             self?.panel?.orderOut(nil)
             // Panel is now off-screen and unmounted; safe to run deferred store mutations
@@ -643,45 +771,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    private func slidePanel(from start: NSRect, to end: NSRect, duration: TimeInterval,
-                            easeOut: Bool, completion: (() -> Void)? = nil) {
-        guard let p = panel else { completion?(); return }
-        frameAnimTimer?.invalidate()
-        p.setFrameOrigin(start.origin)
-        let begin = Date()
-        PerfLog.beginFrames()
-        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] t in
-            guard let self, let p = self.panel else { t.invalidate(); return }
-            PerfLog.frameTick()
-            let raw = min(1, Date().timeIntervalSince(begin) / duration)
-            let e = easeOut ? (1 - (1 - raw) * (1 - raw)) : (raw * raw)
-            let x = start.origin.x + (end.origin.x - start.origin.x) * e
-            let y = start.origin.y + (end.origin.y - start.origin.y) * e
-            PerfLog.frameWork { p.setFrameOrigin(NSPoint(x: x, y: y)) }
-            if raw >= 1 {
-                t.invalidate()
-                self.frameAnimTimer = nil
-                PerfLog.endFrames(easeOut ? "slide-in" : "slide-out")
-                completion?()
-            }
-        }
-        frameAnimTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
+    /// How long the bar takes to arrive, and to leave.
+    static let revealDuration: TimeInterval = 0.11
+    static let hideDuration: TimeInterval = 0.10
+
+    private func slideGeometry(for target: NSRect) -> PanelLayout.PanelSlideGeometry {
+        let pos = UserDefaults.standard.string(forKey: "panelPosition") ?? "bottom"
+        return PanelLayout.slideGeometry(for: target, position: pos)
     }
 
-    private func offscreenFrame(for frame: NSRect) -> NSRect {
-        let pos = UserDefaults.standard.string(forKey: "panelPosition") ?? "bottom"
-        // The panel no longer touches the screen edge, so sliding it by its own thickness
-        // would leave the edge gap's worth of it on screen — clear the gap and the shadow too.
-        let slack = PanelLayout.screenInset + 40
-        var f = frame
-        switch pos {
-        case "top":   f.origin.y = frame.maxY + slack
-        case "left":  f.origin.x = frame.minX - frame.width - slack
-        case "right": f.origin.x = frame.maxX + slack
-        default:      f.origin.y = frame.minY - frame.height - slack
+    /// Gives the window the runway back, leaving the bar exactly where it appears on screen.
+    ///
+    /// Nothing happens when the window is already stretched, which is the common case: a hide
+    /// leaves it that way, so a later open only has to park the bar. That matters twice over. The
+    /// stretched surface is over twice the bar's and ordering it in is measurably dearer, so the
+    /// open path pays for it once at launch rather than on every hotkey press; and a reveal
+    /// interrupted mid-flight by a hide must not have its bar snapped anywhere, which is exactly
+    /// what re-staging it would do.
+    private func stretchPanel(_ geo: PanelLayout.PanelSlideGeometry) {
+        guard let panel, let slider = panelSlider, panel.frame != geo.windowFrame else { return }
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        panel.setFrame(geo.windowFrame, display: false, animate: false)
+        // The window's origin moved, so the bar's offset inside it has to move with it or the bar
+        // would jump on screen by the length of the runway.
+        slider.frame = geo.barFrame
+        NSAnimationContext.endGrouping()
+    }
+
+    /// Puts the bar at the far end of the runway, where none of it is on screen. Only ever called
+    /// with the panel hidden, so there is nothing for the jump to be visible in.
+    private func parkBarOffScreen(_ geo: PanelLayout.PanelSlideGeometry) {
+        guard let slider = panelSlider else { return }
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        slider.frame = geo.displacedBarFrame
+        NSAnimationContext.endGrouping()
+    }
+
+    /// Shrinks the window back onto the bar once the bar has arrived, so the runway stops covering
+    /// what is behind it — at the bottom of the screen that includes the Dock, and a transparent
+    /// window over the Dock still swallows the click.
+    ///
+    /// The bar does not move on screen: the window's origin and the bar's offset inside it change
+    /// by the same amount, in one unanimated grouping.
+    private func collapsePanelToBar(_ target: NSRect) {
+        guard let panel, let slider = panelSlider, panelVisible else { return }
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        panel.setFrame(target, display: false, animate: false)
+        slider.frame = NSRect(origin: .zero, size: target.size)
+        NSAnimationContext.endGrouping()
+    }
+
+    /// Slides the bar along the runway — the reveal itself.
+    ///
+    /// One Core Animation on one view: the render server interpolates it at the display's own
+    /// refresh rate and the main thread does nothing at all until it finishes. That is the whole
+    /// point, so nothing here may touch the window's frame.
+    private func revealPanel(_ geo: PanelLayout.PanelSlideGeometry, hiding: Bool, duration: TimeInterval,
+                             completion: (() -> Void)?) {
+        guard let slider = panelSlider else { completion?(); return }
+        let displaced = geo.displacedBarFrame
+        PerfLog.beginIdleWatch()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            // Matches the old hand-rolled easing: out on the way in, in on the way out.
+            context.timingFunction = CAMediaTimingFunction(name: hiding ? .easeIn : .easeOut)
+            context.allowsImplicitAnimation = true
+            slider.animator().setFrameOrigin(hiding ? displaced.origin : geo.barFrame.origin)
+        } completionHandler: { [weak self] in
+            PerfLog.endIdleWatch(hiding ? "hide" : "reveal")
+            self?.revealFinished(hiding: hiding, completion: completion)
         }
-        return f
+    }
+
+    /// AppKit calls an animation's completion handler even when the animation was replaced by a
+    /// newer one, so a reveal that was interrupted by a hide (or the other way round) must not run
+    /// the finishing work of the animation that no longer applies.
+    private func revealFinished(hiding: Bool, completion: (() -> Void)?) {
+        guard hiding != panelVisible else { return }
+        completion?()
     }
 
     private func addMonitors() {
@@ -738,6 +908,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let m = keyMonitor   { NSEvent.removeMonitor(m); keyMonitor = nil }
     }
 
+    /// The panel gets out of the way for the length of a drag: it covers the strip of screen the
+    /// item may be headed for, and leaving it up afterwards means reaching for Escape every time.
+    /// Verified safe — a dragging session survives its source window being ordered out.
+    @objc private func handlePanelDragBegan() { hidePanel() }
+
+    /// Escape during a drag puts everything back, the panel included. Nothing has been written to the
+    /// pasteboard at this point: that only happens once a drag has ended in a paste.
+    @objc private func handlePanelDragCancelled() {
+        guard !panelVisible else { return }
+        showPanel()
+    }
+
     @objc private func handleAlertShown()  { alertIsPresented = true  }
     @objc private func handleAlertHidden() { alertIsPresented = false }
 
@@ -745,15 +927,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         togglePanel()
     }
 
-    @objc private func handlePasteItem() {
+    /// Pastes into the target application, optionally one the caller names.
+    ///
+    /// A keyboard paste means "the app the panel was opened in front of". A drag out of the panel
+    /// names the app it was released over instead, and asks for the pasted text to be left selected —
+    /// see `DragPaste`. Both arrive through the same notification so there is only ever one paste
+    /// path to keep working.
+    @objc private func handlePasteItem(_ note: Notification) {
         guard AccessibilityPermission.isTrusted else {
             hidePanel()
             AccessibilityPermission.requestSystemPrompt()
             AccessibilityPermission.openSystemSettings()
             return
         }
-        let target = previousApp
+        let named = (note.userInfo?["targetPID"] as? pid_t)
+            .flatMap { NSRunningApplication(processIdentifier: $0) }
+        let target = named ?? previousApp
         let targetPID = target?.processIdentifier ?? 0
+        // Only a drag asks for this: it is what leaves the pasted text selected, ready to be typed
+        // straight over.
+        let selectLength = note.userInfo?["selectLength"] as? Int
         // Slide the panel closed (down) and refocus the target app, then post ⌘V after a short
         // settle delay. The reorder-freeze that used to make this janky is fixed, so the close
         // animation stays smooth even during a paste.
@@ -771,6 +964,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             } else {
                 keyDown?.post(tap: .cghidEventTap)
                 keyUp?.post(tap: .cghidEventTap)
+            }
+            guard let selectLength, targetPID > 0 else { return }
+            // Long enough for the target to have processed the keystroke and moved its caret; the
+            // selection is read back from wherever that ended up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) {
+                AXTextSelection.selectPastedText(pid: targetPID, length: selectLength)
             }
         }
     }
@@ -881,6 +1080,72 @@ enum PanelLayout {
     static let screenInset: CGFloat = 8
     /// Corner radius of the floating panel (window mask and SwiftUI clip must agree).
     static let cornerRadius: CGFloat = 20
+
+    /// Where the panel's window sits while the bar is travelling, and how far the bar is displaced
+    /// at the start of that journey.
+    ///
+    /// The window is stretched to cover the bar *and* the runway it slides along, so the whole
+    /// reveal is a Core Animation translate of one view inside a window that never moves.
+    ///
+    /// Moving the window instead is what made the reveal stutter, and it was measured rather than
+    /// guessed: `sample` put 246 of 265 samples taken inside each per-frame `setFrameOrigin` in
+    /// `-[NSWMWindowCoordinator clearDisplayAffinityForWindow:]` -> `entanglingFenceHandle` ->
+    /// `+[CAFenceHandle newFenceFromDefaultServer]` -> `mach_msg`, a synchronous round trip to the
+    /// window server on every single frame. With a behind-window glass backdrop to resample, and a
+    /// window that starts on no display at all, several of those blocked 10-25ms each and the bar
+    /// visibly hitched. Pacing them better is not available either: a `CADisplayLink` taken from the
+    /// panel never fires while the panel is off-screen, so there is no vsync to lock to.
+    struct PanelSlideGeometry: Equatable {
+        /// The stretched window frame: the bar plus its runway.
+        let windowFrame: NSRect
+        /// Where the bar rests inside that window, in the container's coordinates.
+        let barFrame: NSRect
+        /// How far the bar is displaced from `barFrame` when it has not arrived yet.
+        let offset: CGSize
+
+        /// Where the bar sits before it has arrived.
+        var displacedBarFrame: NSRect {
+            barFrame.offsetBy(dx: offset.width, dy: offset.height)
+        }
+    }
+
+    /// How far past its own edge the bar travels, on top of its thickness: the gap it floats above
+    /// the screen edge, plus enough to take its shadow with it. The bar used to be moved this far as
+    /// a window, so keeping the number identical keeps the reveal looking exactly as it did.
+    static let slideSlack: CGFloat = screenInset + 40
+
+    static func slideGeometry(for target: NSRect, position: String) -> PanelSlideGeometry {
+        switch position {
+        case "top":
+            let travel = target.height + slideSlack
+            return PanelSlideGeometry(
+                windowFrame: NSRect(x: target.minX, y: target.minY,
+                                    width: target.width, height: target.height + travel),
+                barFrame: NSRect(x: 0, y: 0, width: target.width, height: target.height),
+                offset: CGSize(width: 0, height: travel))
+        case "left":
+            let travel = target.width + slideSlack
+            return PanelSlideGeometry(
+                windowFrame: NSRect(x: target.minX - travel, y: target.minY,
+                                    width: target.width + travel, height: target.height),
+                barFrame: NSRect(x: travel, y: 0, width: target.width, height: target.height),
+                offset: CGSize(width: -travel, height: 0))
+        case "right":
+            let travel = target.width + slideSlack
+            return PanelSlideGeometry(
+                windowFrame: NSRect(x: target.minX, y: target.minY,
+                                    width: target.width + travel, height: target.height),
+                barFrame: NSRect(x: 0, y: 0, width: target.width, height: target.height),
+                offset: CGSize(width: travel, height: 0))
+        default:
+            let travel = target.height + slideSlack
+            return PanelSlideGeometry(
+                windowFrame: NSRect(x: target.minX, y: target.minY - travel,
+                                    width: target.width, height: target.height + travel),
+                barFrame: NSRect(x: 0, y: travel, width: target.width, height: target.height),
+                offset: CGSize(width: 0, height: -travel))
+        }
+    }
 
     static func scale(for screen: NSScreen?) -> CGFloat {
         guard let screen else { return 1 }
