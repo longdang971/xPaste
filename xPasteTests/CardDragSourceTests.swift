@@ -72,11 +72,34 @@ final class CardDragSourceTests: XCTestCase {
     /// tests handed `snapshot` a plain `NSView` with a background colour set on its layer, which
     /// passed while the shipping app produced a completely transparent drag image, because SwiftUI
     /// draws a whole panel into the hosting view's layer and leaves the layers in between empty.
+    /// Parked far off any display.
+    ///
+    /// `orderBack` below is what makes SwiftUI build a display list for the layer — with no window
+    /// ordered in, `snapshot` renders nothing and these tests fail for the wrong reason. But an
+    /// ordered-in window at the origin is a real window in the bottom-left corner of the screen,
+    /// and what these host is `Color.red`: running the suite put red squares on the desktop, the
+    /// largest of them a 232pt one, for as long as the test host lived. Off-screen it still draws.
+    private static let parkingSpot = NSPoint(x: -30_000, y: -30_000)
+
+    /// Every window `hostedOverlay` made, torn down after each test. AppKit retains an ordered-in
+    /// window, so without this they pile up for the length of the run.
+    private var hostWindows: [NSWindow] = []
+
+    override func tearDown() {
+        hostWindows.forEach { $0.close() }
+        hostWindows.removeAll()
+        super.tearDown()
+    }
+
     private func hostedOverlay<Content: View>(_ content: Content,
                                               size: NSSize,
                                               overlayFrame: NSRect? = nil) -> NSView {
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+        let window = NSWindow(contentRect: NSRect(origin: Self.parkingSpot, size: size),
                               styleMask: [.borderless], backing: .buffered, defer: false)
+        // Closing is this class's job (see `tearDown`), not AppKit's — released on close, the
+        // window would go away underneath the overlay the caller is still holding.
+        window.isReleasedWhenClosed = false
+        hostWindows.append(window)
         let host = NSHostingView(rootView: content.frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
         window.contentView = host

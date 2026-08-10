@@ -743,7 +743,10 @@ private struct IgnoredAppsList: View {
             let name = url.map {
                 FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "")
             } ?? bid
-            let icon = url.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSImage()
+            // A copy, because `icon(forFile:)` hands back a shared, cached image: resizing that one
+            // resizes it for everything else that asks LaunchServices for the same app's icon.
+            let icon = url.flatMap { NSWorkspace.shared.icon(forFile: $0.path).copy() as? NSImage }
+                ?? NSImage()
             icon.size = NSSize(width: 20, height: 20)
             return IgnoredAppInfo(bundleID: bid, name: name, icon: icon)
         }

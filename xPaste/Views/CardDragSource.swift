@@ -45,6 +45,7 @@ final class CardDragSourceView: NSView, NSDraggingSource {
 
     deinit {
         if let observer { NotificationCenter.default.removeObserver(observer) }
+        endEscapeWatch()
     }
 
     /// Claims nothing: the card underneath keeps its click, double-click and ⌘-click handling. The
@@ -123,11 +124,28 @@ final class CardDragSourceView: NSView, NSDraggingSource {
     private var escapePressed = false
     private var escapeMonitor: Any?
 
-    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+    /// Starts watching for the Escape that cancels this drag.
+    ///
+    /// Paired with `endEscapeWatch`, which every path out of a drag has to run. A global monitor
+    /// is not tied to the view that installed it: left behind, it keeps receiving every keystroke
+    /// typed anywhere on the machine for the rest of the session, and one more is installed by
+    /// every drag after it.
+    private func beginEscapeWatch() {
+        endEscapeWatch()
         escapePressed = false
         escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.escapePressed = true }
         }
+    }
+
+    private func endEscapeWatch() {
+        guard let escapeMonitor else { return }
+        NSEvent.removeMonitor(escapeMonitor)
+        self.escapeMonitor = nil
+    }
+
+    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        beginEscapeWatch()
         // A deferred paste is refused by every application on purpose, so AppKit treats every one of
         // these drags as failed and, by default, animates the image back to where it started before
         // ending the session. `endedAt` — and therefore the paste — waited on that animation:
@@ -138,6 +156,8 @@ final class CardDragSourceView: NSView, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
+        // Before the guard: the session is over either way, and a watch left running outlives it.
+        defer { endEscapeWatch() }
         guard let plan = draggingPlan else { return }
         draggingPlan = nil
         // A cancelled drag and a drop nobody accepted both arrive with an empty operation, so

@@ -878,15 +878,7 @@ struct ContentView: View {
             separator: .stored()
         ) else { return }
 
-        ClipboardMonitor.shared.markNextChangeAsOwn()
-        switch content {
-        case let .item(item):
-            item.write(to: .general)
-        case let .plain(text):
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            pb.setString(text, forType: .string)
-        }
+        DragPaste.deliver(content)
 
         var info: [String: Any] = [:]
         // The release point names the application; failing that, the app the panel was opened in

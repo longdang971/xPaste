@@ -97,6 +97,25 @@ enum DragPaste {
         return .item(first)
     }
 
+    /// Puts what the release decided on the pasteboard, and claims the change as xPaste's own.
+    ///
+    /// Claiming goes through the monitor rather than being written out here, because it has to
+    /// happen *after* the write — see `ClipboardMonitor.writeOwned`. Done the other way round, the
+    /// monitor picked the pasted text straight back up as a fresh copy: filed under the
+    /// application the card had just been dropped into, and, since that capture replaces the item
+    /// it matches, taking the original's name with it.
+    static func deliver(_ content: PasteContent, using monitor: ClipboardMonitor = .shared) {
+        monitor.writeOwned { pb in
+            switch content {
+            case let .item(item):
+                item.write(to: pb)
+            case let .plain(text):
+                pb.clearContents()
+                pb.setString(text, forType: .string)
+            }
+        }
+    }
+
     /// How many UTF-16 units the paste will insert, or nil when what lands is not text and so has no
     /// range to select. UTF-16 because that is the unit Accessibility text ranges are measured in;
     /// counting characters would select too little of anything outside the basic plane.

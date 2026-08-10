@@ -160,4 +160,38 @@ final class DragPasteTests: XCTestCase {
         XCTAssertNil(DragPaste.selectableLength(of: .item(image())))
         XCTAssertNil(DragPaste.selectableLength(of: .item(file())))
     }
+
+    // MARK: - Handing the content over
+
+    /// A pasteboard of its own, so these never touch what the user has copied.
+    private func scratchBoard(_ name: String) -> NSPasteboard {
+        let pb = NSPasteboard(name: NSPasteboard.Name("xPasteTests.drag.\(name)"))
+        pb.clearContents()
+        return pb
+    }
+
+    /// The release has to leave the change claimed as xPaste's own. Unclaimed, the monitor picks
+    /// the pasted text straight back up as a fresh copy — filed under whichever application the
+    /// card was dropped into, and, because that capture replaces the item it came from, without
+    /// the name the original carried.
+    func testDeliveringADragClaimsTheChangeItMade() {
+        let pb = scratchBoard("plain")
+        let monitor = ClipboardMonitor(pasteboard: pb)
+
+        DragPaste.deliver(.plain("dragged text"), using: monitor)
+
+        XCTAssertTrue(monitor.ownsCurrentChange)
+        XCTAssertEqual(pb.string(forType: .string), "dragged text")
+    }
+
+    /// The same for an item delivered whole, which is the path that keeps its formatting.
+    func testDeliveringAnItemClaimsTheChangeItMade() {
+        let pb = scratchBoard("item")
+        let monitor = ClipboardMonitor(pasteboard: pb)
+
+        DragPaste.deliver(.item(text("hello")), using: monitor)
+
+        XCTAssertTrue(monitor.ownsCurrentChange)
+        XCTAssertEqual(pb.string(forType: .string), "hello")
+    }
 }
