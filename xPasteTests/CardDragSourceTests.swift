@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import xPaste
 
 /// The two pieces of the drag session that can be checked without a session: what each item looks
@@ -66,63 +67,135 @@ final class CardDragSourceTests: XCTestCase {
 
     // MARK: - The drag image
 
-    /// Builds a real layer-backed view in a real window, because that is the only thing
-    /// `layer.render(in:)` has anything to say about.
-    private func hostedView(color: NSColor, size: NSSize) -> NSView {
+    /// Builds the real thing: an `NSHostingView` with SwiftUI content, and a plain view inside it
+    /// standing in for the card's overlay. Nothing less is a fair test — the first version of these
+    /// tests handed `snapshot` a plain `NSView` with a background colour set on its layer, which
+    /// passed while the shipping app produced a completely transparent drag image, because SwiftUI
+    /// draws a whole panel into the hosting view's layer and leaves the layers in between empty.
+    private func hostedOverlay<Content: View>(_ content: Content,
+                                              size: NSSize,
+                                              overlayFrame: NSRect? = nil) -> NSView {
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.borderless], backing: .buffered, defer: false)
-        let view = NSView(frame: NSRect(origin: .zero, size: size))
-        view.wantsLayer = true
-        view.layer?.backgroundColor = color.cgColor
-        window.contentView = view
+        let host = NSHostingView(rootView: content.frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        window.contentView = host
+        // An intermediate view, because that is what production has: SwiftUI wraps the overlay in
+        // its own containers, and their layers are the empty ones. Without this the overlay's
+        // superview would be the hosting view itself and the test would pass against the very bug it
+        // is here to catch.
+        let middle = NSView(frame: NSRect(origin: .zero, size: size))
+        host.addSubview(middle)
+        let overlay = NSView(frame: overlayFrame ?? NSRect(origin: .zero, size: size))
+        middle.addSubview(overlay)
         window.orderBack(nil)
-        view.layoutSubtreeIfNeeded()
-        view.displayIfNeeded()
-        return view
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+        return overlay
+    }
+
+    private func bitmap(_ image: NSImage?) -> NSBitmapImageRep? {
+        guard let tiff = image?.tiffRepresentation else { return nil }
+        return NSBitmapImageRep(data: tiff)
     }
 
     func testTheDragImageIsTheSizeOfTheCard() {
-        let view = hostedView(color: .red, size: NSSize(width: 60, height: 40))
-        let image = CardDragSourceView.snapshot(of: view, badge: 1)
-        XCTAssertEqual(image?.size, NSSize(width: 60, height: 40))
+        let overlay = hostedOverlay(Color.red, size: NSSize(width: 60, height: 40))
+        XCTAssertEqual(CardDragSourceView.snapshot(of: overlay, badge: 1)?.size,
+                       NSSize(width: 60, height: 40))
     }
 
-    /// The point of the test: an empty render is the failure mode, so look at the pixels.
-    func testTheDragImageActuallyHasTheCardInIt() {
-        let view = hostedView(color: .red, size: NSSize(width: 60, height: 40))
-        guard let image = CardDragSourceView.snapshot(of: view, badge: 1),
-              let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let centre = rep.colorAt(x: rep.pixelsWide / 2, y: rep.pixelsHigh / 2)
+    /// The failure this test exists for: an empty render. A drag whose image is transparent shows the
+    /// user nothing but their pointer, and they cannot tell they are dragging at all.
+    func testTheDragImageIsNotTransparent() {
+        let overlay = hostedOverlay(Color.red, size: NSSize(width: 60, height: 40))
+        guard let rep = bitmap(CardDragSourceView.snapshot(of: overlay, badge: 1))
         else { return XCTFail("no drag image") }
-        let red = centre.usingColorSpace(.deviceRGB)
-        XCTAssertEqual(red?.redComponent ?? 0, 1, accuracy: 0.05, "the card must be in the picture")
-        XCTAssertLessThan(red?.blueComponent ?? 1, 0.2)
+        let opaque = (0..<rep.pixelsWide).filter {
+            (rep.colorAt(x: $0, y: rep.pixelsHigh / 2)?.alphaComponent ?? 0) > 0.05
+        }
+        XCTAssertEqual(opaque.count, rep.pixelsWide,
+                       "every pixel across the middle should be painted")
+    }
+
+    /// The other failure this exists for: `layer.render(in:)` draws into Core Graphics' upward-y space
+    /// while the panel is laid out downward-y, so without a mirror the card arrives upside down —
+    /// header at the bottom, text inverted.
+    func testTheDragImageIsNotUpsideDown() {
+        let content = VStack(spacing: 0) { Color.red; Color.blue }
+        let overlay = hostedOverlay(content, size: NSSize(width: 40, height: 40))
+        guard let rep = bitmap(CardDragSourceView.snapshot(of: overlay, badge: 1))
+        else { return XCTFail("no drag image") }
+        // Row 0 of a bitmap rep is the top of the picture, which is where the red half belongs.
+        let top = rep.colorAt(x: rep.pixelsWide / 2, y: 2)?.usingColorSpace(.deviceRGB)
+        let bottom = rep.colorAt(x: rep.pixelsWide / 2,
+                                 y: rep.pixelsHigh - 3)?.usingColorSpace(.deviceRGB)
+        XCTAssertGreaterThan(top?.redComponent ?? 0, 0.5, "the top of the card must stay on top")
+        XCTAssertGreaterThan(bottom?.blueComponent ?? 0, 0.5, "the bottom must stay at the bottom")
+    }
+
+    /// Only the card is dragged, not the whole panel: the crop has to follow the overlay's frame.
+    ///
+    /// The frames below are in the intermediate view's coordinates, which are unflipped — y grows
+    /// upward — while the hosting view above it is flipped. So y == 20 is the *upper* half of a
+    /// 40-point host, which is where the red half of the content is.
+    func testTheDragImageIsCroppedToTheOverlay() {
+        let content = VStack(spacing: 0) { Color.red; Color.blue }
+        let upper = hostedOverlay(content, size: NSSize(width: 40, height: 40),
+                                  overlayFrame: NSRect(x: 0, y: 20, width: 40, height: 20))
+        guard let rep = bitmap(CardDragSourceView.snapshot(of: upper, badge: 1))
+        else { return XCTFail("no drag image") }
+        XCTAssertEqual(rep.size.height, 20, "the picture is the overlay's size, not the panel's")
+        let colour = rep.colorAt(x: rep.pixelsWide / 2,
+                                y: rep.pixelsHigh / 2)?.usingColorSpace(.deviceRGB)
+        XCTAssertGreaterThan(colour?.redComponent ?? 0, 0.5,
+                             "cropping to the upper half must give the red half")
+        XCTAssertLessThan(colour?.blueComponent ?? 1, 0.4)
+    }
+
+    func testCroppingTheOtherHalfGivesTheOtherColour() {
+        let content = VStack(spacing: 0) { Color.red; Color.blue }
+        let lower = hostedOverlay(content, size: NSSize(width: 40, height: 40),
+                                  overlayFrame: NSRect(x: 0, y: 0, width: 40, height: 20))
+        guard let rep = bitmap(CardDragSourceView.snapshot(of: lower, badge: 1))
+        else { return XCTFail("no drag image") }
+        let colour = rep.colorAt(x: rep.pixelsWide / 2,
+                                y: rep.pixelsHigh / 2)?.usingColorSpace(.deviceRGB)
+        XCTAssertGreaterThan(colour?.blueComponent ?? 0, 0.5,
+                             "cropping to the lower half must give the blue half")
     }
 
     func testAViewWithNoSizeHasNoDragImage() {
-        let view = hostedView(color: .red, size: NSSize(width: 0, height: 0))
-        XCTAssertNil(CardDragSourceView.snapshot(of: view, badge: 1))
+        let overlay = hostedOverlay(Color.red, size: NSSize(width: 40, height: 40),
+                                    overlayFrame: .zero)
+        XCTAssertNil(CardDragSourceView.snapshot(of: overlay, badge: 1))
     }
 
     func testThereIsNoDragImageWithoutAView() {
         XCTAssertNil(CardDragSourceView.snapshot(of: nil, badge: 1))
     }
 
+    /// A view that is not inside a hosting view has no SwiftUI content to render, and must say so
+    /// rather than hand back an empty picture.
+    func testAViewOutsideAHostingViewHasNoDragImage() {
+        let loose = NSView(frame: NSRect(x: 0, y: 0, width: 40, height: 40))
+        loose.wantsLayer = true
+        XCTAssertNil(CardDragSourceView.snapshot(of: loose, badge: 1))
+    }
+
     /// Dragging a group draws the count on the picture, so it is obvious more than one card is
-    /// travelling. The badge sits in the top-right corner.
+    /// travelling.
     func testAGroupGetsACountDrawnOnIt() {
-        let view = hostedView(color: .red, size: NSSize(width: 60, height: 40))
-        guard let plain = CardDragSourceView.snapshot(of: view, badge: 1),
-              let badged = CardDragSourceView.snapshot(of: view, badge: 3),
-              let plainRep = NSBitmapImageRep(data: plain.tiffRepresentation!),
-              let badgedRep = NSBitmapImageRep(data: badged.tiffRepresentation!)
+        let overlay = hostedOverlay(Color.red, size: NSSize(width: 60, height: 40))
+        guard let plain = bitmap(CardDragSourceView.snapshot(of: overlay, badge: 1)),
+              let badgedImage = CardDragSourceView.snapshot(of: overlay, badge: 3),
+              let badged = bitmap(badgedImage)
         else { return XCTFail("no drag image") }
-        XCTAssertEqual(badged.size, plain.size, "the badge must not resize the picture")
-        // The badge is drawn near the top-right; in a bitmap rep row 0 is the top.
-        let x = badgedRep.pixelsWide - 20, y = 20
-        XCTAssertNotEqual(badgedRep.colorAt(x: x, y: y)?.redComponent,
-                          plainRep.colorAt(x: x, y: y)?.redComponent,
+        XCTAssertEqual(badgedImage.size, NSSize(width: 60, height: 40),
+                       "the badge must not resize the picture")
+        let x = badged.pixelsWide - 20, y = 20
+        XCTAssertNotEqual(badged.colorAt(x: x, y: y)?.redComponent,
+                          plain.colorAt(x: x, y: y)?.redComponent,
                           "the corner should have changed where the badge lands")
     }
 }

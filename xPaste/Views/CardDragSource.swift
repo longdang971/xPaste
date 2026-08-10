@@ -113,6 +113,15 @@ final class CardDragSourceView: NSView, NSDraggingSource {
         [.copy, .generic]
     }
 
+    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        // A deferred paste is refused by every application on purpose, so AppKit treats every one of
+        // these drags as failed and, by default, animates the image back to where it started before
+        // ending the session. `endedAt` — and therefore the paste — waited on that animation:
+        // measured at over a second from release to text appearing. Nothing should fly back here;
+        // releasing is the gesture succeeding, not failing.
+        session.animatesToStartingPositionsOnCancelOrFail = false
+    }
+
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
         guard let plan = draggingPlan else { return }
@@ -155,25 +164,51 @@ final class CardDragSourceView: NSView, NSDraggingSource {
 
     /// A picture of the card, so what is being dragged looks like what was pressed on.
     ///
-    /// Rendered from the layer rather than with `cacheDisplay`: the card is SwiftUI's, drawn into a
-    /// layer tree, and `cacheDisplay` comes back empty for those.
-    static func snapshot(of view: NSView?, badge count: Int) -> NSImage? {
-        guard let view, let layer = view.layer,
-              view.bounds.width > 1, view.bounds.height > 1 else { return nil }
-        let scale = view.window?.backingScaleFactor ?? 2
+    /// Rendered from the enclosing hosting view and then cropped to the card, not from the card's own
+    /// superview. SwiftUI draws a whole panel into one backing layer, so the layer of any view in
+    /// between is empty — rendering it produced a correctly-sized, completely transparent image
+    /// (measured: 0 of 464 pixels on the middle row had any alpha), which is why a drag showed
+    /// nothing but the pointer.
+    static func snapshot(of overlay: NSView?, badge count: Int) -> NSImage? {
+        guard let overlay, overlay.bounds.width > 1, overlay.bounds.height > 1,
+              let host = hostingAncestor(of: overlay), let hostLayer = host.layer
+        else { return nil }
+
+        let scale = overlay.window?.backingScaleFactor ?? 2
+        let card = overlay.convert(overlay.bounds, to: host)
         guard let ctx = CGContext(data: nil,
-                                  width: Int(view.bounds.width * scale),
-                                  height: Int(view.bounds.height * scale),
+                                  width: Int((card.width * scale).rounded()),
+                                  height: Int((card.height * scale).rounded()),
                                   bitsPerComponent: 8, bytesPerRow: 0,
                                   space: CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)
         else { return nil }
         ctx.scaleBy(x: scale, y: scale)
-        layer.render(in: ctx)
+        // `render(in:)` draws into Core Graphics' upward-y space while the panel was laid out
+        // downward-y, so the card arrives upside down — mirror the crop back.
+        ctx.translateBy(x: 0, y: card.height)
+        ctx.scaleBy(x: 1, y: -1)
+        // The layer draws from its own origin, so the card is brought into frame by shifting the
+        // context. The vertical shift is measured from whichever edge the host counts from, which is
+        // what `isFlipped` decides.
+        let dy = host.isFlipped ? card.minY : host.bounds.height - card.maxY
+        ctx.translateBy(x: -card.minX, y: -dy)
+        hostLayer.render(in: ctx)
+
         guard let cg = ctx.makeImage() else { return nil }
-        let image = NSImage(cgImage: cg, size: view.bounds.size)
+        let image = NSImage(cgImage: cg, size: card.size)
         guard count > 1 else { return image }
         return withBadge(count, on: image)
+    }
+
+    /// The `NSHostingView` this view is inside, which is the one holding SwiftUI's drawn content.
+    private static func hostingAncestor(of view: NSView) -> NSView? {
+        var candidate: NSView? = view
+        while let current = candidate {
+            if String(describing: type(of: current)).hasPrefix("NSHostingView") { return current }
+            candidate = current.superview
+        }
+        return nil
     }
 
     /// How many cards are travelling, drawn into the corner of the drag image.
