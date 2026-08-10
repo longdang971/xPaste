@@ -740,6 +740,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // the window around it grows — so this is invisible.
         let geo = slideGeometry(for: panelFrame())
         stretchPanel(geo)
+        // On the NEXT runloop turn, for the same reason the reveal waits one: Core Animation takes an
+        // animation's starting point from what is currently *on screen*, and the staging above has
+        // not been committed to the render server yet. Animating in the same turn interpolated from
+        // the bar's old position to itself — a hide that ran for its full 100ms and moved nothing, so
+        // the panel simply vanished when the window was ordered out. Measured on the presentation
+        // layer; the model was right the whole time, which is why the idle-watch timing looked fine.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.panelVisible else { return }
+            self.animateHide(geo)
+        }
+    }
+
+    private func animateHide(_ geo: PanelLayout.PanelSlideGeometry) {
         revealPanel(geo, hiding: true, duration: Self.hideDuration) { [weak self] in
             guard self?.panelVisible == false else { return }
             self?.panel?.orderOut(nil)
