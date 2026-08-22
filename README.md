@@ -1,123 +1,99 @@
 # xPaste
 
-A fast, lightweight clipboard manager for macOS. xPaste runs in your menu bar and keeps a searchable history of everything you copy. Retrieve any item with a single keyboard shortcut and paste it instantly.
+**A clipboard manager for macOS that pastes, not just remembers.** xPaste lives in the menu bar, keeps a searchable history of everything you copy, and puts any of it back into the app you're working in with one keystroke — or one drag.
 
-**Built with SwiftUI + AppKit** • macOS 13.0+ • No App Sandbox
+[![Latest release](https://img.shields.io/github/v/release/longdang971/xPaste?label=Download&style=for-the-badge)](../../releases/latest)
 
----
-
-## Features
-
-### Core Functionality
-- **Clipboard History** — Automatically captures and stores everything you copy
-- **Global Shortcut** — Press **Shift ⌘ V** (customizable) to open the panel
-- **Smart Classification** — Recognizes Text, Links, Images, Files, Folders, and Colors
-- **Drag & Drop** — Drag items from history into Finder, Mail, or any editor
-- **Pin & Organize** — Pin frequently used items for quick access
-
-### Smart Content Handling
-- **Links** — Live preview with title, image, and favicon
-- **Images** — Full preview of screenshots and bitmaps; stored locally
-- **Files & Folders** — Auto-detected and distinguishable; drop as real files or paths
-- **Colors** — Recognizes hex, rgb(), and hsl() strings; displays as swatches
-- **Formatting** — RTF/HTML formatting preserved; plain-text fallback always available
-
-### Search & Filter
-- **Search** — Find items by text, type (`text:`, `link:`, `img:`, `file:`, `folder:`), app, or date
-- **Filters** — Filter by Type, App, or Date range (Today, This week, Last 30 days, etc.)
-- **OCR** — Search text inside screenshots automatically
-- **Smart Tokens** — Active filters appear as tokens in the search bar; click to remove
-
-### Paste Options
-- **Paste As** — Customize on paste: trimmed, single-line, uppercase/lowercase, JSON-pretty/minified, URL-encoded, or domain-only
-- **Batch Paste** — Command-click multiple items and press Enter to paste together with a custom separator
-- **Path Paste** — Files/folders paste as both the real file AND the plain-text path
-
-### Editing & Management
-- **Rename Items** — Double-click a title to rename it; custom names are searchable
-- **Edit Content** — Edit text and links inline; formatting is preserved
-- **Save as File** — Export any item to disk with auto-detected file extension (`.py`, `.json`, `.swift`, etc.); links save as HTML
-- **Privacy Controls** — Skip confidential content, transient data, or specific apps; define never-save text patterns
-
-### Settings
-- **General** — Launch at login, show/hide menu bar icon
-- **Shortcuts** — Customize global hotkey
-- **History** — Set retention limit, clear on logout
-- **Clipboard** — Adjust scan rate, enable plain-text mode, toggle OCR, set multi-paste separator
-- **Appearance** — Light/Dark/System theme, panel position, link preview toggle
-- **Privacy** — Screen-sharing mode, ignore list, never-save patterns, confidential-content detection
-
-### Updates
-- **Manual Check** — Check for new releases on GitHub and install in-place with a single click
+**SwiftUI + AppKit** • macOS 13 (Ventura)+ • No App Sandbox
 
 ---
 
-## Requirements
+## Highlights
 
-- **macOS 13.0** (Ventura) or later
-- **Accessibility Permission** — Required to paste into other apps  
-  Grant via: System Settings → Privacy & Security → Accessibility
+### ⌨️ Recall in one keystroke
+
+Press **⌘⇧V** (rebindable) and the panel slides in over whatever you're doing. **⌘1–⌘9** pastes the card carrying that number, **⌘⇧1–⌘⇧9** pastes it as plain text, **Esc** dismisses. The panel can sit at the top, bottom, left, or right of the screen, and the menu bar icon is optional — the hotkey works either way.
+
+### 🫳 Drag a card out and it's a real paste
+
+Dragging text or a link out of the panel doesn't drop it — it **pastes** it: xPaste activates the app under the pointer, sends a genuine ⌘V, and re-selects what it just inserted through Accessibility. That means it replaces your current selection, which a drop can never do. Images, files, and folders keep a real drag-and-drop, so they still land in Finder or a web upload zone. Hold **⇧** on release to paste as plain text; the clipboard is only written after the drag ends, so cancelling with Esc leaves it untouched.
+
+### 📋 Everything you copy, sorted out for you
+
+Text, links, images, files, folders, and color literals (hex / rgb() / hsl(), shown as swatches) are recognized on capture, along with the app they came from. RTF/HTML formatting is preserved and rendered on the card, with a plain-text path always available.
+
+### 🔍 Search that reaches inside
+
+Free text plus type tokens — `img:`, `link:`, `text:`, `file:`, `folder:` — and `app:safari` to narrow by source. The filter popover adds type, app, and date-range filters as removable tokens. **Screenshots are OCR'd in the background**, so you can find an image by a word written inside it.
+
+### ✂️ Paste As
+
+Paste an item transformed instead of verbatim: **Trimmed, Single Line, UPPERCASE, lowercase, Capitalized, Pretty JSON, Minified JSON, URL Encoded, URL Decoded, Domain Only**. ⌘-click several cards and press **↩** to paste them together, joined by a separator you choose.
+
+### ✏️ Edit, rename, save
+
+**Space** opens a full preview; the pencil (or **Edit…**) fixes the content in place — a typo in a snippet, a stale token in a command. Double-click a card's title to **rename** it, and custom names are searchable. **⌘S** saves an item to disk through a Save dialog, with the extension inferred from the content itself (`.py`, `.json`, `.swift`, `.png`…); a link can be saved as the page it points to.
+
+### 📌 Pins, retention, privacy
+
+Pin what you reuse into its own tab. Keep history for a **day, week, month, year, or forever**, with a stored-item cap of 500–3000 and a one-click erase. xPaste skips content marked confidential or transient, honours a per-app ignore list and your own never-save text patterns, and can hide itself from screen sharing.
+
+### ⬆️ Updates from inside the app
+
+**Check for Updates…** asks GitHub whether there's a newer build, shows the release notes rendered as markdown, then downloads, installs, and relaunches. It only runs when you click it, and a downloaded package that isn't xPaste is rejected rather than installed.
 
 ---
 
-## Installation
+## Install
 
-1. **Build the app:**
+1. Download the latest `xPaste-*.zip` from **[Releases](../../releases/latest)**, unzip it, and drag **xPaste** into **Applications**.
+2. Launch it and grant **Accessibility** permission when prompted — pasting into other apps needs it.
+   *System Settings → Privacy & Security → Accessibility*
+3. If macOS refuses to open the app (it's signed locally, not notarized), right-click → **Open**, or run:
+
    ```bash
-   brew install xcodegen
-   xcodegen generate
-   xcodebuild -scheme xPaste -configuration Release -derivedDataPath build clean build
+   xattr -cr /Applications/xPaste.app
    ```
 
-2. **Install:**
-   ```bash
-   cp -R build/Build/Products/Release/xPaste.app /Applications/
-   open /Applications/xPaste.app
-   ```
-
-3. **Grant Accessibility permission** when prompted (or re-grant if it resets after replacement)
+Updates keep the same code signature, so the Accessibility grant is not reset.
 
 ---
 
-## Development
+## Build from source
 
-**Generate Xcode project from `project.yml`:**
 ```bash
 brew install xcodegen
 xcodegen generate
-open xPaste.xcodeproj
+
+./setup-signing-cert.sh   # once — creates the stable self-signed identity
+./build-release.sh        # build, sign, install into /Applications
 ```
 
-**Run tests:**
+Signing with the same identity every time keeps the app's designated requirement constant, which is what stops macOS from revoking the Accessibility permission on each rebuild.
+
 ```bash
 xcodebuild test -scheme xPaste -destination 'platform=macOS'
 ```
 
 ---
 
-## How It Works
+## How it works
 
-- Polls the system pasteboard at regular intervals (configurable, default 100 ms)
-- Classifies new items (text, link, image, file, color, etc.)
-- Stores clipboard locally; images cached to disk
-- Global hotkey (Carbon) opens the panel
-- Selecting an item copies it to pasteboard and simulates Cmd V into the active app
-- Runs **without App Sandbox** for full clipboard access and inter-app pasting
-
----
-
-## Project Structure
+- Polls the system pasteboard (scan rate is configurable) and classifies each new item.
+- History and settings live locally; image bytes are cached to disk and pruned with the history.
+- The global hotkey is a Carbon hot key, so it fires no matter which app is frontmost.
+- Pasting copies the item to the pasteboard and synthesizes ⌘V into the active app; a deferred drag carries a private pasteboard type no app accepts, which is what lets the release become a paste.
+- Runs **without the App Sandbox** — full pasteboard access and cross-app pasting need it.
 
 ```
 xPaste/
-├── App/           AppDelegate, entry point, menu bar, hotkey
-├── Models/        ClipboardItem, ClipboardStore (history & persistence)
-├── Services/      ClipboardMonitor, LinkPreviewService, AccessibilityPermission
-├── Views/         ContentView (panel), Cards, Preview, Settings UI
-├── Extensions/    Image compression, visual effects, date formatting
-└── xPasteTests/   Unit tests
+├── App/          AppDelegate, panel window, hotkey, updates
+├── Models/       ClipboardItem, ClipboardStore, search & filters
+├── Services/     Monitor, OCR, link previews, drag-paste, save formats
+├── Views/        Panel, cards, preview, settings, onboarding
+└── xPasteTests/  Unit tests
 ```
 
 ---
 
-**© LQ Team** • Private Project
+**© LQ Team**
