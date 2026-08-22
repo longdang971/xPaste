@@ -1221,7 +1221,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.isReleasedWhenClosed = false
             window.title = "Software Update"
             window.styleMask = [.titled, .closable]
-            window.setContentSize(NSSize(width: 560, height: 300))
+            // Tall enough for the whole layout at once: 64pt of header, the notes box at its
+            // 200pt minimum, and the download row underneath. At 560×300 the content did not fit,
+            // so the bottom padding was squeezed out and the byte counters ended up flush against
+            // the window's bottom edge while the release notes were clipped.
+            window.setContentSize(NSSize(width: 640, height: 470))
             window.center()
             updateWindow = window
         }

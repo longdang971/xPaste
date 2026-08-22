@@ -21,7 +21,7 @@ struct UpdateWindowView: View {
             header
             if showsNotes && !blocks.isEmpty {
                 ReleaseNotesView(blocks: blocks)
-                    .frame(minHeight: 160)
+                    .frame(minHeight: 200)
             } else {
                 Spacer(minLength: 0)
             }

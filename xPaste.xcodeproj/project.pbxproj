@@ -30,6 +30,7 @@
 		4551C89CEC3A91EBF511B33E /* TextTransformTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 053AC229B155E7FB63B8FD7A /* TextTransformTests.swift */; };
 		4B597E61DA226EBF51175917 /* UpdateCheckPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B6F0A85567F2D75E31D9909 /* UpdateCheckPresenter.swift */; };
 		4C864B0EB4FAD2F6193DADCE /* ItemFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72A278A6B784C347DBE841FA /* ItemFileWriter.swift */; };
+		4E9A816DAED79B1EB2E33172 /* DeleteConfirmDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02E7309431E160801B9345F /* DeleteConfirmDialog.swift */; };
 		508E6789C634B48CDD8997D8 /* ItemEditTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BF6CBC0E19BAA10CA64C841 /* ItemEditTests.swift */; };
 		50E7D5EDC1154B094EF93619 /* TextFileReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65E374CF2A060621970BC638 /* TextFileReaderTests.swift */; };
 		52926C9071433EBB64DBFC53 /* ReleaseInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25A64FF9690C12B715F10652 /* ReleaseInfoTests.swift */; };
@@ -194,6 +195,7 @@
 		E82CAAB3832FCA2A676416E2 /* NSImage+Compress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSImage+Compress.swift"; sourceTree = "<group>"; };
 		EA1736950F6841CE896F0B0D /* ClipboardMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardMonitor.swift; sourceTree = "<group>"; };
 		EC0F8032F243CCABB2DAD7D2 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
+		F02E7309431E160801B9345F /* DeleteConfirmDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeleteConfirmDialog.swift; sourceTree = "<group>"; };
 		F2FB132D93A8BFAE5ECA53C2 /* ClipboardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStore.swift; sourceTree = "<group>"; };
 		F3909597696AC92E5A5CF0A8 /* AXTextSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXTextSelectionTests.swift; sourceTree = "<group>"; };
 		F3BA3F59C53175864F9C26E4 /* FilterTokenLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterTokenLayoutTests.swift; sourceTree = "<group>"; };
@@ -237,6 +239,7 @@
 				58FD03BC0700D3C0C38A5756 /* CardDragSource.swift */,
 				B042F21E05C8F577B1BC3631 /* ClipboardItemCard.swift */,
 				D87256E82B8E13BFED6DF205 /* ContentView.swift */,
+				F02E7309431E160801B9345F /* DeleteConfirmDialog.swift */,
 				C1D1A520708631522EC71B50 /* FilterPopover.swift */,
 				C8A607B4A8D2B02DCCF0E7E5 /* HotkeyRecorderButton.swift */,
 				56DC1FD216AF061320A8A99A /* ItemPreviewWindow.swift */,
@@ -499,6 +502,7 @@
 				CDB4DEB2112CD2E90FF59452 /* ColorParser.swift in Sources */,
 				3797093C090025BEB3CE5EE2 /* ContentView.swift in Sources */,
 				8DFEA12A2586E502F507CC48 /* Date+Relative.swift in Sources */,
+				4E9A816DAED79B1EB2E33172 /* DeleteConfirmDialog.swift in Sources */,
 				CECC6B611ADA0B8CA0190EB2 /* DragPaste.swift in Sources */,
 				E08ECF3C17D8DF48D0AFB204 /* DragTempFile.swift in Sources */,
 				D6260516DB39B2420E8DCBD7 /* DropTargetResolver.swift in Sources */,

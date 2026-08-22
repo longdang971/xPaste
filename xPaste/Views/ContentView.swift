@@ -11,8 +11,6 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("panelPosition") private var panelPosition: String = "bottom"
     @State private var copiedID: UUID?
-    @State private var showClearConfirm = false
-    @State private var showDeleteSelectedConfirm = false
     @State private var showSearch = false
     @State private var previewItemID: UUID?
     /// Whether the preview about to open should start in edit mode, for the menu's "Edit…".
@@ -99,18 +97,15 @@ struct ContentView: View {
                     verticalList
                 }
 
-                Button("") {
-                    // Gated inside the action rather than with `.disabled(selection.isEmpty)`:
-                    // ContentView no longer re-renders on selection changes, so a disabled-state
-                    // read in `body` would go stale the moment the selection moved.
-                    guard !selection.isEmpty else { return }
-                    if selection.count > 1 {
-                        showDeleteSelectedConfirm = true
-                    } else {
-                        deleteKeepingSelection(selection.ids)
-                    }
+                // ⌫ and ⌘⌫ both delete the selection — the second because every Mac list that
+                // deletes with one deletes with the other, and reaching for ⌫ alone after a
+                // ⌘-click multi-selection means letting go of ⌘ first.
+                Group {
+                    Button("") { deleteSelection() }
+                        .keyboardShortcut(.delete, modifiers: [])
+                    Button("") { deleteSelection() }
+                        .keyboardShortcut(.delete, modifiers: .command)
                 }
-                .keyboardShortcut(.delete, modifiers: [])
                 .disabled(searchFocused || isRenaming)
                 .opacity(0)
                 .frame(width: 0, height: 0)
@@ -316,19 +311,6 @@ struct ContentView: View {
             let trusted = AccessibilityPermission.isTrusted
             if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
         }
-        .confirmationDialog(
-            "Delete all unpinned clipboard history?",
-            isPresented: $showClearConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Clear History", role: .destructive) { store.clearUnpinned() }
-        }
-        .onChange(of: showDeleteSelectedConfirm) { showing in
-            NotificationCenter.default.post(
-                name: showing ? .clipboardAlertShown : .clipboardAlertHidden,
-                object: nil
-            )
-        }
         // Borrows the alert handshake so AppDelegate stops swallowing Escape while a name is
         // being typed: Escape must cancel the edit, not close the panel.
         .onChange(of: renameItemID) { id in
@@ -336,16 +318,6 @@ struct ContentView: View {
                 name: id != nil ? .clipboardAlertShown : .clipboardAlertHidden,
                 object: nil
             )
-        }
-        .alert(
-            "Delete \(selection.count) selected item\(selection.count == 1 ? "" : "s")?",
-            isPresented: $showDeleteSelectedConfirm
-        ) {
-            Button("Delete", role: .destructive) {
-                deleteKeepingSelection(selection.ids)
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) {}
         }
         .environment(\.panelScale, panelScale)
     }
@@ -380,7 +352,7 @@ struct ContentView: View {
             .opacity(showSearch ? 0 : 1)
             .allowsHitTesting(!showSearch)
             .overlay(alignment: .trailing) {
-                MoreMenu { showClearConfirm = true }
+                MoreMenu { confirmClearHistory() }
                     .opacity(showSearch ? 0 : 1)
                     .allowsHitTesting(!showSearch)
             }
@@ -829,6 +801,39 @@ struct ContentView: View {
             togglePin: { store.togglePin(item) },
             delete: { deleteOne(item) }
         )
+    }
+
+    /// ⌫ / ⌘⌫: delete what is selected, asking first when that is more than one card.
+    ///
+    /// Gated inside the action rather than with `.disabled(selection.isEmpty)`: ContentView no
+    /// longer re-renders on selection changes, so a disabled-state read in `body` would go stale
+    /// the moment the selection moved.
+    ///
+    /// The ids are captured here, not read again when the dialog answers — the dialog does not
+    /// hold the panel still, and deleting whatever happened to be selected a second later is not
+    /// what the question asked about.
+    private func deleteSelection() {
+        let ids = selection.ids
+        guard !ids.isEmpty else { return }
+        guard ids.count > 1 else {
+            deleteKeepingSelection(ids)
+            return
+        }
+        DeleteConfirmPresenter.shared.confirm(
+            message: "Delete \(ids.count) selected items?",
+            confirmTitle: "Delete"
+        ) {
+            deleteKeepingSelection(ids)
+        }
+    }
+
+    private func confirmClearHistory() {
+        DeleteConfirmPresenter.shared.confirm(
+            message: "Delete all unpinned clipboard history?",
+            confirmTitle: "Clear History"
+        ) {
+            store.clearUnpinned()
+        }
     }
 
     /// Deletes one card from the hover button or the right-click menu.
