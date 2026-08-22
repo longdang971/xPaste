@@ -39,9 +39,26 @@ actor LinkPreviewService {
 
     private static let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
+    /// A page is read for the handful of `<meta>` tags in its head. Anything past this is markup
+    /// nobody here looks at, and decoding it into a `String` — which the ISO-Latin-1 fallback
+    /// always succeeds at — would put the whole document in memory and then run six regexes over
+    /// it. A ten-megabyte page cost ten megabytes of `String` for a title.
+    private static let htmlScanCap = 512 * 1024
+    /// The largest preview picture worth holding. A card draws it at 232pt.
+    private static let imageByteCap = 8 * 1024 * 1024
+
+    /// Refuses a body the server has already declared too large, before it is decoded.
+    private static func withinCap(_ response: URLResponse, _ data: Data, cap: Int) -> Bool {
+        data.count <= cap
+    }
+
     init() {
+        // Cost as well as count, for the same reason as everywhere else pictures are cached: an
+        // `og:image` is a full-size cover picture, and fifty of them decoded is not a small number.
         imageCache.countLimit = 50
+        imageCache.totalCostLimit = 32 * 1024 * 1024
         faviconCache.countLimit = 100
+        faviconCache.totalCostLimit = 4 * 1024 * 1024
         if let dir = cacheDir {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             Task { await self.loadDiskCache() }
@@ -84,8 +101,10 @@ actor LinkPreviewService {
         // bytes are already here, so seed the image cache rather than fetch the same file twice.
         // Decodable, not merely declared: an `image/svg+xml` that `NSImage` cannot open falls
         // through to the scrape below and keeps the favicon card it used to get.
-        if Self.isDirectImage(mimeType: resp.mimeType), let image = NSImage(data: data) {
-            imageCache.setObject(image, forKey: url as NSURL)
+        if Self.isDirectImage(mimeType: resp.mimeType),
+           Self.withinCap(resp, data, cap: Self.imageByteCap),
+           let image = NSImage(data: data) {
+            imageCache.setObject(image, forKey: url as NSURL, cost: image.approximateDecodedBytes)
             var meta = CachedLinkMeta(url: url, title: nil, imageURL: url, domain: domain)
             meta.isDirectImage = true
             metaCache[url] = meta
@@ -95,7 +114,12 @@ actor LinkPreviewService {
                                    isDirectImage: true)
         }
 
-        guard let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
+        // Only the head is of interest, and only a bounded amount of it. Truncated at a byte
+        // count, so a UTF-8 sequence can be cut in half — the ISO-Latin-1 fallback below decodes
+        // whatever UTF-8 rejects, and a mangled tail cannot affect tags that appear near the top.
+        let scanned = data.prefix(Self.htmlScanCap)
+        guard let html = String(data: scanned, encoding: .utf8)
+                ?? String(data: scanned, encoding: .isoLatin1)
         else { return nil }
 
         let title = ogMeta("og:title", in: html) ?? ogMeta("twitter:title", in: html) ?? pageTitle(in: html)
@@ -124,9 +148,10 @@ actor LinkPreviewService {
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
         guard let (imgData, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
+              Self.withinCap(resp, imgData, cap: Self.imageByteCap),
               let image = NSImage(data: imgData) else { return nil }
 
-        imageCache.setObject(image, forKey: url as NSURL)
+        imageCache.setObject(image, forKey: url as NSURL, cost: image.approximateDecodedBytes)
         return image
     }
 
@@ -152,7 +177,7 @@ actor LinkPreviewService {
                   let img = NSImage(data: data),
                   img.size.width > 1
             else { continue }
-            faviconCache.setObject(img, forKey: host as NSString)
+            faviconCache.setObject(img, forKey: host as NSString, cost: img.approximateDecodedBytes)
             return img
         }
         return nil

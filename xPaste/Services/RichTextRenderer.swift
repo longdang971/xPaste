@@ -86,6 +86,14 @@ enum RichTextRenderer {
         let c = NSCache<NSUUID, ParsedRichBox>(); c.countLimit = 120; return c
     }()
 
+    /// Drops what was parsed for an item whose content has been edited underneath it.
+    ///
+    /// The cache is keyed by id, and an id survives an edit — so without this the editor's changes
+    /// are written to disk and the card goes on drawing the string that was parsed before them.
+    static func forget(_ id: UUID) {
+        parseCache.removeObject(forKey: id as NSUUID)
+    }
+
     static func parse(_ item: ClipboardItem) -> ParsedRich? {
         guard item.type == .text || item.type == .url,
               let data = item.richData, !data.isEmpty,
@@ -281,7 +289,8 @@ enum RichTextRenderer {
                             size: CGSize,
                             forLightAppearance: Bool = true,
                             defaultFill: NSColor = .textBackgroundColor,
-                            highlightTerm: String = "") async -> RichCardPreview {
+                            highlightTerm: String = "",
+                            revision: Int = 0) async -> RichCardPreview {
         let parsed: ParsedRich?
         if parseCache.object(forKey: item.id as NSUUID) != nil {
             // Already parsed — a re-bake for a changed search term, so there is nothing to hop
@@ -294,13 +303,15 @@ enum RichTextRenderer {
             parsed = cachedParse(item)
         }
         guard let parsed else {
-            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm)
+            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm,
+                          revision: revision)
         }
 
         let fill = resolveFill(documentBackground: parsed.documentBackground)
         let effective = fill ?? defaultFill
         guard fill != nil || isLegible(parsed.text, on: effective) else {
-            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm)
+            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm,
+                          revision: revision)
         }
 
         let truncated = parsed.text.length > cardCharLimit
@@ -313,11 +324,13 @@ enum RichTextRenderer {
             : SearchHighlight.marked(truncated, term: highlightTerm,
                                      forLightAppearance: forLightAppearance)
         guard let image = rasterise(body, fill: effective, size: size) else {
-            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm)
+            return .plain(forLightAppearance: forLightAppearance, term: highlightTerm,
+                          revision: revision)
         }
         return RichCardPreview(image: image, fill: fill,
                                builtForLightAppearance: forLightAppearance,
-                               builtForTerm: highlightTerm)
+                               builtForTerm: highlightTerm,
+                               builtForRevision: revision)
     }
 
     /// The popover's counterpart to `cardPreview`: the whole string, untruncated, because a
@@ -382,25 +395,36 @@ final class RichCardPreview {
     /// The mark is drawn into the pixels, so an entry built for one term cannot be shown for
     /// another — the reader treats a mismatch as a miss, exactly as it does for the appearance.
     let builtForTerm: String
+    /// Which version of the item's content these pixels are of.
+    ///
+    /// An edit does not change the item's id, so an entry still keyed to it is no longer of it.
+    /// Treated as a miss for the same reason as the two above.
+    let builtForRevision: Int
 
     init(image: NSImage?, fill: NSColor?, builtForLightAppearance: Bool = true,
-         builtForTerm: String = "") {
+         builtForTerm: String = "", builtForRevision: Int = 0) {
         self.image = image
         self.fill = image == nil ? nil : fill
         self.builtForLightAppearance = builtForLightAppearance
         self.builtForTerm = builtForTerm
+        self.builtForRevision = builtForRevision
     }
 
-    /// Whether this entry can still be shown under `lightAppearance` for `term`.
+    /// Whether this entry can still be shown under `lightAppearance` for `term` at `revision`.
     ///
     /// Entries carrying a real run background do not actually depend on the appearance, but a
     /// flip is rare and rebuilding them too is far simpler than tracking which ones do.
-    func isUsable(underLightAppearance lightAppearance: Bool, term: String = "") -> Bool {
-        builtForLightAppearance == lightAppearance && builtForTerm == term
+    func isUsable(underLightAppearance lightAppearance: Bool, term: String = "",
+                  revision: Int = 0) -> Bool {
+        builtForLightAppearance == lightAppearance
+            && builtForTerm == term
+            && builtForRevision == revision
     }
 
-    static func plain(forLightAppearance light: Bool, term: String = "") -> RichCardPreview {
-        RichCardPreview(image: nil, fill: nil, builtForLightAppearance: light, builtForTerm: term)
+    static func plain(forLightAppearance light: Bool, term: String = "",
+                      revision: Int = 0) -> RichCardPreview {
+        RichCardPreview(image: nil, fill: nil, builtForLightAppearance: light,
+                        builtForTerm: term, builtForRevision: revision)
     }
 }
 

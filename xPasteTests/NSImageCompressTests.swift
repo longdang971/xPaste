@@ -105,4 +105,89 @@ final class NSImageCompressTests: XCTestCase {
         XCTAssertEqual(corner.alphaComponent, 0, accuracy: 0.02,
                        "scaling must not cost the transparency")
     }
+
+    // MARK: - Giving up vs shrinking
+
+    /// A detailed picture past the byte budget used to come back nil, and `ClipboardMonitor` drops
+    /// the copy when that happens — so a photograph or a busy screenshot never reached the history
+    /// and the user was never told why. Quality alone bottoms out around 0.10; the picture has to
+    /// shrink as well, which is what the PNG path had always done.
+    func test_a_detailed_image_shrinks_rather_than_being_dropped() throws {
+        let noisy = try XCTUnwrap(Self.noise(width: 2880, height: 1800))
+
+        let data = try XCTUnwrap(noisy.compressedData(maxBytes: 1_000_000),
+                                 "the copy would have been dropped entirely")
+
+        XCTAssertLessThanOrEqual(data.count, 1_000_000)
+        XCTAssertNotNil(NSImage(data: data), "what was stored is not a readable image")
+    }
+
+    func test_a_detailed_transparent_image_also_shrinks_rather_than_being_dropped() throws {
+        let noisy = try XCTUnwrap(Self.noise(width: 2400, height: 1600, alpha: 0.5))
+
+        let data = try XCTUnwrap(noisy.compressedData(maxBytes: 1_000_000))
+
+        XCTAssertLessThanOrEqual(data.count, 1_000_000)
+    }
+
+    /// Noise on purpose: a flat colour compresses to nothing and would prove nothing.
+    private static func noise(width: Int, height: Int, alpha: CGFloat = 1) -> NSImage? {
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+            let data = rep.bitmapData else { return nil }
+        var seed: UInt64 = 0x2545F4914F6CDD1D
+        for i in stride(from: 0, to: rep.bytesPerRow * height, by: 4) {
+            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17
+            data[i]     = UInt8(truncatingIfNeeded: seed)
+            data[i + 1] = UInt8(truncatingIfNeeded: seed >> 8)
+            data[i + 2] = UInt8(truncatingIfNeeded: seed >> 16)
+            data[i + 3] = UInt8(alpha * 255)
+        }
+        let image = NSImage(size: NSSize(width: width, height: height))
+        image.addRepresentation(rep)
+        return image
+    }
+}
+
+extension NSImageCompressTests {
+    /// The pasteboard hands over encoded bytes, and turning those into an `NSImage` first cost the
+    /// picture twice more: `NSImage` keeps the bytes, `tiffRepresentation` renders a fresh TIFF,
+    /// and that is decoded back into pixels. Compressing straight from the bitmap is the same
+    /// answer for a third of the memory.
+    func test_compressing_a_bitmap_directly_matches_going_through_NSImage() throws {
+        let image = NSImage(size: NSSize(width: 200, height: 120))
+        image.lockFocus()
+        NSColor.systemTeal.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 200, height: 120)).fill()
+        NSColor.black.setFill()
+        NSBezierPath(rect: NSRect(x: 10, y: 10, width: 40, height: 40)).fill()
+        image.unlockFocus()
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: tiff))
+
+        let viaImage = try XCTUnwrap(image.compressedData(maxBytes: 1_000_000))
+        let direct = try XCTUnwrap(rep.compressedData(maxBytes: 1_000_000))
+
+        XCTAssertEqual(SaveFormat.imageExtension(for: direct),
+                       SaveFormat.imageExtension(for: viaImage))
+        let decoded = try XCTUnwrap(NSImage(data: direct))
+        XCTAssertEqual(decoded.representations.first?.pixelsWide, rep.pixelsWide)
+        XCTAssertEqual(decoded.representations.first?.pixelsHigh, rep.pixelsHigh)
+    }
+
+    /// Transparency still routes to PNG when the bitmap is handed over directly.
+    func test_a_transparent_bitmap_still_becomes_png() throws {
+        let image = NSImage(size: NSSize(width: 40, height: 40))
+        image.lockFocus()
+        NSColor.systemRed.withAlphaComponent(0.4).setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 20, height: 20)).fill()
+        image.unlockFocus()
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation)))
+
+        let data = try XCTUnwrap(rep.compressedData(maxBytes: 1_000_000))
+
+        XCTAssertEqual(SaveFormat.imageExtension(for: data), "png")
+    }
 }

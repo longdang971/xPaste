@@ -111,8 +111,11 @@ enum TextTransform: String, CaseIterable {
 
     /// Parses `text` as JSON, but only after a cheap first-character check — `JSONSerialization`
     /// on a half-megabyte of prose is pure waste, and this runs while a menu is being built.
+    ///
+    /// Shared with `SaveFormat`, which decides an item is a `.json` file by the same question this
+    /// answers, rather than growing a second JSON parser with its own idea of the size cap.
     private static let jsonSizeLimit = 4_000_000
-    private static func jsonObject(in text: String) -> Any? {
+    static func jsonObject(in text: String) -> Any? {
         guard text.utf8.count <= jsonSizeLimit else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let first = trimmed.first, first == "{" || first == "[",

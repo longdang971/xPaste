@@ -10,6 +10,14 @@ final class ClipboardMonitor {
     /// exercised on a scratch pasteboard rather than on the user's real clipboard.
     private let pasteboard: NSPasteboard
 
+    /// Where a captured image is decoded and compressed.
+    ///
+    /// Serial, so two copies made in quick succession reach the history in the order they were
+    /// made — a pool let a small second image overtake a large first one. And one queue rather than
+    /// a detached task per copy because `NSImage` is not `Sendable`: it is built and used entirely
+    /// here, and only `Data` ever crosses a boundary.
+    private let captureQueue = DispatchQueue(label: "com.user.xPaste.capture", qos: .userInitiated)
+
     init(pasteboard: NSPasteboard = .general) {
         self.pasteboard = pasteboard
         self.lastChangeCount = pasteboard.changeCount
@@ -95,16 +103,31 @@ final class ClipboardMonitor {
 
         if !hasFileURLs,
            let types = pb.types,
-           types.contains(where: { $0 == .tiff || $0 == .png }),
-           let image = NSImage(pasteboard: pb) {
-            Task.detached(priority: .userInitiated) {
-                guard let compressed = image.compressedData(maxBytes: 1_000_000) else { return }
-                var item = ClipboardItem(type: .image, imageData: compressed)
-                item.sourceAppBundleID = sourceBundleID
-                await MainActor.run { ClipboardStore.shared.add(item) }
-                OCRService.scan(itemID: item.id, imageData: compressed)
+           types.contains(where: { $0 == .tiff || $0 == .png }) {
+            // Read on this thread, decode on the other: the bytes are `Sendable`, the `NSImage`
+            // built from them is not.
+            let raw = pb.data(forType: .png) ?? pb.data(forType: .tiff)
+            if let raw {
+                captureQueue.async {
+                    // Explicitly pooled. Compressing one 2200x1400 capture allocates the decoded
+                    // bitmap several times over — a TIFF, a rep built from it, a scaled rep per
+                    // step down, and a JPEG per quality tried — and most of that comes back
+                    // autoreleased. A dispatch queue drains its own pool only when it goes idle,
+                    // and a run of copies never lets it, so the peaks stacked instead of cancelling.
+                    autoreleasepool {
+                        // Straight to a bitmap: the pasteboard already handed over encoded bytes,
+                        // and routing them through `NSImage` would decode the picture three times
+                        // over — see `NSBitmapImageRep.compressedData`.
+                        guard let bitmap = NSBitmapImageRep(data: raw),
+                              let compressed = bitmap.compressedData(maxBytes: 1_000_000) else { return }
+                        var item = ClipboardItem(type: .image, imageData: compressed)
+                        item.sourceAppBundleID = sourceBundleID
+                        DispatchQueue.main.async { ClipboardStore.shared.add(item) }
+                        OCRService.scan(itemID: item.id, imageData: compressed)
+                    }
+                }
+                return
             }
-            return
         }
 
         guard var item = ClipboardItem.from(pasteboard: pb) else { return }

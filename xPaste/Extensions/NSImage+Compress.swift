@@ -1,6 +1,20 @@
 import AppKit
 
 extension NSImage {
+    /// Roughly what this picture occupies once its pixels are decoded.
+    ///
+    /// The number every image cache in the app is bounded by. `NSCache.countLimit` bounds how
+    /// *many* pictures are held, which says nothing at all about memory: a 2200x1400 screenshot is
+    /// 12 MB of pixels and fifty of them are six hundred. Measured on a real run, twenty-five large
+    /// copies took the app from 98 MB to 456 MB while only 15 MB reached disk.
+    ///
+    /// Read off the representations rather than `size`, which is in points and reports half the
+    /// number for anything captured on a 2x display. Four bytes per pixel, RGBA.
+    var approximateDecodedBytes: Int {
+        let pixels = representations.reduce(0) { $0 + max(0, $1.pixelsWide * $1.pixelsHigh) }
+        return max(pixels * 4, 1)
+    }
+
     /// The bytes to store for this image: PNG when it has transparency to keep, JPEG otherwise.
     ///
     /// JPEG has no alpha channel. Encoding a cut-out logo as one composites it onto an opaque
@@ -13,20 +27,21 @@ extension NSImage {
     func compressedData(maxBytes: Int) -> Data? {
         guard let tiff = tiffRepresentation,
               let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.compressedData(maxBytes: maxBytes)
+    }
+}
 
-        if bitmap.usesTransparency {
-            return bitmap.pngData(maxBytes: maxBytes)
-        }
-
-        var quality: Double = 0.85
-        while quality > 0.09 {
-            if let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality]),
-               data.count <= maxBytes {
-                return data
-            }
-            quality -= 0.25
-        }
-        return nil
+extension NSBitmapImageRep {
+    /// The bytes to store, decided from a bitmap that already exists.
+    ///
+    /// The route in from the pasteboard uses this directly, because going through `NSImage` costs
+    /// the picture twice over: `NSImage` holds the bytes it was made from, `tiffRepresentation`
+    /// renders a *fresh* TIFF from them, and `NSBitmapImageRep(data:)` then decodes that back into
+    /// pixels. On a 5120x2880 screen capture each of those is 59 MB, so three of them is most of
+    /// what a copy costs — and the allocator keeps the freed pages, which is why the footprint of a
+    /// menu-bar app climbed into the hundreds of megabytes after a handful of screenshots.
+    func compressedData(maxBytes: Int) -> Data? {
+        usesTransparency ? pngData(maxBytes: maxBytes) : jpegData(maxBytes: maxBytes)
     }
 }
 
@@ -71,6 +86,33 @@ extension NSBitmapImageRep {
             return self
         }
         return scaled(by: 1)
+    }
+
+    /// JPEG bytes within `maxBytes`: drop the quality first, then shrink the picture.
+    ///
+    /// The shrinking half is what stops a detailed image being lost altogether. Quality alone
+    /// bottoms out around 0.10, and a photograph or a busy screenshot still exceeds a megabyte
+    /// there — at which point the old code returned nil and `ClipboardMonitor` dropped the copy on
+    /// the floor, so it never reached the history and the user never learned why. The PNG path
+    /// below had always shrunk rather than given up; this is the same ladder.
+    func jpegData(maxBytes: Int) -> Data? {
+        var candidate: NSBitmapImageRep? = self
+        var scale: CGFloat = 1
+        while let rep = candidate {
+            var quality: Double = 0.85
+            while quality > 0.09 {
+                if let data = rep.representation(using: .jpeg,
+                                                 properties: [.compressionFactor: quality]),
+                   data.count <= maxBytes {
+                    return data
+                }
+                quality -= 0.25
+            }
+            scale *= 0.7
+            guard scale >= 0.2 else { return nil }
+            candidate = scaled(by: scale)
+        }
+        return nil
     }
 
     /// PNG bytes within `maxBytes`, shrinking the picture until they fit.

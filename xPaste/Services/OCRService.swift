@@ -112,8 +112,7 @@ enum OCRService {
                 }
                 waits = 0
                 guard let next = ClipboardStore.shared.itemsAwaitingOCR().first else { return }
-                let data = next.imageData
-                    ?? ClipboardStore.shared.imageURL(for: next.id).flatMap { try? Data(contentsOf: $0) }
+                let data = next.imageData ?? ClipboardStore.shared.imageBytes(for: next.id)
                 guard let data else {
                     // No pixels on disk any more — mark it scanned so we don't spin on it.
                     ClipboardStore.shared.setOCRText("", for: next.id)

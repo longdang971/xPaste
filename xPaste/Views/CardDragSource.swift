@@ -177,10 +177,7 @@ final class CardDragSourceView: NSView, NSDraggingSource {
         case .file, .folder:
             if let url = item.fileURLs?.first { return url as NSURL }
         case .image:
-            if let url = ClipboardStore.shared.imageURL(for: item.id),
-               FileManager.default.fileExists(atPath: url.path) {
-                return url as NSURL
-            }
+            if let url = DragTempFile.url(for: item) { return url as NSURL }
             if let data = item.imageData, let image = NSImage(data: data) { return image }
         case .url:
             if let text = item.text, let url = URL(string: text) { return url as NSURL }

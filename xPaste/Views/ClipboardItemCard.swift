@@ -20,6 +20,13 @@ struct CardTaskKey: Equatable {
     /// The search term the card's work was done for. A formatted card bakes the highlight into its
     /// bitmap, so a new term is new work — the same way a light/dark flip is.
     var highlightTerm: String = ""
+    /// Which version of the item's content the work was done for.
+    ///
+    /// The id stays the same when an item is edited, so without this the task never re-runs and the
+    /// card keeps every piece of `@State` it derived from the old text — the parsed bitmap, the file
+    /// it used to point at, the thumbnail of that file. Purging the shared caches cannot reach any
+    /// of those; only re-running the task can.
+    var contentRevision: Int = 0
 }
 
 struct ClipboardItemCard: View {
@@ -48,6 +55,9 @@ struct ClipboardItemCard: View {
     @State private var richPreview: RichCardPreview?
     @State private var computedAccentColor: Color?
     @State private var detectedFilePath: URL?
+    /// Which revision of the item's text the state above was derived from, so an edit can be told
+    /// apart from a re-run caused by the appearance or the search term.
+    @State private var derivedFromRevision: Int?
     @State private var detectedIsDirectory = false
     @State private var fileText: String?
     @AppStorage("linkPreviewEnabled") private var linkPreviewEnabled: Bool = true
@@ -69,11 +79,20 @@ struct ClipboardItemCard: View {
     // the old dictionaries were never evicted, so every previewed image (thumbnails up to
     // 1000px + full clipboard images) stayed resident for the whole session even after the
     // item was deleted or history cleared.
+    // Bounded by cost as well as by count: these hold decoded pixels, and a thumbnail is built at
+    // up to 1000px — four megabytes each, so a hundred and twenty of them is not a bound worth
+    // having. See `NSImage.approximateDecodedBytes`.
     private static let pathImageCache: NSCache<NSUUID, NSImage> = {
-        let c = NSCache<NSUUID, NSImage>(); c.countLimit = 120; return c
+        let c = NSCache<NSUUID, NSImage>()
+        c.countLimit = 120
+        c.totalCostLimit = 48 * 1024 * 1024
+        return c
     }()
     private static let loadedImageCache: NSCache<NSUUID, NSImage> = {
-        let c = NSCache<NSUUID, NSImage>(); c.countLimit = 120; return c
+        let c = NSCache<NSUUID, NSImage>()
+        c.countLimit = 120
+        c.totalCostLimit = 64 * 1024 * 1024
+        return c
     }()
     /// The opening of each item's file, for the ones that turned out to be text. Bounded like the
     /// image caches, and for the same reason: a card scrolled out of view must not keep its file
@@ -86,7 +105,15 @@ struct ClipboardItemCard: View {
     private static let richPreviewCache: NSCache<NSUUID, RichCardPreview> = {
         let c = NSCache<NSUUID, RichCardPreview>(); c.countLimit = 120; return c
     }()
-    private static var fileIconCache: [String: NSImage] = [:]
+    /// Bounded like its neighbours above, and for the same reason: this one is keyed by file
+    /// *path*, not by bundle id, so a plain dictionary grew by one icon for every distinct file
+    /// ever shown on a card and never gave one back.
+    private static let fileIconCache: NSCache<NSString, NSImage> = {
+        let c = NSCache<NSString, NSImage>()
+        c.countLimit = 200
+        c.totalCostLimit = 8 * 1024 * 1024
+        return c
+    }()
 
     /// Per-item strings that are expensive to derive but never change once captured.
     ///
@@ -105,10 +132,25 @@ struct ClipboardItemCard: View {
     /// Enough to fill the seven visible lines several times over.
     private static let previewCharLimit = 2000
 
+    /// Drops everything cached about one item's content, for when that content has been edited.
+    ///
+    /// All five of these are keyed by the item's id, and an id does not change when its text does.
+    /// The card's own `@State` is the sixth cache and cannot be reached from here — that one is
+    /// handled by the revision in `CardTaskKey`, which makes `.task` re-run.
+    static func forgetContent(for id: UUID) {
+        let key = id as NSUUID
+        cardTextCache.removeObject(forKey: key)
+        richPreviewCache.removeObject(forKey: key)
+        fileTextCache.removeObject(forKey: key)
+        pathImageCache.removeObject(forKey: key)
+        loadedImageCache.removeObject(forKey: key)
+    }
+
     private func fileIcon(_ path: String) -> NSImage {
-        if let cached = Self.fileIconCache[path] { return cached }
+        if let cached = Self.fileIconCache.object(forKey: path as NSString) { return cached }
         let icon = NSWorkspace.shared.icon(forFile: path)
-        Self.fileIconCache[path] = icon
+        Self.fileIconCache.setObject(icon, forKey: path as NSString,
+                                     cost: icon.approximateDecodedBytes)
         return icon
     }
 
@@ -138,14 +180,19 @@ struct ClipboardItemCard: View {
         // the two are combined. A light/dark flip re-runs this and rebuilds the rich preview for
         // the appearance now on screen.
         .task(id: CardTaskKey(itemID: item.id, isLightAppearance: isLightAppearance,
-                              highlightTerm: highlightTerm)) {
+                              highlightTerm: highlightTerm,
+                              contentRevision: item.contentRevision)) {
             if item.type == .image {
                 if let data = item.imageData, let img = NSImage(data: data) {
                     loadedImage = img
-                    Self.loadedImageCache.setObject(img, forKey: item.id as NSUUID)
+                    Self.loadedImageCache.setObject(img, forKey: item.id as NSUUID,
+                                                    cost: img.approximateDecodedBytes)
                 } else if item.imageData == nil {
                     loadedImage = await ClipboardStore.shared.loadImage(for: item.id)
-                    if let loadedImage { Self.loadedImageCache.setObject(loadedImage, forKey: item.id as NSUUID) }
+                    if let loadedImage {
+                        Self.loadedImageCache.setObject(loadedImage, forKey: item.id as NSUUID,
+                                                        cost: loadedImage.approximateDecodedBytes)
+                    }
                 }
             }
 
@@ -164,6 +211,25 @@ struct ClipboardItemCard: View {
                 }
                 return nil
             }()
+            // Everything below is derived from the item's text, so an edit invalidates all of it —
+            // and a branch that no longer applies would otherwise never run to say so. A card whose
+            // path was edited to point somewhere else would keep the old file's thumbnail; a link
+            // edited to another address whose fetch then failed would keep the first site's title
+            // and picture.
+            //
+            // Gated on the revision rather than cleared on every pass: this task also re-runs for a
+            // light/dark flip and for a new search term, and throwing the thumbnails away for those
+            // would flash the card blank and re-decode for nothing.
+            if derivedFromRevision != item.contentRevision {
+                derivedFromRevision = item.contentRevision
+                if pathImage != nil { pathImage = nil }
+                if fileText != nil { fileText = nil }
+                if richPreview != nil { richPreview = nil }
+                if linkPreview != nil { linkPreview = nil }
+                if favicon != nil { favicon = nil }
+                if linkImageChecked { linkImageChecked = false }
+            }
+
             if let imageURL {
                 let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
                     let opts: [CFString: Any] = [
@@ -178,7 +244,8 @@ struct ClipboardItemCard: View {
                 if let cgImage {
                     let image = NSImage(cgImage: cgImage, size: .zero)
                     pathImage = image
-                    Self.pathImageCache.setObject(image, forKey: item.id as NSUUID)
+                    Self.pathImageCache.setObject(image, forKey: item.id as NSUUID,
+                                                  cost: image.approximateDecodedBytes)
                 }
             }
 
@@ -211,7 +278,8 @@ struct ClipboardItemCard: View {
                detectedColor == nil {
                 let light = isLightAppearance
                 if let cached = Self.richPreviewCache.object(forKey: item.id as NSUUID),
-                   cached.isUsable(underLightAppearance: light, term: highlightTerm) {
+                   cached.isUsable(underLightAppearance: light, term: highlightTerm,
+                                   revision: item.contentRevision) {
                     if richPreview !== cached { richPreview = cached }
                 } else {
                     // The default fill is resolved for the appearance on screen, so both the
@@ -220,7 +288,8 @@ struct ClipboardItemCard: View {
                         for: item, size: RichTextRenderer.cardPreviewSize,
                         forLightAppearance: light,
                         defaultFill: RichTextRenderer.defaultFill(forLightAppearance: light),
-                        highlightTerm: highlightTerm)
+                        highlightTerm: highlightTerm,
+                        revision: item.contentRevision)
                     Self.richPreviewCache.setObject(built, forKey: item.id as NSUUID)
                     richPreview = built
                 }
@@ -304,7 +373,7 @@ struct ClipboardItemCard: View {
         return HStack(alignment: .center, spacing: 0) {
             VStack(alignment: .leading, spacing: 2) {
                 if isRenaming {
-                    nameField(onAccent: onAccent)
+                    nameField(onAccent: onAccent, accent: accent)
                 } else {
                     Text(headerTitle)
                         .font(.system(size: 15, weight: .bold))
@@ -331,7 +400,7 @@ struct ClipboardItemCard: View {
     /// otherwise fire the click-away commit right after a cancel and undo it.
     /// No box, no highlight: the title keeps its exact look and only gains a caret, so editing
     /// reads as typing over the title itself rather than as a field appearing on the card.
-    private func nameField(onAccent: Color) -> some View {
+    private func nameField(onAccent: Color, accent: Color) -> some View {
         TextField("", text: $draftName)
             .textFieldStyle(.plain)
             .font(.system(size: 15, weight: .bold))
@@ -357,18 +426,32 @@ struct ClipboardItemCard: View {
                 // chain before focus will stick.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     nameFieldFocused = true
-                    placeCaretAtEnd()
+                    selectWholeName(onAccent: onAccent, accent: accent)
                 }
             }
     }
 
-    /// SwiftUI hands a newly focused text field a select-all, so the first keystroke would wipe
-    /// the name instead of extending it. Collapse that selection to the end via the field editor.
-    private func placeCaretAtEnd() {
+    /// Opens the edit with the whole name selected, so the first keystroke replaces it.
+    ///
+    /// Set explicitly rather than left to SwiftUI, which does select-all itself but only as a side
+    /// effect of taking focus — and the field takes focus a runloop turn after it appears, by which
+    /// point anything else that touched the field editor would have collapsed it. What is being
+    /// replaced is usually a placeholder anyway: an unnamed card seeds the field with its derived
+    /// title ("Link", "Text"), which nobody wants to type around.
+    ///
+    /// The selection is drawn inverted — the header's own two colours, swapped — rather than in the
+    /// system's. That colour is a pale wash meant for dark text on a white field, and this title is
+    /// white on a saturated header: selecting it painted white on near-white and the name vanished.
+    /// `onAccent` was already chosen to read against `accent`, so trading places keeps whatever
+    /// contrast the header had.
+    private func selectWholeName(onAccent: Color, accent: Color) {
         DispatchQueue.main.async {
             guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { return }
-            let end = (editor.string as NSString).length
-            editor.setSelectedRange(NSRange(location: end, length: 0))
+            editor.selectedTextAttributes = [
+                .backgroundColor: NSColor(onAccent),
+                .foregroundColor: NSColor(accent),
+            ]
+            editor.setSelectedRange(NSRange(location: 0, length: (editor.string as NSString).length))
         }
     }
 
@@ -519,7 +602,8 @@ struct ClipboardItemCard: View {
     private var resolvedRichPreview: RichCardPreview? {
         let entry = richPreview ?? Self.richPreviewCache.object(forKey: item.id as NSUUID)
         guard let entry,
-              entry.isUsable(underLightAppearance: isLightAppearance, term: highlightTerm)
+              entry.isUsable(underLightAppearance: isLightAppearance, term: highlightTerm,
+                             revision: item.contentRevision)
         else { return nil }
         return entry
     }

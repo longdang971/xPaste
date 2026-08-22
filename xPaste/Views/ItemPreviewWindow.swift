@@ -4,14 +4,28 @@ import WebKit
 
 struct PreviewPopoverContent: View {
     let item: ClipboardItem
+    /// Open straight into edit mode, for the card menu's "Edit…".
+    var startEditing: Bool = false
     var onClose: () -> Void
 
     @State private var loadedImage: NSImage?
     @State private var richPreview: RichFullPreview?
     @State private var fileText: String?
+    @State private var isEditing = false
+    /// Whether what is in the editor right now is nothing but whitespace, which is the one thing
+    /// Save refuses. Kept as its own flag and assigned only when it changes, so typing does not
+    /// re-render the popover on every keystroke.
+    @State private var draftIsEmpty = false
+    /// Holds a weak reference to the live text view, so the draft is read once on Save rather than
+    /// copied out of the editor on every keystroke.
+    @State private var buffer = EditBuffer()
+    /// Counted once in `.task`, not per body pass: three full walks of the string measured 50ms on
+    /// a 468KB item, and the popover re-renders several times while it settles.
+    @State private var stats = ""
     @Environment(\.colorScheme) private var colorScheme
 
     private var title: String {
+        if isEditing { return "Edit" }
         switch item.type {
         case .url:    return "Link"
         case .image:  return "Image"
@@ -50,12 +64,72 @@ struct PreviewPopoverContent: View {
                 richPreview = RichTextRenderer.fullPreview(for: item)
             }
             await loadFileTextIfNeeded()
+            if item.type == .text, stats.isEmpty {
+                let text = item.displayText
+                stats = await Task.detached(priority: .userInitiated) {
+                    Self.textStats(text)
+                }.value
+            }
         }
+        .onAppear { if startEditing { setEditing(true) } }
+        // Whatever takes the popover away — Save, Cancel, the panel hiding, the item being
+        // deleted — the handshake has to be undone. Left set, `alertIsPresented` stays true in
+        // AppDelegate and Escape stops closing the panel for the rest of the session.
+        .onDisappear { setEditing(false) }
         .background {
+            // Space closes the preview, but while editing it is a character the user is typing.
             Button("") { onClose() }
                 .keyboardShortcut(.space, modifiers: [])
+                .disabled(isEditing)
                 .opacity(0).frame(width: 0, height: 0)
         }
+    }
+
+    // MARK: - Editing
+
+    /// Borrows the alert handshake that renaming uses, so `AppDelegate`'s key monitor stops
+    /// swallowing Escape — while the editor is up, Escape must cancel the edit rather than close
+    /// the panel out from under it.
+    private func setEditing(_ editing: Bool) {
+        guard isEditing != editing else { return }
+        isEditing = editing
+        NotificationCenter.default.post(
+            name: editing ? .clipboardAlertShown : .clipboardAlertHidden, object: nil)
+        if editing { draftIsEmpty = false }
+    }
+
+    private var editor: some View {
+        let seed = ItemEdit.editorSeed(for: item, parsed: richPreview?.text)
+        return EditableRichText(
+            initial: seed.text,
+            allowsFormatting: seed.formatted,
+            fill: seed.formatted ? richPreview?.fill : nil,
+            buffer: buffer,
+            onChange: {
+                let empty = buffer.plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                if empty != draftIsEmpty { draftIsEmpty = empty }
+            },
+            onCancel: { setEditing(false) }
+        )
+    }
+
+    /// Writes the edit and closes.
+    ///
+    /// Closing rather than returning to the preview because `item` is a value captured when this
+    /// view was built: it still holds the old content, so staying open would show the text the
+    /// edit has just replaced. The card behind the popover updates from the store.
+    private func save() {
+        let plain = buffer.plain
+        guard !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // The same decision the editor was opened with — never `keepsFormatting(item)` again here,
+        // or a session that opened plain would save plain RTF over the real formatting.
+        let seed = ItemEdit.editorSeed(for: item, parsed: richPreview?.text)
+        let rich = seed.formatted ? ItemEdit.rtf(from: buffer.attributed) : nil
+        ClipboardStore.shared.updateContent(id: item.id, text: plain,
+                                            richData: rich,
+                                            richType: rich == nil ? nil : ItemEdit.richType)
+        setEditing(false)
+        onClose()
     }
 
     private var header: some View {
@@ -70,6 +144,13 @@ struct PreviewPopoverContent: View {
 
             Text(title).font(.system(size: 13, weight: .semibold))
             Spacer()
+            if !isEditing, ItemEdit.canEdit(item.type) {
+                Button { setEditing(true) } label: {
+                    Image(systemName: "pencil").font(.system(size: 13))
+                }
+                .buttonStyle(.plain)
+                .help("Edit")
+            }
             shareControl
         }
         .padding(.horizontal, 12)
@@ -93,15 +174,19 @@ struct PreviewPopoverContent: View {
 
     @ViewBuilder
     private var content: some View {
-        switch item.type {
-        case .url:
-            if let url = itemURL { WebPreview(url: url) } else { textContent }
-        case .image:
-            imageContent
-        case .text:
-            textContent
-        case .file, .folder:
-            fileContent
+        if isEditing {
+            editor
+        } else {
+            switch item.type {
+            case .url:
+                if let url = itemURL { WebPreview(url: url) } else { textContent }
+            case .image:
+                imageContent
+            case .text:
+                textContent
+            case .file, .folder:
+                fileContent
+            }
         }
     }
 
@@ -114,15 +199,20 @@ struct PreviewPopoverContent: View {
         }
     }
 
+    /// Plain text goes through the same `NSTextView` the formatted and file panes use.
+    ///
+    /// It used to be a SwiftUI `Text` in a `ScrollView`, which lays the whole string out at once —
+    /// exactly what the file pane below already avoids for the same reason, in its own words. A
+    /// half-megabyte note is a normal thing to copy and this is the pane you open to read it.
     private var plainTextContent: some View {
-        ScrollView {
-            Text(item.displayText)
-                .font(.system(size: 13))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(14)
-        }
-        .background(Color(nsColor: .textBackgroundColor))
+        RichTextPreview(text: Self.plainBody(item.displayText), fill: nil)
+    }
+
+    private static func plainBody(_ text: String) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: NSColor.labelColor,
+        ])
     }
 
     @ViewBuilder
@@ -192,10 +282,37 @@ struct PreviewPopoverContent: View {
 
     @ViewBuilder
     private var footer: some View {
+        if isEditing {
+            editingFooter
+        } else {
+            previewFooter
+        }
+    }
+
+    private var editingFooter: some View {
+        HStack(spacing: 8) {
+            Spacer()
+            Button("Cancel") { setEditing(false) }
+                .controlSize(.small)
+                .keyboardShortcut(.cancelAction)
+            // ⌘S, the key everyone reaches for. It does not collide with the panel's own ⌘S
+            // (save to a file) because entering edit mode raises the alert handshake, which stops
+            // AppDelegate's key monitor claiming the keystroke at all.
+            Button("Save") { save() }
+                .controlSize(.small)
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(draftIsEmpty)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    @ViewBuilder
+    private var previewFooter: some View {
         HStack {
             switch item.type {
             case .text:
-                Text(textStats).font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(stats).font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             case .url:
                 if let url = itemURL {
@@ -223,8 +340,7 @@ struct PreviewPopoverContent: View {
         .padding(.vertical, 7)
     }
 
-    private var textStats: String {
-        let text = item.displayText
+    private static func textStats(_ text: String) -> String {
         let chars = text.count
         let words = text.split { $0 == " " || $0.isNewline }.filter { !$0.isEmpty }.count
         let lines = text.isEmpty ? 0 : text.components(separatedBy: .newlines).count
@@ -243,6 +359,87 @@ struct PreviewPopoverContent: View {
             loadedImage = img
         } else {
             loadedImage = await ClipboardStore.shared.loadImage(for: item.id)
+        }
+    }
+}
+
+/// A handle on the live editor.
+///
+/// Holds the text view weakly and reads it on demand, rather than copying the document out on every
+/// keystroke — a large snippet would otherwise be duplicated per character typed.
+final class EditBuffer {
+    weak var textView: NSTextView?
+
+    var plain: String { textView?.string ?? "" }
+    var attributed: NSAttributedString { textView?.attributedString() ?? NSAttributedString() }
+}
+
+/// The editor itself: the same `NSTextView` the preview already uses, told it is editable.
+///
+/// Seeded once in `makeNSView` and never written to again — `updateNSView` deliberately does
+/// nothing, because pushing the seed back in on a SwiftUI update would throw away what the user has
+/// typed and move the caret back to the start.
+private struct EditableRichText: NSViewRepresentable {
+    let initial: NSAttributedString
+    let allowsFormatting: Bool
+    let fill: NSColor?
+    let buffer: EditBuffer
+    let onChange: () -> Void
+    let onCancel: () -> Void
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = true
+        guard let view = scroll.documentView as? NSTextView else { return scroll }
+
+        view.isEditable = true
+        view.isSelectable = true
+        view.isRichText = allowsFormatting
+        view.allowsUndo = true
+        view.drawsBackground = true
+        view.textContainerInset = NSSize(width: 14, height: 14)
+        view.delegate = context.coordinator
+        view.textStorage?.setAttributedString(initial)
+        if !allowsFormatting {
+            // A plain item is edited plain, so nothing pasted into the editor can smuggle
+            // formatting into an item that never had any.
+            view.font = .systemFont(ofSize: 13)
+            view.textColor = .labelColor
+        }
+
+        let colour = fill ?? .textBackgroundColor
+        scroll.backgroundColor = colour
+        view.backgroundColor = colour
+
+        buffer.textView = view
+        // Next turn: the view is not in a window yet while `makeNSView` runs, so there is nothing
+        // to become first responder of.
+        DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
+        return scroll
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange, onCancel: onCancel) }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        let onChange: () -> Void
+        let onCancel: () -> Void
+
+        init(onChange: @escaping () -> Void, onCancel: @escaping () -> Void) {
+            self.onChange = onChange
+            self.onCancel = onCancel
+        }
+
+        func textDidChange(_ notification: Notification) { onChange() }
+
+        /// Escape reaches here rather than AppDelegate's monitor because entering edit mode posts
+        /// the alert handshake, which stops the monitor swallowing it.
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+            onCancel()
+            return true
         }
     }
 }

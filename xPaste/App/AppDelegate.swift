@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import SwiftUI
+import UniformTypeIdentifiers
 
 private func hotKeyEventHandler(
     _ nextHandler: EventHandlerCallRef?,
@@ -30,7 +31,16 @@ extension Notification.Name {
     static let simulateDragEnd      = Notification.Name("com.user.xPaste.simulateDragEnd")
     static let hotkeyChanged        = Notification.Name("com.user.xPaste.hotkeyChanged")
     static let pasteNumberedItem    = Notification.Name("com.user.xPaste.pasteNumberedItem")
+    /// Save one named item to disk. Carries `itemID`.
+    static let saveItemToFile       = Notification.Name("com.user.xPaste.saveItemToFile")
+    /// ⌘S. Only the panel knows what is selected, so it turns this into a `saveItemToFile`.
+    static let saveSelectedItem     = Notification.Name("com.user.xPaste.saveSelectedItem")
     static let openSettingsWindow   = Notification.Name("com.user.xPaste.openSettingsWindow")
+    /// "Check for Updates…" in the panel's ⋯ menu.
+    static let openUpdateWindow     = Notification.Name("com.user.xPaste.openUpdateWindow")
+    /// Posted by the update window's own buttons, which have no window to close themselves —
+    /// the window is an `NSWindow` the delegate owns, not a SwiftUI scene.
+    static let closeUpdateWindow    = Notification.Name("com.user.xPaste.closeUpdateWindow")
     static let settingsWindowWillShow = Notification.Name("com.user.xPaste.settingsWindowWillShow")
     static let menuBarIconChanged   = Notification.Name("com.user.xPaste.menuBarIconChanged")
     static let screenSharingVisibilityChanged = Notification.Name("com.user.xPaste.screenSharingVisibilityChanged")
@@ -154,6 +164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var panelVisible = false
     private var hotKeyRef: EventHotKeyRef?
     private var settingsWindow: NSWindow?
+    private var updateWindow: NSWindow?
+    /// Outlives the window on purpose: closing the window mid-download must not abandon the
+    /// download, and a build already staged has to still be there when the window is reopened.
+    private let updateController = UpdateController()
+    private let updateCheckPresenter = UpdateCheckPresenter()
     private var mouseMonitor: Any?
     private var keyMonitor: Any?
     private var previousApp: NSRunningApplication?
@@ -185,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupPanel()
         setupHotKey()
         ClipboardMonitor.shared.start()
+        DragTempFile.clearLeftovers()
         warmPanel()
         // Index older screenshots for search. Deliberately late and paused whenever the panel is
         // open, so it can never compete with the hotkey path for the main thread.
@@ -216,8 +232,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
 
         NotificationCenter.default.addObserver(
+            self, selector: #selector(handleSaveItemToFile),
+            name: .saveItemToFile, object: nil
+        )
+
+        NotificationCenter.default.addObserver(
             self, selector: #selector(openSettings),
             name: .openSettingsWindow, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(openUpdateWindow),
+            name: .openUpdateWindow, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(closeUpdateWindow),
+            name: .closeUpdateWindow, object: nil
         )
         NotificationCenter.default.addObserver(
             self, selector: #selector(updateMenuBarVisibility),
@@ -429,19 +458,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func handleWillPowerOff() {
-        if UserDefaults.standard.bool(forKey: "clearOnLogout") {
-            ClipboardStore.shared.clearAll()
-        }
+        guard UserDefaults.standard.bool(forKey: "clearOnLogout") else { return }
+        ClipboardStore.shared.clearAll()
+        // Erasing is queued too, and the machine is about to go. An erase that did not finish is
+        // the one kind of unfinished work that matters here.
+        ClipboardStore.shared.flushPendingWrites()
     }
 
     @objc private func handleWillSleep() {
-        if UserDefaults.standard.bool(forKey: "clearOnLogout") {
-            ClipboardStore.shared.clearAll()
-        }
+        guard UserDefaults.standard.bool(forKey: "clearOnLogout") else { return }
+        ClipboardStore.shared.clearAll()
+        ClipboardStore.shared.flushPendingWrites()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         ClipboardMonitor.shared.stop()
+        // Saves are queued, not immediate. Quitting straight after a copy left most of it unwritten.
+        ClipboardStore.shared.flushPendingWrites()
         if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
     }
 
@@ -876,10 +909,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // flag — the panel's own shortcuts must stay out of the way: ⌘1 belongs to the text
             // field, not to "paste card 1".
             if self.alertIsPresented { return event }
-            if event.modifierFlags.contains(.command),
-               event.charactersIgnoringModifiers == "," {
+            // Exactly the modifiers named, nothing extra: ⌥⌘S and ⌃⌘S belong to whatever the user
+            // has bound them to, not to xPaste.
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .subtracting(.capsLock)
+            if mods == .command, event.charactersIgnoringModifiers == "," {
                 self.hidePanel()
                 self.openSettings()
+                return nil
+            }
+            // ⌘S saves the selected card. Handled here, beside ⌘, and the ⌘-digits, rather than as
+            // another hidden SwiftUI Button — establishing first responder resolves every
+            // registered key equivalent, which is why eighteen of those were moved out of the
+            // panel. Only the panel knows what is selected, so it turns this into a save.
+            if mods == .command, event.charactersIgnoringModifiers?.lowercased() == "s" {
+                NotificationCenter.default.post(name: .saveSelectedItem, object: nil)
                 return nil
             }
             // ⌘1…⌘9 paste the card carrying that number, ⌘⇧1…⌘⇧9 paste it as plain text.
@@ -888,7 +932,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // the eighteen of those cost ~4ms of the panel's first-responder setup and ~7ms of
             // the whole open path, measured, because establishing first responder resolves every
             // registered key equivalent.
-            if event.modifierFlags.contains(.command),
+            if mods == .command || mods == [.command, .shift],
                let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
                (1...9).contains(digit) {
                 NotificationCenter.default.post(
@@ -974,6 +1018,126 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    // MARK: - Saving an item to a file
+
+    /// Writes one item to disk through a Save dialog.
+    ///
+    /// Run from here rather than from `ContentView` because the panel is a `nonactivatingPanel` that
+    /// never becomes key or main, and the app runs as an accessory: a dialog needs the app activated
+    /// first. That is the same sequence `openSettings` performs. Hiding the panel first also settles
+    /// the global mouse monitor, which would otherwise treat the first click into the dialog as a
+    /// click outside the panel.
+    @objc private func handleSaveItemToFile(_ note: Notification) {
+        guard let id = note.userInfo?["itemID"] as? UUID,
+              let item = ClipboardStore.shared.items.first(where: { $0.id == id }),
+              SaveFormat.canSave(item.type)
+        else { return }
+
+        // An image's pixels may live on disk rather than on the item, and `SaveFormat` deliberately
+        // knows nothing about the store — so they are read here and handed in.
+        let imageBytes: Data? = item.type == .image
+            ? (item.imageData ?? ClipboardStore.shared.imageBytes(for: item.id))
+            : nil
+        let suggestion = SaveFormat.suggest(for: item, imageBytes: imageBytes)
+
+        hidePanel()
+        // On the next runloop turn: the hide is staged in this one, and running a modal dialog
+        // before it is committed leaves the bar frozen on screen behind the dialog.
+        DispatchQueue.main.async { [weak self] in
+            self?.presentSavePanel(for: suggestion)
+        }
+    }
+
+    private func presentSavePanel(for suggestion: SaveFormat.Suggestion) {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let dialog = NSSavePanel()
+        // Just the extension — no name guessed from the content. The caret is put in front of the
+        // dot a few lines below, so the field is ready to be typed into.
+        dialog.nameFieldStringValue = suggestion.dialogFileName
+        dialog.canCreateDirectories = true
+        dialog.isExtensionHidden = false
+
+        // Anything may be typed over the suggestion. For text the extension is only a label —
+        // the bytes are the same UTF-8 either way — and naming a content type here is what produced
+        // `.json.json`: the panel read the leading dot as a name and appended the extension again.
+        dialog.allowsOtherFileTypes = true
+
+        // Collapse the selection to the start once the panel is up, so the extension is not sitting
+        // highlighted and about to be typed over. Scheduled rather than run here because the panel
+        // is not on screen until `runModal` below; `SaveNameCaret` explains the rest.
+        let caretNudge = Self.startCaretNudge(for: dialog, suggested: suggestion.dialogFileName)
+
+        let choice = dialog.runModal()
+        // The dialog is gone, so a press from here on would land on whatever is in front now.
+        caretNudge.invalidate()
+        defer { returnFocusToPreviousApp() }
+        guard choice == .OK, let chosen = dialog.url else { return }
+        let target = SaveFormat.ensuringName(chosen)
+
+        // A Link saves the page itself, which has to be fetched — so the write happens after an
+        // await rather than inline. Every other item resolves to itself and lands immediately;
+        // one path for both keeps the error handling in a single place.
+        Task { @MainActor in
+            do {
+                try ItemFileWriter.write(try await ItemFileWriter.resolving(suggestion), to: target)
+            } catch {
+                presentSaveFailure(error)
+            }
+        }
+    }
+
+    /// Drives `SaveNameCaret` for as long as it asks to be driven, and hands back the timer so the
+    /// caller can stop it the moment `runModal` returns.
+    ///
+    /// A run-loop timer rather than a queued block, and registered in the modal panel's mode: the
+    /// dialog is run from inside a main-queue block, so anything queued behind it waits for the
+    /// dialog to close — see `SaveNameCaret`. `.default` is in the list too, so the timer is not
+    /// left dead if the panel ever stops being modal.
+    @discardableResult
+    private static func startCaretNudge(for dialog: NSSavePanel, suggested: String) -> Timer {
+        var presses = 0
+        let timer = Timer(timeInterval: SaveNameCaret.tickInterval, repeats: true) { timer in
+            let step = SaveNameCaret.step(presses: presses,
+                                          currentName: dialog.nameFieldStringValue,
+                                          suggestedName: suggested)
+            guard step == .press else { timer.invalidate(); return }
+            pressLeftArrow()
+            presses += 1
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        RunLoop.main.add(timer, forMode: .default)
+        return timer
+    }
+
+    /// One left-arrow press, to the front-most window.
+    private static func pressLeftArrow() {
+        let source = CGEventSource(stateID: .hidSystemState)
+        let left: CGKeyCode = 0x7B
+        CGEvent(keyboardEventSource: source, virtualKey: left, keyDown: true)?
+            .post(tap: .cghidEventTap)
+        CGEvent(keyboardEventSource: source, virtualKey: left, keyDown: false)?
+            .post(tap: .cghidEventTap)
+    }
+
+    /// Hands the keyboard back to whatever the panel was opened in front of.
+    ///
+    /// Activating xPaste for the dialog is unavoidable, but xPaste is an accessory with no window
+    /// left once the dialog closes — so without this the user is dropped somewhere with no focus at
+    /// all and has to click back into what they were doing. The paste path already does the same.
+    private func returnFocusToPreviousApp() {
+        previousApp?.activate(options: [])
+    }
+
+    private func presentSaveFailure(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Couldn’t save the file"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
     @objc private func openSettings() {
         if panelVisible { hidePanel() }
         if settingsWindow == nil {
@@ -1000,6 +1164,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.post(name: .settingsWindowWillShow, object: nil)
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// "Check for Updates…": check first, then decide what is worth putting on screen.
+    ///
+    /// The big window — icon, release notes, progress — opens only when there is genuinely a new
+    /// version to talk about, or when a run is already under way. Everything else (checking, up to
+    /// date, the check failed) is a small panel with an OK button, because a scrollable "What's
+    /// New" box is a lot of window to say "nothing has changed".
+    @objc private func openUpdateWindow() {
+        if panelVisible { hidePanel() }
+        Task { @MainActor in await runUpdateCheck() }
+    }
+
+    @MainActor private func runUpdateCheck() async {
+        // A run in flight belongs in the big window: the progress bar and the install button exist
+        // nowhere else, and `check()` refuses to start on top of one anyway.
+        switch updateController.state {
+        case .downloading, .preparing, .readyToInstall, .installing, .available:
+            presentUpdateWindow()
+            return
+        case .idle, .checking, .upToDate, .error:
+            break
+        }
+
+        updateCheckPresenter.show(.checking)
+        await updateController.check()
+        switch updateController.state {
+        case .available, .readyToInstall:
+            updateCheckPresenter.dismiss()
+            presentUpdateWindow()
+        case let .upToDate(current):
+            updateCheckPresenter.show(.upToDate(version: current))
+        case let .error(message):
+            updateCheckPresenter.show(.failed(message: message))
+        case .idle, .checking, .downloading, .preparing, .installing:
+            // `check()` never settles on any of these; if it somehow did, the big window is the
+            // safest place for the user to see what is going on.
+            updateCheckPresenter.dismiss()
+            presentUpdateWindow()
+        }
+    }
+
+    /// Opens the update window, on the same terms as Settings: the panel goes away first, and the
+    /// app is activated, because an accessory app's window opens behind everything otherwise.
+    ///
+    /// The window is kept between visits so it reopens where it was left, and because a download in
+    /// progress is showing inside it — rebuilding it each time would restart the view mid-transfer.
+    private func presentUpdateWindow() {
+        if panelVisible { hidePanel() }
+        if updateWindow == nil {
+            let controller = NSHostingController(
+                rootView: UpdateWindowView(controller: updateController)
+            )
+            let window = NSWindow(contentViewController: controller)
+            window.isReleasedWhenClosed = false
+            window.title = "Software Update"
+            window.styleMask = [.titled, .closable]
+            window.setContentSize(NSSize(width: 560, height: 300))
+            window.center()
+            updateWindow = window
+        }
+        updateWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The window's own buttons close it through here, since the view holds no reference to it.
+    @objc private func closeUpdateWindow() {
+        updateWindow?.performClose(nil)
     }
 
     private func setupHotKey() {
@@ -1033,7 +1265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let modifiers = UserDefaults.standard.object(forKey: HotkeyDefaults.modifiersKey) as? Int
             ?? HotkeyDefaults.modifiers
         let hotKeyID = EventHotKeyID(signature: 0x434C4D47, id: 1)
-        RegisterEventHotKey(
+        let status = RegisterEventHotKey(
             UInt32(keyCode),
             UInt32(modifiers),
             hotKeyID,
@@ -1041,6 +1273,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             OptionBits(0),
             &hotKeyRef
         )
+        guard status != noErr else { return }
+
+        // The combination was refused. Left as it was, the app has no shortcut at all — and with
+        // the menu bar icon hidden there is then no way to open the panel, which is precisely the
+        // state `HotkeyRecorderButton.reset` exists to avoid. Fall back to the built-in one and put
+        // that on record, so Settings shows what actually works rather than what was asked for.
+        //
+        // This catches a combination the system refuses outright. It cannot catch one that
+        // registers and is then swallowed by an existing system shortcut — Carbon reports success
+        // for those, and there is no API that says otherwise.
+        hotKeyRef = nil
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: HotkeyDefaults.keyCodeKey) != nil else { return }
+        defaults.removeObject(forKey: HotkeyDefaults.keyCodeKey)
+        defaults.removeObject(forKey: HotkeyDefaults.modifiersKey)
+        defaults.set(HotkeyDefaults.display, forKey: HotkeyDefaults.displayKey)
+        registerHotKeyFromDefaults()
     }
 }
 

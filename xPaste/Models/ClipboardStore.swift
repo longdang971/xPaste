@@ -88,14 +88,22 @@ final class ClipboardStore: ObservableObject {
     }
     private let itemsDir: URL?
     private let imagesDir: URL?
-    private let saveQueue = DispatchQueue(label: "com.user.xPaste.save", qos: .background)
+    /// Utility rather than background: this queue now carries the *only* copy of a freshly
+    /// captured image, and background work can be starved for seconds under load — long enough for
+    /// a paste or a save to look for a file that has not been written yet.
+    private let saveQueue = DispatchQueue(label: "com.user.xPaste.save", qos: .utility)
 
     private var _cachedFilteredItems: [ClipboardItem]?
     private var _cachedPinnedItems: [ClipboardItem]?
 
+    /// Decoded pictures, bounded by what they cost rather than by how many there are.
+    ///
+    /// A count limit is no limit at all here — see `NSImage.approximateDecodedBytes`. The count
+    /// stays as a second bound so a history of small images cannot fill it with entries either.
     private let imageCache: NSCache<NSString, NSImage> = {
         let c = NSCache<NSString, NSImage>()
         c.countLimit = 50
+        c.totalCostLimit = 64 * 1024 * 1024
         return c
     }()
 
@@ -114,6 +122,27 @@ final class ClipboardStore: ObservableObject {
         }
     }
 
+    /// Waits for every queued write to reach disk.
+    ///
+    /// The queue is serial, so an empty block behind the backlog returns only once the backlog has
+    /// gone. Quitting without this loses whatever had not been written yet — measured at four of
+    /// six item files and the whole of an image when the app was closed straight after copying.
+    func flushPendingWrites() {
+        saveQueue.sync {}
+    }
+
+    /// An image's bytes, from the one place that has them.
+    ///
+    /// `add` drops the in-memory buffer as soon as the write is queued, so the file is the only
+    /// copy — and a reader arriving before the queue has drained would find nothing and conclude
+    /// the picture was gone. Draining first is cheap (the queue is normally empty) and it is the
+    /// difference between pasting a picture and pasting nothing.
+    func imageBytes(for id: UUID) -> Data? {
+        flushPendingWrites()
+        guard let url = imageURL(for: id) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
     func imageURL(for id: UUID) -> URL? {
         imagesDir?.appendingPathComponent(id.uuidString + ".jpg")
     }
@@ -125,7 +154,7 @@ final class ClipboardStore: ObservableObject {
         let url = imagesDir.appendingPathComponent(id.uuidString + ".jpg")
         guard let data = try? Data(contentsOf: url),
               let image = NSImage(data: data) else { return nil }
-        imageCache.setObject(image, forKey: key)
+        imageCache.setObject(image, forKey: key, cost: image.approximateDecodedBytes)
         return image
     }
 
@@ -175,6 +204,7 @@ final class ClipboardStore: ObservableObject {
     }
 
     func add(_ item: ClipboardItem) {
+        var item = item
         let removedIDs: [UUID] = items.compactMap { existing in
             guard !existing.isPinned, existing.type == item.type else { return nil }
             switch item.type {
@@ -197,9 +227,18 @@ final class ClipboardStore: ObservableObject {
         if let data = item.imageData, let imagesDir {
             let imgURL = imagesDir.appendingPathComponent(item.id.uuidString + ".jpg")
             saveQueue.async { try? data.write(to: imgURL, options: .atomic) }
-            if let image = NSImage(data: data) {
-                imageCache.setObject(image, forKey: item.id.uuidString as NSString)
-            }
+            // Deliberately not decoded here. Caching it on capture meant every picture copied was
+            // decoded whether or not anyone ever looked at it — twenty-five copies in a row cost
+            // hundreds of megabytes for cards that were never drawn. `loadImage` decodes the ones
+            // a card actually shows, and the file is written just below.
+            // Let the buffer go now that it is on its way to disk.
+            //
+            // `imageData` is not in `CodingKeys`, so an item restored at launch never carries one —
+            // the whole design reads pixels back from disk through a count-bounded cache. An item
+            // added during the session was the exception, and it kept its full buffer in the array
+            // for as long as the app ran: forty screenshots measured at 36 MB, and the cap is 3000
+            // items. Every reader already falls back to the file, so there is nothing to keep.
+            item.imageData = nil
         }
 
         items.insert(item, at: 0)
@@ -230,6 +269,47 @@ final class ClipboardStore: ObservableObject {
         writeMetadata(items[idx])
     }
 
+    /// Replaces an item's content with what came out of the editor.
+    ///
+    /// Only Text and Link items, and never with nothing: deleting is a separate gesture with its
+    /// own confirmation, so a save that emptied an item would be a way to lose one by accident.
+    ///
+    /// The type is decided again from the new text — an edit that turns prose into a URL turns a
+    /// Text card into a Link card — using the rule capture uses, so the two cannot disagree.
+    ///
+    /// Position and timestamp are left alone. The timestamp records when the content was copied,
+    /// and editing is not copying.
+    func updateContent(id: UUID, text: String, richData: Data?, richType: String?) {
+        guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
+        guard items[idx].type == .text || items[idx].type == .url else { return }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        // Built up on a copy and written back once. `items` carries willSet/didSet, so every
+        // assignment through the subscript is a separate `objectWillChange` — five of them for one
+        // edit, each one a full SwiftUI pass over the panel.
+        var edited = items[idx]
+        edited.text = text
+        edited.richData = richData
+        edited.richType = richData == nil ? nil : richType
+        edited.type = ClipboardItem.contentType(for: text)
+        edited.revision = edited.contentRevision + 1
+        items[idx] = edited
+
+        forgetCachedContent(for: id)
+        writeMetadata(items[idx])
+    }
+
+    /// The caches that key on an item's id and stop being true the moment its content changes.
+    ///
+    /// Called from here rather than left to each caller because there is exactly one way an item's
+    /// content changes, and a cache that nobody remembered to purge does not fail — it quietly
+    /// serves the old text, which is far worse. The card's `@State` is the one cache out of reach
+    /// from here; `ClipboardItem.revision` is what deals with that.
+    private func forgetCachedContent(for id: UUID) {
+        RichTextRenderer.forget(id)
+        ClipboardItemCard.forgetContent(for: id)
+    }
+
     /// Records what OCR read out of an image. Writing an empty string is meaningful: it marks
     /// the item as scanned so the backfill never looks at it again.
     func setOCRText(_ text: String, for id: UUID) {
@@ -247,9 +327,13 @@ final class ClipboardStore: ObservableObject {
 
     func moveToTop(_ item: ClipboardItem) {
         guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
-        var moved = items.remove(at: idx)
+        // Reordered on a copy and written back once. A remove and an insert are two mutations of a
+        // property with observers, so this cost two full SwiftUI passes over the panel for one move.
+        var reordered = items
+        var moved = reordered.remove(at: idx)
         moved.timestamp = Date()
-        items.insert(moved, at: 0)
+        reordered.insert(moved, at: 0)
+        items = reordered
         writeMetadata(moved)
     }
 
@@ -315,12 +399,18 @@ final class ClipboardStore: ObservableObject {
         guard !jsonURLs.isEmpty else { return }
 
         var results = [ClipboardItem?](repeating: nil, count: jsonURLs.count)
-        DispatchQueue.concurrentPerform(iterations: jsonURLs.count) { i in
-            let decoder = JSONDecoder()
-            guard let data = try? Data(contentsOf: jsonURLs[i]),
-                  let item = try? decoder.decode(ClipboardItem.self, from: data)
-            else { return }
-            results[i] = item
+        // Through a buffer pointer rather than by subscripting the array: `results[i] = item` from
+        // several threads at once runs the copy-on-write uniqueness check and exclusivity
+        // enforcement concurrently on one array, which is undefined behaviour however well it
+        // happens to work. The pointer is plain memory, and each iteration owns its own slot.
+        results.withUnsafeMutableBufferPointer { buffer in
+            DispatchQueue.concurrentPerform(iterations: jsonURLs.count) { i in
+                let decoder = JSONDecoder()
+                guard let data = try? Data(contentsOf: jsonURLs[i]),
+                      let item = try? decoder.decode(ClipboardItem.self, from: data)
+                else { return }
+                buffer[i] = item
+            }
         }
 
         items = results.compactMap { $0 }.sorted {
@@ -406,6 +496,14 @@ final class ClipboardStore: ObservableObject {
     }
 
     static func defaultStorageDir() -> URL {
+        // `XPASTE_STORAGE_DIR` points a run at a history of its own. The perf harness injects items
+        // and deletes them again, and the installed copy is normally running against the real
+        // directory at the same time — two processes writing one history is how a test run ends up
+        // deleting somebody's clipboard. Unset in every ordinary launch.
+        if let override = ProcessInfo.processInfo.environment["XPASTE_STORAGE_DIR"],
+           !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first!

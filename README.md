@@ -4,7 +4,7 @@ A fast, native clipboard manager for macOS. xPaste lives in your menu bar,
 keeps a searchable history of everything you copy, and pastes it back into any
 app with a single shortcut.
 
-Built with SwiftUI + AppKit. Version 1.1.4 · Powered by LQ Team.
+Built with SwiftUI + AppKit. Version 1.2.1 · Powered by LQ Team.
 
 ## Features
 
@@ -24,7 +24,18 @@ Built with SwiftUI + AppKit. Version 1.1.4 · Powered by LQ Team.
   press Space to open a full preview (web preview for links, image/file details).
 - **Drag items out** — drag a card straight into Finder, Mail, or any editor. Files and
   images drop as the real file; links drop as a clickable URL.
-- **Name your items** — double-click a card's title (or right-click › Name…) to edit it in place
+- **Save as File…** (**⌘S**, or right-click › Save as File…) — writes the item to disk through a
+  Save dialog whose name and extension are already filled in with a guess at what the content is:
+  `.php` for PHP, `.py` for Python, `.json`, `.sql`, `.swift`, `.css`, `.md`, `.csv` and the rest,
+  falling back to `.txt` when it isn't sure. Images take the extension their bytes actually are and
+  are written through unchanged, so nothing is re-encoded; a **link downloads the page** and saves it
+  as `.html`. The dialog offers the extension alone with the cursor in front of it, so you type the
+  name — nothing is guessed from the content.
+- **Edit an item** — press Space for the preview and click the pencil (or right-click › Edit…) to
+  correct a Text or Link item in place: a typo in a snippet, a stale token in a command. Formatted
+  text is edited **with** its formatting, so bold, colour and highlights survive the fix. ⌘S saves,
+  ⎋ cancels. An edit that turns text into a URL turns the card into a Link.
+- **Name your items** — double-click a card's title (or right-click › Rename…) to edit it in place
   (⏎ saves, ⎋ cancels).
   The card shows the name instead of its type and the name is searchable, which turns the Pin tab
   into a snippet library.
@@ -43,6 +54,9 @@ Built with SwiftUI + AppKit. Version 1.1.4 · Powered by LQ Team.
 - **Text inside screenshots** — images are read with Vision on capture, so searching for a word
   written inside a screenshot finds it.
 - **Hover actions** — pin and delete buttons appear on a card as the pointer reaches it.
+- **Check for Updates…** (⋯ menu) — asks GitHub whether a newer release has been published,
+  shows its release notes, and can download and install it in place, relaunching when it's
+  done. Only ever when you ask: nothing checks on launch or on a timer.
 - **Privacy-aware** — skips confidential content (password-manager pasteboard hints),
   transient content, any apps you add to the ignore list, and any text matching your own
   never-save patterns (plain words or `/regular expressions/`). Passwords.app and Keychain

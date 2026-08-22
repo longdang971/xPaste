@@ -15,6 +15,8 @@ struct ContentView: View {
     @State private var showDeleteSelectedConfirm = false
     @State private var showSearch = false
     @State private var previewItemID: UUID?
+    /// Whether the preview about to open should start in edit mode, for the menu's "Edit…".
+    @State private var previewStartsEditing = false
     @State private var scrollTargetID: UUID?
     @State private var pendingReorderID: UUID?
     @State private var activeTab: ClipboardTab = .all
@@ -258,6 +260,7 @@ struct ContentView: View {
             if !store.filters.isEmpty { store.filters.clear() }
             selection.clear()
             if previewItemID != nil { previewItemID = nil }
+            if previewStartsEditing { previewStartsEditing = false }
             // Drop a half-finished rename rather than reopening the panel into edit mode.
             if renameItemID != nil { renameItemID = nil }
         }
@@ -268,6 +271,11 @@ struct ContentView: View {
                   let item = displayedItems.first else { return }
             finishDrag(dragPlan(for: item), at: point, operation: [],
                        shiftHeld: note.userInfo?["shift"] as? Bool ?? false, cancelled: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .saveSelectedItem)) { _ in
+            // ⌘S arrives from AppDelegate's key monitor, which cannot know what is selected.
+            guard let item = primarySelectedItem, SaveFormat.canSave(item.type) else { return }
+            saveToFile(item)
         }
         .onReceive(NotificationCenter.default.publisher(for: .pasteNumberedItem)) { note in
             guard let number = note.userInfo?["number"] as? Int,
@@ -504,7 +512,10 @@ struct ContentView: View {
                             ))
                             .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                             .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
-                                PreviewPopoverContent(item: item) { previewItemID = nil }
+                                PreviewPopoverContent(item: item,
+                                                      startEditing: previewStartsEditing) {
+                                    previewItemID = nil
+                                }
                             }
                         }
                     }
@@ -558,7 +569,10 @@ struct ContentView: View {
                         .onTapGesture(count: 1) { selectItem(item) }
                         .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                         .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
-                            PreviewPopoverContent(item: item) { previewItemID = nil }
+                            PreviewPopoverContent(item: item,
+                                                  startEditing: previewStartsEditing) {
+                                previewItemID = nil
+                            }
                         }
                     }
                 }
@@ -622,9 +636,16 @@ struct ContentView: View {
         }
         menu.addItem(ClosureMenuItem(title: "Copy", symbol: "doc.on.doc",
                                      key: "c", modifiers: .command) { copyItem(item) })
+        if SaveFormat.canSave(item.type) {
+            menu.addItem(ClosureMenuItem(title: "Save as File…", symbol: "square.and.arrow.down",
+                                         key: "s", modifiers: .command) { saveToFile(item) })
+        }
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: item.label == nil ? "Name…" : "Rename…",
+        menu.addItem(ClosureMenuItem(title: "Rename…",
                                      symbol: "character.cursor.ibeam") { beginRename(item) })
+        if ItemEdit.canEdit(item.type) {
+            menu.addItem(ClosureMenuItem(title: "Edit…", symbol: "pencil") { beginEdit(item) })
+        }
         if item.type == .url, let text = item.text, let url = URL(string: text) {
             menu.addItem(ClosureMenuItem(title: "Open URL", symbol: "safari") {
                 NSWorkspace.shared.open(url)
@@ -689,8 +710,7 @@ struct ContentView: View {
         case .text:
             return [item.text ?? item.displayText]
         case .image:
-            let data = item.imageData
-                ?? ClipboardStore.shared.imageURL(for: item.id).flatMap { try? Data(contentsOf: $0) }
+            let data = item.imageData ?? ClipboardStore.shared.imageBytes(for: item.id)
             if let data, let img = NSImage(data: data) { return [img] }
             return [item.displayText]
         case .file, .folder:
@@ -713,6 +733,14 @@ struct ContentView: View {
             })
         }
         return submenu
+    }
+
+    /// Hands the item over to `AppDelegate`, which owns the window work a Save dialog needs — the
+    /// panel has to be hidden and the app activated before a modal can be usable. Same shape as
+    /// `.pasteClipboardItem`.
+    private func saveToFile(_ item: ClipboardItem) {
+        NotificationCenter.default.post(name: .saveItemToFile, object: nil,
+                                        userInfo: ["itemID": item.id])
     }
 
     private func pasteTransformed(_ item: ClipboardItem, using transform: TextTransform) {
@@ -765,6 +793,14 @@ struct ContentView: View {
         return point.y <= PanelLayout.cardHeaderHeight * scale
             && point.x >= left
             && point.x <= left + cardWidth - appIconZone
+    }
+
+    /// Opens the preview popover already in edit mode. The popover is where editing lives — it is
+    /// the only surface with room to type in and a footer to put Save and Cancel on.
+    private func beginEdit(_ item: ClipboardItem) {
+        selection.select(item.id)
+        previewStartsEditing = true
+        previewItemID = item.id
     }
 
     private func beginRename(_ item: ClipboardItem) {
@@ -957,7 +993,7 @@ struct ContentView: View {
     private func previewBinding(for item: ClipboardItem) -> Binding<Bool> {
         Binding(
             get: { previewItemID == item.id },
-            set: { show in if !show { previewItemID = nil } }
+            set: { show in if !show { previewItemID = nil; previewStartsEditing = false } }
         )
     }
 
@@ -1107,6 +1143,11 @@ private struct MoreMenu: View {
                 NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
             } label: {
                 Label("Settings…", systemImage: "gearshape")
+            }
+            Button {
+                NotificationCenter.default.post(name: .openUpdateWindow, object: nil)
+            } label: {
+                Label("Check for Updates…", systemImage: "arrow.down.circle")
             }
             Button { NSApplication.shared.terminate(nil) } label: {
                 Label("Quit xPaste", systemImage: "power")

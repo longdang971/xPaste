@@ -26,9 +26,22 @@ struct ClipboardItem: Identifiable, Codable {
     var richData: Data?
     /// Raw pasteboard type of `richData` (e.g. "public.rtf" or "public.html").
     var richType: String?
+    /// Bumped every time the content is edited.
+    ///
+    /// Six caches key on this item's `id`, which does not change when its content does. Purging
+    /// them covers five; the sixth is the card's own `@State`, which only refreshes when its
+    /// `.task` re-runs — and the task is keyed on values that an edit leaves alone. Carrying the
+    /// revision in that key is what makes the card notice. See `ClipboardStore.updateContent`.
+    ///
+    /// Optional because `Codable` here is synthesised: a non-optional new property fails to decode
+    /// every item already on disk. `contentRevision` is what callers should read.
+    var revision: Int?
+
+    /// The revision as a number, for callers that do not care that it was once absent.
+    var contentRevision: Int { revision ?? 0 }
 
     enum CodingKeys: String, CodingKey {
-        case id, type, text, imageSize, imageHash, fileURLs, timestamp, isPinned, label, sourceAppBundleID, ocrText, richData, richType
+        case id, type, text, imageSize, imageHash, fileURLs, timestamp, isPinned, label, sourceAppBundleID, ocrText, richData, richType, revision
     }
 
     init(
@@ -45,7 +58,8 @@ struct ClipboardItem: Identifiable, Codable {
         sourceAppBundleID: String? = nil,
         ocrText: String? = nil,
         richData: Data? = nil,
-        richType: String? = nil
+        richType: String? = nil,
+        revision: Int? = nil
     ) {
         self.id = id
         self.type = type
@@ -61,6 +75,7 @@ struct ClipboardItem: Identifiable, Codable {
         self.ocrText = ocrText
         self.richData = richData
         self.richType = richType
+        self.revision = revision
     }
 
     var displayText: String {
@@ -99,14 +114,27 @@ struct ClipboardItem: Identifiable, Codable {
             let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
             let (richData, richType) = captureRich(from: pasteboard)
-            if let url = URL(string: trimmed),
-               url.scheme == "http" || url.scheme == "https" {
-                return ClipboardItem(type: .url, text: string, richData: richData, richType: richType)
-            }
-            return ClipboardItem(type: .text, text: string, richData: richData, richType: richType)
+            return ClipboardItem(type: contentType(for: string), text: string,
+                                 richData: richData, richType: richType)
         }
 
         return nil
+    }
+
+    /// Whether a piece of text is a link or plain text.
+    ///
+    /// Shared with editing rather than left inline here: an edit that turns prose into a URL has to
+    /// reach the same verdict capture would, or the same string ends up as a Link card one way and
+    /// a Text card the other.
+    ///
+    /// Only `http` and `https` count. Those are the schemes a link preview can fetch; a `mailto:`
+    /// card promoted to a Link would sit waiting for a page that is never coming.
+    static func contentType(for text: String) -> ClipboardContentType {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), url.scheme == "http" || url.scheme == "https" else {
+            return .text
+        }
+        return .url
     }
 
     /// True only when every URL points at a plain directory. Packages/bundles
@@ -148,7 +176,7 @@ struct ClipboardItem: Identifiable, Codable {
             }
             if let text { pb.setString(text, forType: .string) }
         case .image:
-            let data = imageData ?? ClipboardStore.shared.imageURL(for: id).flatMap { try? Data(contentsOf: $0) }
+            let data = imageData ?? ClipboardStore.shared.imageBytes(for: id)
             if let data, let image = NSImage(data: data) {
                 pb.writeObjects([image])
             }
