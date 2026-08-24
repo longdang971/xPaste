@@ -171,21 +171,21 @@ final class RichTextHTMLTests: XCTestCase {
         let bold = manager.convert(NSFont.systemFont(ofSize: 13), toHaveTrait: .boldFontMask)
         let italic = manager.convert(NSFont.systemFont(ofSize: 13), toHaveTrait: .italicFontMask)
         let text = NSMutableAttributedString(string: "abc", attributes: plain)
-        text.addAttribute(.font, value: bold, range: NSRange(location: 0, length: 1))      // first char is bold
-        text.addAttribute(.font, value: italic, range: NSRange(location: 1, length: 1))    // second char is italic
-        // third char remains plain
+        text.addAttribute(.font, value: bold, range: NSRange(location: 0, length: 1))
+        text.addAttribute(.font, value: italic, range: NSRange(location: 1, length: 1))
 
         let back = roundTrip(text)
         let first = back.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         let second = back.attribute(.font, at: 1, effectiveRange: nil) as? NSFont
         let third = back.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
 
-        // Verify bold is present on first character, absent on second and third
+        // Asserted both ways round on all three characters: the italic half of the
+        // `<b>`/`<i>`-with-no-family rule had no coverage at all, and a writer that leaked bold
+        // into the neighbouring runs would have passed the one-sided version of this test.
         XCTAssertTrue(manager.traits(of: first ?? .systemFont(ofSize: 13)).contains(.boldFontMask))
         XCTAssertFalse(manager.traits(of: second ?? .systemFont(ofSize: 13)).contains(.boldFontMask))
         XCTAssertFalse(manager.traits(of: third ?? .systemFont(ofSize: 13)).contains(.boldFontMask))
 
-        // Verify italic is present on second character, absent on first and third
         XCTAssertFalse(manager.traits(of: first ?? .systemFont(ofSize: 13)).contains(.italicFontMask))
         XCTAssertTrue(manager.traits(of: second ?? .systemFont(ofSize: 13)).contains(.italicFontMask))
         XCTAssertFalse(manager.traits(of: third ?? .systemFont(ofSize: 13)).contains(.italicFontMask))
