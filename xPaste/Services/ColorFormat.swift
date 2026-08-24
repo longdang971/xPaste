@@ -28,7 +28,9 @@ enum ColorFormat: CaseIterable {
         // `RichTextRenderer` documents.
         let c = colour.usingColorSpace(.sRGB) ?? NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
         let r = c.redComponent, g = c.greenComponent, b = c.blueComponent, a = c.alphaComponent
-        let opaque = a >= 0.999
+        // Must agree with `number`'s rounding below: an alpha that prints as "1" has to take the
+        // opaque form too, or an rgba()/hsla() literal comes out with a trailing alpha of 1.
+        let opaque = a >= 0.995
 
         switch self {
         case .hex:
