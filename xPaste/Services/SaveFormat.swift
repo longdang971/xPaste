@@ -89,8 +89,8 @@ enum SaveFormat {
     /// something the other refuses.
     static func canSave(_ type: ClipboardContentType) -> Bool {
         switch type {
-        case .text, .url, .image: return true
-        case .file, .folder:      return false
+        case .text, .url, .color, .image: return true
+        case .file, .folder:              return false
         }
     }
 
@@ -118,7 +118,7 @@ enum SaveFormat {
             }
             return Suggestion(baseName: name, ext: textExtension(for: raw), payload: .text(raw))
 
-        case .text:
+        case .text, .color:
             let body = item.text ?? ""
             return Suggestion(baseName: name, ext: textExtension(for: body), payload: .text(body))
 
@@ -316,7 +316,7 @@ enum SaveFormat {
             }
             return derivedFromText(item.text)
 
-        case .text:
+        case .text, .color:
             return derivedFromText(item.text)
 
         case .file, .folder:

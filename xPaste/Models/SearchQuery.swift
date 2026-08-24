@@ -84,7 +84,7 @@ struct SearchQuery {
         if let label = item.label, label.localizedCaseInsensitiveContains(text) { return true }
         if let ocr = item.ocrText, ocr.localizedCaseInsensitiveContains(text) { return true }
         switch item.type {
-        case .text, .url:
+        case .text, .url, .color:
             if let body = item.text, body.localizedCaseInsensitiveContains(text) { return true }
         case .image:
             // Nothing else to match on: an image is findable by its name or by the text OCR

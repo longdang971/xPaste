@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 
 enum ClipboardContentType: String, Codable {
-    case text, url, image, file, folder
+    case text, url, color, image, file, folder
 }
 
 struct ClipboardItem: Identifiable, Codable {
@@ -80,7 +80,7 @@ struct ClipboardItem: Identifiable, Codable {
 
     var displayText: String {
         switch type {
-        case .text, .url: return text ?? ""
+        case .text, .url, .color: return text ?? ""
         case .image: return label ?? "Image"
         case .file: return fileURLs?.map(\.lastPathComponent).joined(separator: ", ") ?? "File"
         case .folder: return fileURLs?.map(\.lastPathComponent).joined(separator: ", ") ?? "Folder"
@@ -121,15 +121,19 @@ struct ClipboardItem: Identifiable, Codable {
         return nil
     }
 
-    /// Whether a piece of text is a link or plain text.
+    /// Whether a piece of text is a colour, a link, or plain text.
     ///
-    /// Shared with editing rather than left inline here: an edit that turns prose into a URL has to
-    /// reach the same verdict capture would, or the same string ends up as a Link card one way and
-    /// a Text card the other.
+    /// Shared with editing rather than left inline here: an edit that turns prose into a URL (or a
+    /// colour back into prose) has to reach the same verdict capture would, or the same string ends
+    /// up as one kind of card one way and another the other.
     ///
-    /// Only `http` and `https` count. Those are the schemes a link preview can fetch; a `mailto:`
-    /// card promoted to a Link would sit waiting for a page that is never coming.
+    /// Only `http` and `https` count for links. Those are the schemes a link preview can fetch; a
+    /// `mailto:` card promoted to a Link would sit waiting for a page that is never coming.
     static func contentType(for text: String) -> ClipboardContentType {
+        // Asked before the URL check for the reader's sake rather than for correctness — nothing
+        // that parses as a colour also parses as an http URL. `ColorParser` decides; this must not
+        // grow a second opinion about what a colour is.
+        if ColorParser.isColor(text) { return .color }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), url.scheme == "http" || url.scheme == "https" else {
             return .text
@@ -168,9 +172,10 @@ struct ClipboardItem: Identifiable, Codable {
     func write(to pb: NSPasteboard) {
         pb.clearContents()
         switch type {
-        case .text, .url:
+        case .text, .url, .color:
             // Write the formatted representation first (if any) so rich editors keep styling,
-            // plus a plain-string fallback for everything else.
+            // plus a plain-string fallback for everything else. A colour never has `richData` — see
+            // `ItemEdit.keepsFormatting` — so this is always the plain-string path for `.color`.
             if let richData, let richType, !richData.isEmpty {
                 pb.setData(richData, forType: NSPasteboard.PasteboardType(richType))
             }

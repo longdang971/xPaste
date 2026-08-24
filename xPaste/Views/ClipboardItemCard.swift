@@ -546,6 +546,17 @@ struct ClipboardItemCard: View {
                 } else {
                     richOrTextPreview
                 }
+            case .color:
+                // No file-path branch: a `.color` item's text is always a colour literal — see
+                // `ClipboardItem.contentType(for:)` — so it is never also a path to resolve.
+                // `detectedColor` is non-nil whenever `item.type == .color`, since it parses the
+                // same text this item was classified from; the fallback exists only for parity
+                // with the `.text` arm above.
+                if let color = detectedColor {
+                    colorPreview(color)
+                } else {
+                    richOrTextPreview
+                }
             case .image:
                 if let nsImage = loadedImage ?? Self.loadedImageCache.object(forKey: item.id as NSUUID) {
                     imagePreview(nsImage)
@@ -1057,7 +1068,7 @@ struct ClipboardItemCard: View {
 
     private func buildFooterLabel() -> String {
         switch item.type {
-        case .text, .url:
+        case .text, .url, .color:
             let n = item.text?.count ?? 0
             return "\(n) characters"
         case .image:
@@ -1166,7 +1177,12 @@ struct ClipboardItemCard: View {
     }
 
     private var detectedColor: Color? {
-        guard item.type == .text, let text = item.text else { return nil }
+        // `.text` stays in the guard alongside `.color` so an item already on disk from before
+        // this type existed — saved as `.text` because that was the only classification a colour
+        // literal could get — still draws its swatch. New captures are typed `.color` outright by
+        // `ClipboardItem.contentType(for:)` and never reach the `ColorParser.parse` call at all
+        // through the `.text` half of this guard.
+        guard item.type == .text || item.type == .color, let text = item.text else { return nil }
         return ColorParser.parse(text)
     }
 
@@ -1236,6 +1252,7 @@ private extension ClipboardContentType {
         switch self {
         case .text:   return "Text"
         case .url:    return "Link"
+        case .color:  return "Color"
         case .image:  return "Image"
         case .file:   return "File"
         case .folder: return "Folder"
@@ -1246,6 +1263,7 @@ private extension ClipboardContentType {
         switch self {
         case .text:   return "text.alignleft"
         case .url:    return "link"
+        case .color:  return "paintpalette"
         case .image:  return "photo"
         case .file:   return "doc.fill"
         case .folder: return "folder.fill"
@@ -1256,6 +1274,10 @@ private extension ClipboardContentType {
         switch self {
         case .text:   return .blue
         case .url:    return Color(red: 0.1, green: 0.6, blue: 0.3)
+        // Matches `.text`'s fallback: before this type existed a colour literal was a `.text`
+        // item, and `appAccentColor` (this value's only caller) only ever applies when there is
+        // no app icon to sample a real accent from — see `ClipboardItemCard.appAccentColor`.
+        case .color:  return .blue
         case .image:  return .purple
         case .file:   return .orange
         case .folder: return .blue

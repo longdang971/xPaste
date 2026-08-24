@@ -208,7 +208,7 @@ final class ClipboardStore: ObservableObject {
         let removedIDs: [UUID] = items.compactMap { existing in
             guard !existing.isPinned, existing.type == item.type else { return nil }
             switch item.type {
-            case .text, .url:
+            case .text, .url, .color:
                 return existing.text == item.text ? existing.id : nil
             case .image:
                 if let eh = existing.imageHash, let nh = item.imageHash { return eh == nh ? existing.id : nil }
@@ -271,17 +271,18 @@ final class ClipboardStore: ObservableObject {
 
     /// Replaces an item's content with what came out of the editor.
     ///
-    /// Only Text and Link items, and never with nothing: deleting is a separate gesture with its
-    /// own confirmation, so a save that emptied an item would be a way to lose one by accident.
+    /// Only Text, Link and Color items, and never with nothing: deleting is a separate gesture with
+    /// its own confirmation, so a save that emptied an item would be a way to lose one by accident.
     ///
     /// The type is decided again from the new text — an edit that turns prose into a URL turns a
-    /// Text card into a Link card — using the rule capture uses, so the two cannot disagree.
+    /// Text card into a Link card, and one that turns a colour into prose turns a Color card into a
+    /// Text card — using the rule capture uses, so the two cannot disagree.
     ///
     /// Position and timestamp are left alone. The timestamp records when the content was copied,
     /// and editing is not copying.
     func updateContent(id: UUID, text: String, richData: Data?, richType: String?) {
         guard let idx = items.firstIndex(where: { $0.id == id }) else { return }
-        guard items[idx].type == .text || items[idx].type == .url else { return }
+        guard ItemEdit.canEdit(items[idx].type) else { return }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         // Built up on a copy and written back once. `items` carries willSet/didSet, so every

@@ -691,7 +691,7 @@ struct ContentView: View {
         case .url:
             if let text = item.text, let url = URL(string: text) { return [url] }
             return [item.displayText]
-        case .text:
+        case .text, .color:
             return [item.text ?? item.displayText]
         case .image:
             let data = item.imageData ?? ClipboardStore.shared.imageBytes(for: item.id)

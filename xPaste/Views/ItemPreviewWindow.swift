@@ -27,6 +27,7 @@ struct PreviewPopoverContent: View {
         if isEditing { return "Edit" }
         switch item.type {
         case .url:    return "Link"
+        case .color:  return "Color"
         case .image:  return "Image"
         case .file:   return "File"
         case .folder: return "Folder"
@@ -71,7 +72,9 @@ struct PreviewPopoverContent: View {
                 richPreview = RichTextRenderer.fullPreview(for: item)
             }
             await loadFileTextIfNeeded()
-            if item.type == .text, stats.isEmpty {
+            // `.color` shares the footer's character count with `.text` (see the `previewFooter`
+            // switch below), so it needs the same stats computed here.
+            if (item.type == .text || item.type == .color), stats.isEmpty {
                 let text = item.displayText
                 stats = await Task.detached(priority: .userInitiated) {
                     Self.textStats(text)
@@ -191,7 +194,7 @@ struct PreviewPopoverContent: View {
                 Image(systemName: "square.and.arrow.up").font(.system(size: 13))
             }
             .buttonStyle(.plain)
-        } else if item.type == .text, let text = item.text {
+        } else if (item.type == .text || item.type == .color), let text = item.text {
             ShareLink(item: text) {
                 Image(systemName: "square.and.arrow.up").font(.system(size: 13))
             }
@@ -217,7 +220,7 @@ struct PreviewPopoverContent: View {
                 if let url = itemURL { WebPreview(url: url) } else { textContent }
             case .image:
                 imageContent
-            case .text:
+            case .text, .color:
                 textContent
             case .file, .folder:
                 fileContent
@@ -352,7 +355,7 @@ struct PreviewPopoverContent: View {
     private var previewFooter: some View {
         HStack {
             switch item.type {
-            case .text:
+            case .text, .color:
                 Text(stats).font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             case .url:

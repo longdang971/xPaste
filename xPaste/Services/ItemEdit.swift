@@ -13,7 +13,7 @@ enum ItemEdit {
     /// cannot offer what the other refuses.
     static func canEdit(_ type: ClipboardContentType) -> Bool {
         switch type {
-        case .text, .url:          return true
+        case .text, .url, .color:    return true
         case .image, .file, .folder: return false
         }
     }
@@ -32,15 +32,14 @@ enum ItemEdit {
     /// Whether the editor offers formatting for this item.
     ///
     /// Every Text item, now that there is a toolbar — a plain snippet can be given a bold word or a
-    /// link. A Link is still excluded: it is edited as the address it is, not as the styled anchor
-    /// a browser happened to put on the pasteboard.
+    /// link. A Link is excluded: it is edited as the address it is, not as the styled anchor a
+    /// browser happened to put on the pasteboard. A Colour is excluded for the same shape of
+    /// reason — bold, a font family or a highlight mean nothing to `#1e90ff`, and letting one
+    /// through would make `carriesFormatting` store an RTF document for seven characters.
     ///
-    /// This used to also require that the item *arrived* formatted. That was guarding against a
-    /// real hazard — an `NSTextView` applies a default font to everything it is given, so asking
-    /// "does the result carry attributes?" answers yes for every plain snippet ever opened, and
-    /// they would all silently start storing RTF. The guard has not been dropped, it has moved to
-    /// `carriesFormatting`, which asks the sharper question: does the saved text differ from the
-    /// defaults it opened with?
+    /// This used to also require that the item *arrived* formatted. That guard has not been
+    /// dropped, it has moved to `carriesFormatting`, which asks the sharper question: does the
+    /// saved text differ from the defaults it opened with?
     static func keepsFormatting(_ item: ClipboardItem) -> Bool {
         item.type == .text
     }

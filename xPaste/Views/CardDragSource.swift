@@ -181,7 +181,7 @@ final class CardDragSourceView: NSView, NSDraggingSource {
             if let data = item.imageData, let image = NSImage(data: data) { return image }
         case .url:
             if let text = item.text, let url = URL(string: text) { return url as NSURL }
-        case .text:
+        case .text, .color:
             break
         }
         return (item.text ?? item.displayText) as NSString

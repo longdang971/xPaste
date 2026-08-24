@@ -73,7 +73,8 @@ enum DragPaste {
         // Without Accessibility there is no way to press ⌘V, so a deferred paste could never be
         // delivered — the real payload at least keeps dragging working as it always did.
         guard accessibilityTrusted else { return .native }
-        let allText = !items.isEmpty && items.allSatisfy { $0.type == .text || $0.type == .url }
+        let allText = !items.isEmpty
+            && items.allSatisfy { $0.type == .text || $0.type == .url || $0.type == .color }
         return allText ? .deferredPaste : .native
     }
 
@@ -124,7 +125,8 @@ enum DragPaste {
         case let .plain(text):
             return text.utf16.count
         case let .item(item):
-            guard item.type == .text || item.type == .url, let text = item.text else { return nil }
+            guard item.type == .text || item.type == .url || item.type == .color,
+                  let text = item.text else { return nil }
             return text.utf16.count
         }
     }

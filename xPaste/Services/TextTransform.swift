@@ -101,7 +101,7 @@ enum TextTransform: String, CaseIterable {
 
     /// The transforms worth showing for this text, in menu order.
     static func applicable(to text: String, type: ClipboardContentType) -> [TextTransform] {
-        guard type == .text || type == .url else { return [] }
+        guard type == .text || type == .url || type == .color else { return [] }
         return allCases.filter { transform in
             guard let result = transform.apply(to: text) else { return false }
             // A rewrite that changes nothing is a dead menu entry.

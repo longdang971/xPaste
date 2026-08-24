@@ -27,7 +27,7 @@ enum MultiPaste {
     /// left out — pasting the literal word "Image" would be worse than pasting nothing.
     static func text(for item: ClipboardItem) -> String? {
         switch item.type {
-        case .text, .url:
+        case .text, .url, .color:
             return item.text ?? item.displayText
         case .file, .folder:
             return item.fileURLs?.map(\.path).joined(separator: "\n") ?? item.displayText
