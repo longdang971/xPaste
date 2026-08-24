@@ -21,6 +21,12 @@ struct ContentView: View {
     @State private var searchToggleTapped = false
     /// The card whose header title is currently being edited, if any.
     @State private var renameItemID: UUID?
+    /// Mirrors the `.clipboardAlertShown` / `.clipboardAlertHidden` handshake that `AppDelegate`
+    /// uses to stop swallowing Escape and ⌘S — posted while an item is being edited in the preview
+    /// popover, while the delete confirmation is up, and (by this view itself) while renaming. The
+    /// card-level ⌘A below needs the same protection: it must stand down whenever any of those is
+    /// live, or it claims ⌘A out from under whichever text field actually has focus.
+    @State private var alertPresented = false
     @State private var showFilters = false
     /// The live NSPopover behind the filter sheet while it is open — see the notification
     /// handlers on `body` for why it has to be held onto.
@@ -114,7 +120,7 @@ struct ContentView: View {
                     selection.set(Set(displayedItems.map(\.id)))
                 }
                 .keyboardShortcut("a", modifiers: .command)
-                .disabled(searchFocused || isRenaming)
+                .disabled(searchFocused || isRenaming || alertPresented)
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
@@ -310,6 +316,12 @@ struct ContentView: View {
         .onReceive(permissionTimer) { _ in
             let trusted = AccessibilityPermission.isTrusted
             if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipboardAlertShown)) { _ in
+            alertPresented = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .clipboardAlertHidden)) { _ in
+            alertPresented = false
         }
         // Borrows the alert handshake so AppDelegate stops swallowing Escape while a name is
         // being typed: Escape must cancel the edit, not close the panel.

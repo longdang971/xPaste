@@ -18,6 +18,12 @@ struct RichTextToolbar: View {
 
     private var editingSource: Bool { session.mode == .raw }
 
+    /// Pulled out of `controls` (rather than left as inline `Image(systemName:)` literals) so a
+    /// test can assert against the same value the view actually draws, instead of a copy that
+    /// could silently drift from it.
+    static let textColourSymbol = "paintpalette"
+    static let clearFormattingSymbol = "eraser"
+
     var body: some View {
         VStack(spacing: 0) {
             controls
@@ -58,7 +64,7 @@ struct RichTextToolbar: View {
 
             divider
 
-            colourMenu(symbol: "textformat", help: "Text colour",
+            colourMenu(symbol: Self.textColourSymbol, help: "Text colour",
                        swatches: FontCatalogue.textColours,
                        clearTitle: "Automatic") { .foreground($0) }
             colourMenu(symbol: "highlighter", help: "Highlight",
@@ -78,13 +84,15 @@ struct RichTextToolbar: View {
             .buttonStyle(.plain)
             .disabled(editingSource)
             .help("Link")
+            .accessibilityLabel("Link")
 
             Button { session.run(.clearFormatting) } label: {
-                Image(systemName: "textformat.size.smaller").font(.system(size: 12))
+                Image(systemName: Self.clearFormattingSymbol).font(.system(size: 12))
             }
             .buttonStyle(.plain)
             .disabled(editingSource)
             .help("Clear formatting")
+            .accessibilityLabel("Clear formatting")
 
             Spacer()
 
@@ -96,6 +104,7 @@ struct RichTextToolbar: View {
             }
             .buttonStyle(.plain)
             .help(editingSource ? "Show formatted text" : "Show HTML source")
+            .accessibilityLabel(editingSource ? "Show formatted text" : "Show HTML source")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -172,6 +181,7 @@ struct RichTextToolbar: View {
         .buttonStyle(.plain)
         .disabled(editingSource)
         .help(help)
+        .accessibilityLabel(help)
     }
 
     private var familyLabel: String {
@@ -207,6 +217,7 @@ struct RichTextToolbar: View {
         .fixedSize()
         .disabled(editingSource)
         .help("Font")
+        .accessibilityLabel("Font")
     }
 
     private var sizeMenu: some View {
@@ -225,6 +236,7 @@ struct RichTextToolbar: View {
         .fixedSize()
         .disabled(editingSource)
         .help("Size")
+        .accessibilityLabel("Size")
     }
 
     private func colourMenu(symbol: String,
@@ -250,10 +262,13 @@ struct RichTextToolbar: View {
             Image(systemName: symbol).font(.system(size: 12))
         }
         .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        // Indicator restored (not `.hidden`) to match `fontMenu`/`sizeMenu` right next to it: an
+        // icon alone gives no hint that it opens a menu rather than acting immediately, which is
+        // exactly what made this row misread as buttons.
         .fixedSize()
         .disabled(editingSource)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
