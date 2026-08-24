@@ -33,10 +33,8 @@ usually RTF — but RTF source is not something a person edits by hand:
 against the same content as HTML:
 
 ```html
-<p style="font-family:Helvetica;font-size:13px">
-  Xin chào <b>thế giới</b><br>
-  <a href="https://vidu.com">vidu.com</a>
-</p>
+<p>Xin chào <b>thế giới</b></p>
+<p><a href="https://vidu.com">vidu.com</a></p>
 ```
 
 Raw mode exists to be typed in. HTML is the only one of the two that can be.
@@ -60,13 +58,32 @@ writer**. Cocoa produces a class-based stylesheet:
 Technically correct and miserable to hand-edit — every change means chasing a class definition in
 the header. Ours walks the attribute runs and emits what the user would write: `<b>`, `<i>`, `<u>`,
 `<s>`, `<a href>`, and a `<span style="…">` carrying `font-family`, `font-size`, `color` and
-`background-color` when a run differs from the paragraph default. Newlines become `<br>`,
-paragraphs `<p>`.
+`background-color` when a run departs from the defaults. One `<p>` per line; no `<br>`.
 
-`attributed(from: String) -> NSAttributedString?` uses Cocoa's HTML *importer*, which is
-battle-tested and forgiving of the malformed markup hand-editing will produce. It returns nil when
-the parse fails. `RichTextRenderer.htmlDefaultFontPrelude` is prepended for the reason documented
-there: left to itself the importer applies Times-Roman 12 to anything the fragment does not style.
+Two rules come from measuring the importer rather than from taste, and both matter:
+
+- **A face is named by its PostScript name, never by a family plus `font-weight`.** CSS weights
+  drift badly on the way back in — `'Helvetica Neue'` at `font-weight:500` returns as
+  HelveticaNeue-**Medium**, at 600 as **Bold**. `font-family:HelveticaNeue-Light` returns as
+  exactly that, weight intact, and `font-family:Menlo-BoldItalic` brings both traits with it.
+- **The system font is the exception, and is written as `<b>`/`<i>` with no `font-family` at all.**
+  Its family name is the private `.AppleSystemUIFont`, which is not something to put in a
+  stylesheet. Left unnamed it picks up the prelude's `-apple-system` at 13px — which is precisely
+  the editor's own default — so the ordinary case stays as clean as the example above.
+
+Every `<p>` comes back from the importer with a trailing newline the source did not have, so the
+parse drops exactly one. That is what makes the round trip exact: `"a\nb"` writes as
+`<p>a</p><p>b</p>`, imports as `"a\nb\n"`, and lands back at `"a\nb"`.
+
+`attributed(from: String) -> NSAttributedString?` uses Cocoa's HTML *importer*.
+`RichTextRenderer.htmlDefaultFontPrelude` is prepended for the reason documented there: left to
+itself the importer applies Times-Roman 12 to anything the fragment does not style. It is made
+non-private for this.
+
+The importer is **very** forgiving — `<p><b>unclosed` parses happily into bold text — so the nil
+return is a genuine but rare path, not the normal response to a typo. This is a feature here: the
+whole point of raw mode is hand-typed markup, and half-finished markup should render rather than
+stop the user.
 
 Both directions are capped at `RichTextRenderer.htmlByteCap` (256KB) measured on the HTML string —
 the generated markup on the way out, the typed source on the way in. The importer is WebKit-backed
@@ -74,9 +91,13 @@ and main-thread only, so a half-megabyte item must be refused entry to raw mode 
 to freeze the panel. Over the cap, the toggle is disabled and its tooltip says why.
 
 The raw view is the same `NSTextView`, monospaced, with `isRichText` off — nothing pasted into it
-can smuggle formatting into what is meant to be a plain source buffer. Save's empty-draft guard
-measures the *rendered* text in raw mode, not the markup: markup that renders to nothing is an empty
-draft and Save stays disabled.
+can smuggle formatting into what is meant to be a plain source buffer.
+
+The empty-draft rule is checked in two places at two costs. The Save *button* dims on a blank source
+buffer, a string test cheap enough to run per keystroke. `save()` itself parses once and refuses an
+empty *rendered* result, so markup that renders to nothing is caught even though the button was lit.
+Parsing on every keystroke to dim the button earlier would put a WebKit document build on the main
+thread per character — the exact cost `RichTextRenderer`'s parse cache exists to avoid.
 
 ### `Services/RichTextCommand.swift` — applying formatting
 
@@ -105,7 +126,10 @@ B  I  U  S │ Helvetica ⌄ │ 13 ⌄ │ A▾ ▨▾ │ 🔗 │ ✕A │   
   `textViewDidChangeSelection`.
 - **Font menu** lists families and, in the same menu, weights (Light, Regular, Semibold, Bold). A
   "light" face is a weight, not a separate button. The family list comes from
-  `NSFontManager.availableFontFamilies`, built once and cached statically.
+  `NSFontManager.availableFontFamilies`, built once and cached statically. The system family takes
+  the `NSFont.systemFont(ofSize:weight:)` path and every other family
+  `NSFontManager.font(withFamily:traits:weight:size:)`, because the system font's private family
+  name is not something `NSFontManager` will look up.
 - **Size menu**: 9, 10, 11, 12, 13, 14, 18, 24, 36, 48, plus the current size when it is none of
   those.
 - **Text colour (A▾) and highlight (▨▾)** are menus containing a swatch grid, each with a
@@ -188,8 +212,8 @@ only when someone switches modes mid-thought. Accepted deliberately.
 Automated:
 
 - **`RichTextHTMLTests`** — a round trip preserves bold, italic, underline, strikethrough, text
-  colour, background colour, font family, size and links; malformed HTML returns nil; content over
-  the byte cap is refused.
+  colour, background colour, font face, size and links, and reproduces the plain string exactly
+  including its newlines; content over the byte cap is refused; half-typed markup still renders.
 - **`RichTextCommandTests`** — each command against an `NSTextStorage`, including the no-selection
   case where only `typingAttributes` may change, and a family with no true bold face.
 - **`ItemEditTests`** — additions for the differs-from-defaults rule: a plain item edited plainly
