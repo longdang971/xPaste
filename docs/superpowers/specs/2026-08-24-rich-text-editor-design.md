@@ -154,9 +154,10 @@ When the caret sits inside an existing link the field is pre-filled with that ad
 reads **Update**. With a selection, the link is applied to it; without one, the typed address is
 inserted as its own linked text.
 
-### `EditSession` — one source of truth
+### `Services/EditSession.swift` — one source of truth
 
-Lives in `ItemPreviewWindow.swift` beside `EditBuffer`, which it keeps and does not replace.
+`EditBuffer` moves here out of `ItemPreviewWindow.swift` to sit beside it — the two are one idea,
+and the popover file is already 493 lines before any of this lands.
 
 It holds the current mode, the seed for the view now on screen, and a `viewGeneration` counter.
 `switchTo(_:)` reads the live text view through the buffer, converts, stores the result as the new
