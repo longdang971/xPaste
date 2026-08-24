@@ -280,15 +280,19 @@ struct RichTextToolbar: View {
                 }
             }
         } label: {
-            Image(systemName: symbol)
+            // A `Label` with `.iconOnly` rather than a bare `Image`, for accessibility rather than
+            // looks — both draw exactly the icon.
+            //
+            // An SF Symbol with no localised description exposes its own literal name as the
+            // control's accessible title, which is why this menu announced "paintpalette" and the
+            // highlighter one announced its translated symbol name. `.accessibilityHidden(true)` on
+            // the image was tried first and does **not** clear it: the title is assembled below
+            // SwiftUI, at the AppKit menu button, so hiding the SwiftUI element comes too late.
+            // Giving the label real text and then drawing only its icon is what actually replaces
+            // the symbol name with a word worth hearing.
+            Label(help, systemImage: symbol)
+                .labelStyle(.iconOnly)
                 .font(.system(size: 12))
-                // An SF Symbol without a localised accessibility description exposes its own literal
-                // name instead — this is why the text-colour menu used to announce "paintpalette,
-                // Text colour" (the highlighter symbol has a translated name, so that one merely read
-                // as noisy rather than nonsense; the underlying leak is the same). Hiding the icon
-                // stops it contributing that name to the menu's accessible title; `.accessibilityLabel`
-                // below still supplies the one word that should be spoken.
-                .accessibilityHidden(true)
         }
         .menuStyle(.borderlessButton)
         // Indicator restored (not `.hidden`) to match `fontMenu`/`sizeMenu` right next to it: an
