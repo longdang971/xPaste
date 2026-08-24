@@ -26,6 +26,20 @@ struct RichTextToolbar: View {
 
             divider
 
+            fontMenu
+            sizeMenu
+
+            divider
+
+            colourMenu(symbol: "textformat", help: "Text colour",
+                       swatches: FontCatalogue.textColours,
+                       clearTitle: "Automatic") { .foreground($0) }
+            colourMenu(symbol: "highlighter", help: "Highlight",
+                       swatches: FontCatalogue.highlightColours,
+                       clearTitle: "None") { .background($0) }
+
+            divider
+
             Button { session.run(.clearFormatting) } label: {
                 Image(systemName: "textformat.size.smaller").font(.system(size: 12))
             }
@@ -73,4 +87,109 @@ struct RichTextToolbar: View {
         .disabled(editingSource)
         .help(help)
     }
+
+    private var fontMenu: some View {
+        Menu {
+            Button("System") { session.run(.family(nil)) }
+            Divider()
+            ForEach(FontCatalogue.weights, id: \.name) { entry in
+                Button(entry.name) { session.run(.weight(entry.weight)) }
+            }
+            Divider()
+            ForEach(FontCatalogue.families, id: \.self) { family in
+                Button(family) { session.run(.family(family)) }
+            }
+        } label: {
+            Text(session.state.familyName ?? "System")
+                .font(.system(size: 11))
+                .lineLimit(1)
+                .frame(maxWidth: 110, alignment: .leading)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(editingSource)
+        .help("Font")
+    }
+
+    private var sizeMenu: some View {
+        Menu {
+            ForEach(FontCatalogue.sizes, id: \.self) { size in
+                Button(String(Int(size))) { session.run(.size(size)) }
+            }
+        } label: {
+            // No single number when the selection mixes sizes — a tick on one of them would be a
+            // claim about the rest that is not true.
+            Text(session.state.size.map { String(Int($0)) } ?? "–")
+                .font(.system(size: 11))
+                .frame(width: 22)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(editingSource)
+        .help("Size")
+    }
+
+    private func colourMenu(symbol: String,
+                            help: String,
+                            swatches: [(name: String, colour: NSColor)],
+                            clearTitle: String,
+                            command: @escaping (NSColor?) -> RichTextCommand) -> some View {
+        Menu {
+            Button(clearTitle) { session.run(command(nil)) }
+            Divider()
+            ForEach(swatches, id: \.name) { swatch in
+                Button {
+                    session.run(command(swatch.colour))
+                } label: {
+                    Label {
+                        Text(swatch.name)
+                    } icon: {
+                        Image(systemName: "square.fill").foregroundStyle(Color(nsColor: swatch.colour))
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: symbol).font(.system(size: 12))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(editingSource)
+        .help(help)
+    }
+}
+
+/// What the menus offer.
+///
+/// The family list is built once and held: `availableFontFamilies` is several hundred entries and
+/// SwiftUI builds a `Menu`'s items eagerly, so re-deriving it per body pass would put that walk on
+/// every keystroke.
+enum FontCatalogue {
+    static let families: [String] = NSFontManager.shared.availableFontFamilies.sorted()
+
+    static let sizes: [CGFloat] = [9, 10, 11, 12, 13, 14, 18, 24, 36, 48]
+
+    static let weights: [(name: String, weight: NSFont.Weight)] = [
+        ("Light", .light), ("Regular", .regular), ("Semibold", .semibold), ("Bold", .bold),
+    ]
+
+    static let textColours: [(name: String, colour: NSColor)] = [
+        ("Red", .systemRed), ("Orange", .systemOrange), ("Yellow", .systemYellow),
+        ("Green", .systemGreen), ("Blue", .systemBlue), ("Purple", .systemPurple),
+        ("Pink", .systemPink), ("Brown", .systemBrown), ("Grey", .systemGray),
+        ("Black", NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)),
+        ("White", NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)),
+    ]
+
+    /// Light washes, all of them. A highlight has to stay a highlight rather than become a block of
+    /// colour, and `RichTextCommand.background` pins the text dark so these read in either
+    /// appearance.
+    static let highlightColours: [(name: String, colour: NSColor)] = [
+        ("Yellow", NSColor(srgbRed: 1.00, green: 0.95, blue: 0.55, alpha: 1)),
+        ("Green",  NSColor(srgbRed: 0.75, green: 0.95, blue: 0.75, alpha: 1)),
+        ("Blue",   NSColor(srgbRed: 0.75, green: 0.88, blue: 1.00, alpha: 1)),
+        ("Pink",   NSColor(srgbRed: 1.00, green: 0.80, blue: 0.88, alpha: 1)),
+        ("Orange", NSColor(srgbRed: 1.00, green: 0.85, blue: 0.65, alpha: 1)),
+        ("Grey",   NSColor(srgbRed: 0.85, green: 0.85, blue: 0.85, alpha: 1)),
+    ]
 }
