@@ -173,14 +173,6 @@ struct PreviewPopoverContent: View {
                 .buttonStyle(.plain)
                 .help("Edit")
             }
-            if editingText {
-                Button { session.toggleMode() } label: {
-                    Image(systemName: session.mode == .raw ? "textformat" : "chevron.left.forwardslash.chevron.right")
-                        .font(.system(size: 13))
-                }
-                .buttonStyle(.plain)
-                .help(session.mode == .raw ? "Show formatted text" : "Show HTML source")
-            }
             shareControl
         }
         .padding(.horizontal, 12)
@@ -205,7 +197,15 @@ struct PreviewPopoverContent: View {
     @ViewBuilder
     private var content: some View {
         if isEditing {
-            editor
+            if editingText {
+                VStack(spacing: 0) {
+                    RichTextToolbar(session: session)
+                    Divider()
+                    editor
+                }
+            } else {
+                editor
+            }
         } else {
             switch item.type {
             case .url:
