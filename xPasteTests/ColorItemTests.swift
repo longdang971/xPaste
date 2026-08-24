@@ -49,4 +49,26 @@ final class ColorItemTests: XCTestCase {
         ClipboardItem(type: .color, text: "#1e90ff").write(to: pb)
         XCTAssertEqual(pb.string(forType: .string), "#1e90ff")
     }
+
+    // MARK: - Migration
+
+    /// Every colour ever copied is on disk as `"type": "text"`. Without this there would be two
+    /// classes of colour item: old ones the editor still treats as prose, new ones it does not.
+    func test_a_colour_stored_as_text_loads_as_a_colour() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ColorMigration-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let seed = ClipboardStore(maxItems: 50, storageDir: dir)
+        seed.add(ClipboardItem(type: .text, text: "#1e90ff"))
+        seed.add(ClipboardItem(type: .text, text: "just prose"))
+        seed.flushPendingWrites()
+
+        let reopened = ClipboardStore(maxItems: 50, storageDir: dir)
+        let colour = try XCTUnwrap(reopened.items.first { $0.text == "#1e90ff" })
+        let prose = try XCTUnwrap(reopened.items.first { $0.text == "just prose" })
+        XCTAssertEqual(colour.type, .color, "the stored colour was not reclassified")
+        XCTAssertEqual(prose.type, .text)
+    }
 }

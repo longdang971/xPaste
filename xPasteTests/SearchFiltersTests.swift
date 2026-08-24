@@ -45,7 +45,10 @@ final class SearchFiltersTests: XCTestCase {
         var textOnly = SearchFilters()
         textOnly.toggle(.text)
 
-        let color = item(.text, text: "#1e90ff")
+        // A real `.color` item, not a `.text` item that merely looks like one: the type is decided
+        // once, at capture (`ClipboardItem.contentType(for:)`), and this filter must recognise that
+        // decision rather than re-deriving it from the text.
+        let color = item(.color, text: "#1e90ff")
         let prose = item(.text, text: "hello")
 
         XCTAssertTrue(colorOnly.matches(color, now: now, calendar: calendar))

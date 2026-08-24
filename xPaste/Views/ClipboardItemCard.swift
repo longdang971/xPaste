@@ -1176,13 +1176,11 @@ struct ClipboardItemCard: View {
                      brightness: min(max(v, 0.32), 0.92))
     }
 
+    /// The colour this item represents. Gated on the type rather than asking `ColorParser` outright:
+    /// the type already answered that question at capture, and this runs on every body pass — which
+    /// is the reason `ColorParser` carries a length gate at all.
     private var detectedColor: Color? {
-        // `.text` stays in the guard alongside `.color` so an item already on disk from before
-        // this type existed — saved as `.text` because that was the only classification a colour
-        // literal could get — still draws its swatch. New captures are typed `.color` outright by
-        // `ClipboardItem.contentType(for:)` and never reach the `ColorParser.parse` call at all
-        // through the `.text` half of this guard.
-        guard item.type == .text || item.type == .color, let text = item.text else { return nil }
+        guard item.type == .color, let text = item.text else { return nil }
         return ColorParser.parse(text)
     }
 
@@ -1274,10 +1272,14 @@ private extension ClipboardContentType {
         switch self {
         case .text:   return .blue
         case .url:    return Color(red: 0.1, green: 0.6, blue: 0.3)
-        // Matches `.text`'s fallback: before this type existed a colour literal was a `.text`
-        // item, and `appAccentColor` (this value's only caller) only ever applies when there is
-        // no app icon to sample a real accent from — see `ClipboardItemCard.appAccentColor`.
-        case .color:  return .blue
+        // Its own hue, not `.text`'s: that match was pixel parity for the compiler while `.color`
+        // was being carved out as a type, and there is no reason left to keep it now that a colour
+        // item is never also a `.text` one. `appAccentColor` (this value's only caller) falls back
+        // to this only when there is no app icon to sample a real accent from — see
+        // `ClipboardItemCard.appAccentColor` — so it rarely paints, but sharing `.text`'s blue in
+        // that rare case would read as "this is text", which is exactly the mistake this type
+        // exists to stop making.
+        case .color:  return .pink
         case .image:  return .purple
         case .file:   return .orange
         case .folder: return .blue

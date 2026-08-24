@@ -1,7 +1,8 @@
 import Foundation
 
-/// A kind of item as the filter popover presents it. Not the same as `ClipboardContentType`:
-/// a colour literal is stored as text but reads — and is titled on its card — as a colour.
+/// A kind of item as the filter popover presents it. Not a bare synonym for `ClipboardContentType`:
+/// the popover calls `.url` "Link", which is the only renaming left once the type — not this
+/// filter — decides whether a piece of text is a colour.
 enum FilterType: String, CaseIterable, Identifiable {
     case text, link, image, color, file, folder
 
@@ -31,8 +32,8 @@ enum FilterType: String, CaseIterable, Identifiable {
 
     func matches(_ item: ClipboardItem) -> Bool {
         switch self {
-        case .text:   return item.type == .text && !ColorParser.isColor(item.text)
-        case .color:  return item.type == .text && ColorParser.isColor(item.text)
+        case .text:   return item.type == .text
+        case .color:  return item.type == .color
         case .link:   return item.type == .url
         case .image:  return item.type == .image
         case .file:   return item.type == .file

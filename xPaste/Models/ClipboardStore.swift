@@ -408,8 +408,17 @@ final class ClipboardStore: ObservableObject {
             DispatchQueue.concurrentPerform(iterations: jsonURLs.count) { i in
                 let decoder = JSONDecoder()
                 guard let data = try? Data(contentsOf: jsonURLs[i]),
-                      let item = try? decoder.decode(ClipboardItem.self, from: data)
+                      var item = try? decoder.decode(ClipboardItem.self, from: data)
                 else { return }
+                // Colour became a type of its own after these items were written, so every colour
+                // ever copied is on disk as `.text`. Reclassifying on load is what stops there
+                // being two classes of colour item — old ones the editor treats as prose, new ones
+                // it does not. Cheap: `ColorParser`'s length gate rejects anything over 64 bytes
+                // before it looks at the string.
+                if item.type == .text, let text = item.text,
+                   ClipboardItem.contentType(for: text) == .color {
+                    item.type = .color
+                }
                 buffer[i] = item
             }
         }
