@@ -9,7 +9,24 @@ enum RichTextCommand {
     case italic
     case underline
     case strikethrough
+    /// nil returns to the editor's own face, the system font.
+    case family(String?)
+    case weight(NSFont.Weight)
+    case size(CGFloat)
+    /// nil returns to `labelColor`.
+    case foreground(NSColor?)
+    /// nil removes the highlight.
+    case background(NSColor?)
+    /// nil removes the link.
+    case link(URL?)
     case clearFormatting
+
+    /// The colour a highlight pins default-coloured text to.
+    ///
+    /// `labelColor` is white in dark mode and every highlight in the palette is a light wash, so
+    /// text left dynamic would vanish into its own highlight. Pinning it to the colour it shows in
+    /// light mode is what keeps a highlight readable in both.
+    static let pinnedBlack = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
 
     /// Applies to `storage` over `range`, and answers with the typing attributes the caret should
     /// adopt.
@@ -42,7 +59,7 @@ enum RichTextCommand {
         switch self {
         case .bold, .italic, .underline, .strikethrough:
             return !isOnEverywhere(in: storage, range: range, typing: typing)
-        case .clearFormatting:
+        case .family, .weight, .size, .foreground, .background, .link, .clearFormatting:
             return true
         }
     }
@@ -68,7 +85,8 @@ enum RichTextCommand {
         case .italic:          return traits.contains(.italicFontMask)
         case .underline:       return (attrs[.underlineStyle] as? Int ?? 0) != 0
         case .strikethrough:   return (attrs[.strikethroughStyle] as? Int ?? 0) != 0
-        case .clearFormatting: return false
+        case .family, .weight, .size, .foreground, .background, .link, .clearFormatting:
+            return false
         }
     }
 
@@ -92,9 +110,140 @@ enum RichTextCommand {
             out[.underlineStyle] = turnOn ? NSUnderlineStyle.single.rawValue : 0
         case .strikethrough:
             out[.strikethroughStyle] = turnOn ? NSUnderlineStyle.single.rawValue : 0
+        case .family(let name):
+            let traits = manager.traits(of: current)
+            if let name {
+                out[.font] = manager.font(withFamily: name,
+                                          traits: traits,
+                                          weight: manager.weight(of: current),
+                                          size: current.pointSize) ?? current
+            } else {
+                out[.font] = manager.convert(NSFont.systemFont(ofSize: current.pointSize),
+                                             toHaveTrait: traits)
+            }
+        case .weight(let weight):
+            if RichTextHTML.isSystemFace(current) {
+                // The system family cannot be looked up by name — `.AppleSystemUIFont` is private —
+                // so it takes the one API that does understand it, and italic is put back by hand.
+                var face = NSFont.systemFont(ofSize: current.pointSize, weight: weight)
+                if manager.traits(of: current).contains(.italicFontMask) {
+                    face = manager.convert(face, toHaveTrait: .italicFontMask)
+                }
+                out[.font] = face
+            } else if let family = current.familyName {
+                out[.font] = manager.font(withFamily: family,
+                                          traits: manager.traits(of: current)
+                                              .subtracting(.boldFontMask),
+                                          weight: RichTextCommand.managerWeight(for: weight),
+                                          size: current.pointSize) ?? current
+            }
+        case .size(let points):
+            out[.font] = manager.convert(current, toSize: points)
+        case .foreground(let colour):
+            out[.foregroundColor] = colour ?? NSColor.labelColor
+        case .background(let colour):
+            if let colour {
+                out[.backgroundColor] = colour
+                if (attrs[.foregroundColor] as? NSColor ?? .labelColor) == .labelColor {
+                    out[.foregroundColor] = RichTextCommand.pinnedBlack
+                }
+            } else {
+                out.removeValue(forKey: .backgroundColor)
+                if (attrs[.foregroundColor] as? NSColor) == RichTextCommand.pinnedBlack {
+                    out[.foregroundColor] = NSColor.labelColor
+                }
+            }
+        case .link(let url):
+            if let url {
+                out[.link] = url
+                out[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                out[.foregroundColor] = NSColor.linkColor
+            } else {
+                out.removeValue(forKey: .link)
+                out[.underlineStyle] = 0
+                out[.foregroundColor] = NSColor.labelColor
+            }
         case .clearFormatting:
             out = ItemEdit.plainDefaults
         }
         return out
+    }
+
+    /// `NSFontManager`'s 0–15 scale, for the four weights the toolbar offers.
+    private static func managerWeight(for weight: NSFont.Weight) -> Int {
+        switch weight {
+        case .light:    return 3
+        case .semibold: return 8
+        case .bold:     return 9
+        default:        return 5
+        }
+    }
+}
+
+/// The formatting under the selection, as the toolbar needs to show it.
+///
+/// A trait reads as on only when it is on throughout, so a lit button always matches what pressing
+/// it again would do. A `nil` size or family means the selection mixes them, and the menu shows no
+/// tick rather than picking a winner.
+struct RichTextState: Equatable {
+    var bold = false
+    var italic = false
+    var underline = false
+    var strikethrough = false
+    /// nil when the selection mixes families, or when the face is the system one.
+    var familyName: String?
+    /// nil when the selection mixes sizes.
+    var size: CGFloat?
+    var link: URL?
+
+    static func read(from storage: NSTextStorage,
+                     range: NSRange,
+                     typing: [NSAttributedString.Key: Any]) -> RichTextState {
+        var runs: [[NSAttributedString.Key: Any]] = []
+        if range.length > 0 {
+            storage.enumerateAttributes(in: range, options: []) { attrs, _, _ in runs.append(attrs) }
+        } else if storage.length > 0 {
+            // At a caret the storage still has the last word: the run it sits in is what the eye
+            // reads as "here". Typing attributes only win when they have actually been armed, which
+            // is what `typing` carries in.
+            let index = min(max(range.location, 0), storage.length - 1)
+            runs.append(storage.attributes(at: index, effectiveRange: nil))
+        }
+        if runs.isEmpty { runs = [typing] }
+
+        func everywhere(_ test: ([NSAttributedString.Key: Any]) -> Bool) -> Bool {
+            runs.allSatisfy(test)
+        }
+        func traits(_ attrs: [NSAttributedString.Key: Any]) -> NSFontTraitMask {
+            (attrs[.font] as? NSFont).map { NSFontManager.shared.traits(of: $0) } ?? []
+        }
+        func single<T: Equatable>(_ value: ([NSAttributedString.Key: Any]) -> T?) -> T? {
+            let all = runs.map(value)
+            guard let first = all.first, all.allSatisfy({ $0 == first }) else { return nil }
+            return first
+        }
+
+        let typingTraits = (typing[.font] as? NSFont)
+            .map { NSFontManager.shared.traits(of: $0) } ?? []
+        let armed = range.length == 0
+
+        return RichTextState(
+            bold: armed ? typingTraits.contains(.boldFontMask)
+                        : everywhere { traits($0).contains(.boldFontMask) },
+            italic: armed ? typingTraits.contains(.italicFontMask)
+                          : everywhere { traits($0).contains(.italicFontMask) },
+            underline: armed ? (typing[.underlineStyle] as? Int ?? 0) != 0
+                             : everywhere { ($0[.underlineStyle] as? Int ?? 0) != 0 },
+            strikethrough: armed ? (typing[.strikethroughStyle] as? Int ?? 0) != 0
+                                 : everywhere { ($0[.strikethroughStyle] as? Int ?? 0) != 0 },
+            familyName: single { attrs in
+                guard let font = attrs[.font] as? NSFont, !RichTextHTML.isSystemFace(font) else {
+                    return nil
+                }
+                return font.familyName
+            },
+            size: single { ($0[.font] as? NSFont)?.pointSize },
+            link: single { $0[.link] as? URL ?? ($0[.link] as? String).flatMap(URL.init(string:)) }
+        )
     }
 }
