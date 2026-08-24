@@ -129,6 +129,39 @@ final class EditSession: ObservableObject {
                                    typing: view.typingAttributes)
     }
 
+    /// `refreshState()`, unless `generation` names an edit the session has already moved past.
+    ///
+    /// A mode switch bumps `generation` and rebuilds the text view (see the type comment), but the
+    /// outgoing view's delegate can still fire once more on the way out — synchronously as AppKit
+    /// resigns it as first responder, or later through a coalesced notification — after the session
+    /// has already moved to the next generation. `ItemPreviewWindow` captures the generation a view
+    /// was built for and passes it back in here, so a view being torn down can never overwrite the
+    /// state of the one that replaced it.
+    func refreshState(ifCurrent generation: Int) {
+        guard generation == self.generation else { return }
+        refreshState()
+    }
+
+    /// Wires `view` up as the live editor and reports its state immediately.
+    ///
+    /// Two things a fresh rebuild would otherwise get wrong: nothing else calls `refreshState()`
+    /// when the editor is first built, so `state` would sit at its `RichTextState()` default until
+    /// the user made a selection; and `typingAttributes` on a brand-new `NSTextView` has not been
+    /// populated by AppKit — `view` was seeded by handing its storage a finished string directly
+    /// (see `EditableRichText.makeNSView`), which bypasses the typing machinery that would normally
+    /// keep `typingAttributes` in step with the caret. Left alone, even an immediate refresh would
+    /// read an empty `typing` and report the system face with no size — `RichTextState`'s armed
+    /// branch trusts `typing` completely once the range is empty. Priming it from the run the caret
+    /// actually sits in is what makes that refresh honest.
+    func attach(_ view: NSTextView) {
+        buffer.textView = view
+        if let storage = view.textStorage, storage.length > 0, view.selectedRange().length == 0 {
+            let index = min(max(view.selectedRange().location, 0), storage.length - 1)
+            view.typingAttributes = storage.attributes(at: index, effectiveRange: nil)
+        }
+        refreshState()
+    }
+
     /// Monospaced, because what raw mode shows is source and its nesting carries meaning a
     /// proportional font throws away — the same reason the file pane uses one.
     private static func rawSeed(_ markup: String) -> NSAttributedString {

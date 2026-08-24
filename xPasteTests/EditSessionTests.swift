@@ -113,6 +113,80 @@ final class EditSessionTests: XCTestCase {
 
     // MARK: - Commands
 
+    // MARK: - What the toolbar reads
+
+    /// The toolbar has to be truthful the moment the editor is on screen, before the user has
+    /// touched anything — a caret sitting in Helvetica 13 must not read as "System" / "–" just
+    /// because no selection has been made yet. `attach` is what `EditableRichText.makeNSView` calls
+    /// in place of setting `buffer.textView` by hand; see its doc comment for why a plain assignment
+    /// is not enough.
+    func test_attach_reports_the_caret_run_with_no_selection_made() {
+        let helvetica = NSFont(name: "Helvetica", size: 13) ?? NSFont.systemFont(ofSize: 13)
+        let seed = NSAttributedString(string: "hello",
+                                      attributes: [.font: helvetica, .foregroundColor: NSColor.labelColor])
+        let session = EditSession()
+        session.begin(with: seed)
+        XCTAssertEqual(session.state, RichTextState(), "nothing has attached a view yet")
+
+        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        view.isRichText = true
+        view.textStorage?.setAttributedString(seed)
+        // `typingAttributes` off-screen already happens to pick up the storage's own attributes the
+        // moment `setAttributedString` runs — that is not true of the production view, where AppKit
+        // has not populated it yet at this point (measured on the running app; see `EditSession`'s
+        // doc comment on `attach`). Clearing it here reproduces that real starting condition instead
+        // of relying on an accident of this harness that the production code path cannot count on.
+        view.typingAttributes = [:]
+        session.attach(view)
+
+        XCTAssertEqual(session.state.family, .named("Helvetica"))
+        XCTAssertEqual(session.state.size, 13)
+    }
+
+    /// A round trip through raw mode must leave the toolbar reading the formatted view that
+    /// replaced the raw one, not the raw view's own monospaced face — even when that raw view's
+    /// delegate reports in after the session has already moved past it. `ItemPreviewWindow` guards
+    /// against this by naming the generation a callback belongs to; this reproduces that guard
+    /// directly, the way a torn-down view's late notification would exercise it.
+    func test_switching_to_raw_and_back_is_immune_to_a_late_report_from_the_raw_view() {
+        let seed = NSAttributedString(string: "hello",
+                                      attributes: [.font: NSFont.systemFont(ofSize: 20),
+                                                    .foregroundColor: NSColor.labelColor])
+        let session = EditSession()
+        session.begin(with: seed)
+
+        let formattedView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        formattedView.isRichText = true
+        formattedView.textStorage?.setAttributedString(seed)
+        session.attach(formattedView)
+
+        session.toggleMode()
+        let rawGeneration = session.generation
+        let rawView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        rawView.isRichText = true
+        rawView.textStorage?.setAttributedString(session.seed)
+        session.attach(rawView)
+
+        session.toggleMode()
+        let formattedView2 = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        formattedView2.isRichText = true
+        formattedView2.textStorage?.setAttributedString(session.seed)
+        session.attach(formattedView2)
+
+        XCTAssertEqual(session.state.family, .system)
+        XCTAssertEqual(session.state.size, 20)
+
+        // The raw view's own coordinator, built for `rawGeneration`, reports one more time after
+        // being torn down — exactly the way a delegate callback surviving teardown would. Naming
+        // its own (now stale) generation must keep it from overwriting the state the rebuilt
+        // formatted view already reported.
+        session.buffer.textView = rawView
+        session.refreshState(ifCurrent: rawGeneration)
+
+        XCTAssertEqual(session.state.family, .system)
+        XCTAssertEqual(session.state.size, 20)
+    }
+
     func test_running_a_command_changes_the_view_and_refreshes_the_state() {
         let (session, view) = session(NSAttributedString(string: "hello",
                                                          attributes: ItemEdit.plainDefaults))

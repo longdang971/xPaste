@@ -109,18 +109,23 @@ struct PreviewPopoverContent: View {
     }
 
     private var editor: some View {
-        EditableRichText(
+        // Captured once, when this particular text view is built, not read again later: it is what
+        // lets a callback from a view a later mode switch has already torn down recognise that it no
+        // longer speaks for the session, instead of overwriting the new view's state with its own.
+        let myGeneration = session.generation
+        return EditableRichText(
             initial: session.seed,
             allowsFormatting: session.mode == .formatted && ItemEdit.keepsFormatting(item),
             monospaced: session.mode == .raw,
             fill: session.mode == .formatted ? richPreview?.fill : nil,
-            buffer: session.buffer,
+            onAttach: { view in session.attach(view) },
             onChange: {
+                guard session.generation == myGeneration else { return }
                 let empty = session.buffer.plain
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 if empty != draftIsEmpty { draftIsEmpty = empty }
             },
-            onSelectionChange: { session.refreshState() },
+            onSelectionChange: { session.refreshState(ifCurrent: myGeneration) },
             onCancel: { setEditing(false) }
         )
         // A mode switch is a rebuild, not an update — see `EditSession`.
@@ -409,7 +414,10 @@ private struct EditableRichText: NSViewRepresentable {
     let allowsFormatting: Bool
     let monospaced: Bool
     let fill: NSColor?
-    let buffer: EditBuffer
+    /// Hands the freshly built view to `EditSession.attach(_:)`, which wires it up as the live
+    /// editor and reports its state — see that method for why this view cannot just be handed to
+    /// `EditBuffer` directly and left at that.
+    let onAttach: (NSTextView) -> Void
     let onChange: () -> Void
     let onSelectionChange: () -> Void
     let onCancel: () -> Void
@@ -442,7 +450,7 @@ private struct EditableRichText: NSViewRepresentable {
         scroll.backgroundColor = colour
         view.backgroundColor = colour
 
-        buffer.textView = view
+        onAttach(view)
         // Next turn: the view is not in a window yet while `makeNSView` runs, so there is nothing
         // to become first responder of.
         DispatchQueue.main.async { view.window?.makeFirstResponder(view) }
