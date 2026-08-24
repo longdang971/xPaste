@@ -113,8 +113,12 @@ struct ClipboardItem: Identifiable, Codable {
         if let string = pasteboard.string(forType: .string) {
             let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
-            let (richData, richType) = captureRich(from: pasteboard)
-            return ClipboardItem(type: contentType(for: string), text: string,
+            // Decide the type before capturing so a colour never gets the chance to carry a rich
+            // representation in the first place — a seven-character hex code has no business
+            // hauling an RTF document along with it.
+            let type = contentType(for: string)
+            let (richData, richType) = type == .color ? (nil, nil) : captureRich(from: pasteboard)
+            return ClipboardItem(type: type, text: string,
                                  richData: richData, richType: richType)
         }
 
@@ -174,8 +178,9 @@ struct ClipboardItem: Identifiable, Codable {
         switch type {
         case .text, .url, .color:
             // Write the formatted representation first (if any) so rich editors keep styling,
-            // plus a plain-string fallback for everything else. A colour never has `richData` — see
-            // `ItemEdit.keepsFormatting` — so this is always the plain-string path for `.color`.
+            // plus a plain-string fallback for everything else. A colour never has `richData`:
+            // `from(pasteboard:)` skips the capture for `.color`, and `ItemEdit.keepsFormatting`
+            // keeps an edit from adding it back — so this is always the plain-string path for `.color`.
             if let richData, let richType, !richData.isEmpty {
                 pb.setData(richData, forType: NSPasteboard.PasteboardType(richType))
             }

@@ -29,6 +29,46 @@ final class ClipboardItemTests: XCTestCase {
         XCTAssertEqual(item?.text, "https://apple.com")
     }
 
+    /// The design's constraint that a `.color` item never stores RTF has to hold at capture time,
+    /// not just when editing (`ItemEdit.keepsFormatting`). Copying a hex code out of a rich-text
+    /// app — Notes, Mail, Pages — puts both RTF and the plain string on the pasteboard; the RTF
+    /// must be discarded, or `write(to:)` pastes back a rich document for seven characters.
+    func test_from_color_text_discards_rich_data_even_when_pasteboard_has_rtf() {
+        let pb = makeBoard("color-with-rtf")
+        let styled = NSAttributedString(string: "#1e90ff", attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+        ])
+        let rtf = styled.rtf(from: NSRange(location: 0, length: styled.length),
+                             documentAttributes: [:])!
+        pb.setData(rtf, forType: .rtf)
+        pb.setString("#1e90ff", forType: .string)
+
+        let item = ClipboardItem.from(pasteboard: pb)
+
+        XCTAssertEqual(item?.type, .color)
+        XCTAssertNil(item?.richData)
+        XCTAssertNil(item?.richType)
+    }
+
+    /// The mirror of the above: the fix must not become a blanket removal of rich capture. A
+    /// non-colour string on the same kind of pasteboard still needs its RTF.
+    func test_from_non_color_text_still_captures_rich_data_when_pasteboard_has_rtf() {
+        let pb = makeBoard("text-with-rtf")
+        let styled = NSAttributedString(string: "Hello world", attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+        ])
+        let rtf = styled.rtf(from: NSRange(location: 0, length: styled.length),
+                             documentAttributes: [:])!
+        pb.setData(rtf, forType: .rtf)
+        pb.setString("Hello world", forType: .string)
+
+        let item = ClipboardItem.from(pasteboard: pb)
+
+        XCTAssertEqual(item?.type, .text)
+        XCTAssertNotNil(item?.richData)
+        XCTAssertEqual(item?.richType, NSPasteboard.PasteboardType.rtf.rawValue)
+    }
+
     func test_from_empty_pasteboard_returns_nil() {
         let pb = makeBoard("empty")
 
