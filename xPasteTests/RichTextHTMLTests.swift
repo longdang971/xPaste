@@ -169,14 +169,26 @@ final class RichTextHTMLTests: XCTestCase {
     func test_bold_and_italic_survive_a_round_trip() {
         let manager = NSFontManager.shared
         let bold = manager.convert(NSFont.systemFont(ofSize: 13), toHaveTrait: .boldFontMask)
-        let text = NSMutableAttributedString(string: "ab", attributes: plain)
-        text.addAttribute(.font, value: bold, range: NSRange(location: 0, length: 1))
+        let italic = manager.convert(NSFont.systemFont(ofSize: 13), toHaveTrait: .italicFontMask)
+        let text = NSMutableAttributedString(string: "abc", attributes: plain)
+        text.addAttribute(.font, value: bold, range: NSRange(location: 0, length: 1))      // first char is bold
+        text.addAttribute(.font, value: italic, range: NSRange(location: 1, length: 1))    // second char is italic
+        // third char remains plain
 
         let back = roundTrip(text)
         let first = back.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         let second = back.attribute(.font, at: 1, effectiveRange: nil) as? NSFont
+        let third = back.attribute(.font, at: 2, effectiveRange: nil) as? NSFont
+
+        // Verify bold is present on first character, absent on second and third
         XCTAssertTrue(manager.traits(of: first ?? .systemFont(ofSize: 13)).contains(.boldFontMask))
         XCTAssertFalse(manager.traits(of: second ?? .systemFont(ofSize: 13)).contains(.boldFontMask))
+        XCTAssertFalse(manager.traits(of: third ?? .systemFont(ofSize: 13)).contains(.boldFontMask))
+
+        // Verify italic is present on second character, absent on first and third
+        XCTAssertFalse(manager.traits(of: first ?? .systemFont(ofSize: 13)).contains(.italicFontMask))
+        XCTAssertTrue(manager.traits(of: second ?? .systemFont(ofSize: 13)).contains(.italicFontMask))
+        XCTAssertFalse(manager.traits(of: third ?? .systemFont(ofSize: 13)).contains(.italicFontMask))
     }
 
     func test_underline_and_strikethrough_survive_a_round_trip() {
