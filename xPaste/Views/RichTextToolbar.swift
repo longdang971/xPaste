@@ -13,9 +13,25 @@ import AppKit
 struct RichTextToolbar: View {
     @ObservedObject var session: EditSession
 
+    @State private var linkRowShown = false
+    @State private var address = ""
+
     private var editingSource: Bool { session.mode == .raw }
 
     var body: some View {
+        VStack(spacing: 0) {
+            controls
+            if linkRowShown { linkRow }
+        }
+        // `RichTextToolbar` is not rebuilt on a mode switch — only `editor` is, keyed on
+        // `session.generation` in `ItemPreviewWindow` — so this row's own @State would otherwise
+        // survive into raw mode. Left open, its TextField and Apply/Remove would stay live there,
+        // unlike every other control in `controls`, which the link *button* included is disabled
+        // for raw mode. Closing it on any mode change keeps that same rule for the row itself.
+        .onChange(of: session.mode) { _ in linkRowShown = false }
+    }
+
+    private var controls: some View {
         HStack(spacing: 6) {
             traitButton("bold", command: .bold, on: session.state.bold, help: "Bold")
             traitButton("italic", command: .italic, on: session.state.italic, help: "Italic")
@@ -40,6 +56,18 @@ struct RichTextToolbar: View {
 
             divider
 
+            Button {
+                // Pre-filled from the link under the caret, so an address that is already there is
+                // something to correct rather than something to retype.
+                address = session.state.link?.absoluteString ?? ""
+                linkRowShown.toggle()
+            } label: {
+                Image(systemName: "link").font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .disabled(editingSource)
+            .help("Link")
+
             Button { session.run(.clearFormatting) } label: {
                 Image(systemName: "textformat.size.smaller").font(.system(size: 12))
             }
@@ -60,6 +88,38 @@ struct RichTextToolbar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    /// A row inside the popover, not a sheet and not a window: a window would take key status and
+    /// the panel's glass follows the key window, so the panel would dim behind it.
+    private var linkRow: some View {
+        HStack(spacing: 6) {
+            TextField("https://", text: $address)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
+                .onSubmit(applyLink)
+
+            Button(session.state.link == nil ? "Apply" : "Update", action: applyLink)
+                .controlSize(.small)
+                .disabled(URL(string: address.trimmingCharacters(in: .whitespaces))?.scheme == nil)
+
+            Button("Remove") {
+                session.run(.link(nil))
+                linkRowShown = false
+            }
+            .controlSize(.small)
+            .disabled(session.state.link == nil)
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+    }
+
+    private func applyLink() {
+        guard let url = URL(string: address.trimmingCharacters(in: .whitespaces)),
+              url.scheme != nil
+        else { return }
+        session.run(.link(url))
+        linkRowShown = false
     }
 
     private var divider: some View {
