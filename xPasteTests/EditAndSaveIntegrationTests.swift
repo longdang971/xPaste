@@ -284,4 +284,38 @@ final class EditAndSaveIntegrationTests: XCTestCase {
         XCTAssertEqual(restored.contentRevision, 1)
         XCTAssertEqual(SaveFormat.suggest(for: restored).ext, "py")
     }
+
+    // MARK: - The session's raw/formatted round trip, end to end
+
+    /// An edit made by typing markup has to reach storage as formatting, not as the markup itself.
+    func testAnEditMadeThroughRawModeReachesStorageFormatted() throws {
+        let item = inject(ClipboardItem(type: .text, text: "hello"))
+        let draft = try XCTUnwrap(RichTextHTML.attributed(from: "<p><b>hello</b> world</p>"))
+        XCTAssertTrue(ItemEdit.carriesFormatting(draft))
+
+        store.updateContent(id: item.id, text: draft.string,
+                            richData: ItemEdit.rtf(from: draft), richType: ItemEdit.richType)
+
+        let stored = try reread(item.id)
+        XCTAssertEqual(stored.text, "hello world")
+        XCTAssertEqual(stored.richType, ItemEdit.richType)
+        let parsed = try XCTUnwrap(RichTextRenderer.cachedParse(stored))
+        let font = parsed.text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertTrue(NSFontManager.shared.traits(of: font ?? ItemEdit.plainFont)
+            .contains(.boldFontMask), "the bold word did not survive the round trip")
+    }
+
+    /// The other direction, and the one that would go unnoticed: markup typed into raw mode that
+    /// styles nothing must not turn a plain item into an RTF-storing one.
+    func testMarkupThatStylesNothingLeavesAPlainItemPlain() throws {
+        let item = inject(ClipboardItem(type: .text, text: "hello"))
+        let draft = try XCTUnwrap(RichTextHTML.attributed(from: "<p>hello there</p>"))
+        XCTAssertFalse(ItemEdit.carriesFormatting(draft))
+
+        store.updateContent(id: item.id, text: draft.string, richData: nil, richType: nil)
+
+        let stored = try reread(item.id)
+        XCTAssertEqual(stored.text, "hello there")
+        XCTAssertNil(stored.richType)
+    }
 }

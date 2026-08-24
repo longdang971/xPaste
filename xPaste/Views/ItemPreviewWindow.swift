@@ -16,9 +16,8 @@ struct PreviewPopoverContent: View {
     /// Save refuses. Kept as its own flag and assigned only when it changes, so typing does not
     /// re-render the popover on every keystroke.
     @State private var draftIsEmpty = false
-    /// Holds a weak reference to the live text view, so the draft is read once on Save rather than
-    /// copied out of the editor on every keystroke.
-    @State private var buffer = EditBuffer()
+    /// Owns the mode, the seed and the live text view. See `EditSession`.
+    @StateObject private var session = EditSession()
     /// Counted once in `.task`, not per body pass: three full walks of the string measured 50ms on
     /// a 468KB item, and the popover re-renders several times while it settles.
     @State private var stats = ""
@@ -40,8 +39,16 @@ struct PreviewPopoverContent: View {
         return URL(string: text)
     }
 
-    private var previewWidth: CGFloat { item.type == .url ? 560 : 420 }
-    private var previewHeight: CGFloat { item.type == .url ? 440 : 340 }
+    private var editingText: Bool { isEditing && item.type == .text }
+
+    private var previewWidth: CGFloat {
+        if editingText { return 560 }
+        return item.type == .url ? 560 : 420
+    }
+    private var previewHeight: CGFloat {
+        if editingText { return 460 }
+        return item.type == .url ? 440 : 340
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -95,22 +102,29 @@ struct PreviewPopoverContent: View {
         isEditing = editing
         NotificationCenter.default.post(
             name: editing ? .clipboardAlertShown : .clipboardAlertHidden, object: nil)
-        if editing { draftIsEmpty = false }
+        if editing {
+            session.begin(with: ItemEdit.editorSeed(for: item, parsed: richPreview?.text).text)
+            draftIsEmpty = false
+        }
     }
 
     private var editor: some View {
-        let seed = ItemEdit.editorSeed(for: item, parsed: richPreview?.text)
-        return EditableRichText(
-            initial: seed.text,
-            allowsFormatting: seed.formatted,
-            fill: seed.formatted ? richPreview?.fill : nil,
-            buffer: buffer,
+        EditableRichText(
+            initial: session.seed,
+            allowsFormatting: session.mode == .formatted && ItemEdit.keepsFormatting(item),
+            monospaced: session.mode == .raw,
+            fill: session.mode == .formatted ? richPreview?.fill : nil,
+            buffer: session.buffer,
             onChange: {
-                let empty = buffer.plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let empty = session.buffer.plain
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 if empty != draftIsEmpty { draftIsEmpty = empty }
             },
+            onSelectionChange: { session.refreshState() },
             onCancel: { setEditing(false) }
         )
+        // A mode switch is a rebuild, not an update — see `EditSession`.
+        .id(session.generation)
     }
 
     /// Writes the edit and closes.
@@ -119,12 +133,20 @@ struct PreviewPopoverContent: View {
     /// view was built: it still holds the old content, so staying open would show the text the
     /// edit has just replaced. The card behind the popover updates from the store.
     private func save() {
-        let plain = buffer.plain
-        guard !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        // Never `seed.formatted` — that only says the editor *allowed* formatting, which is now
-        // true of every Text item. What decides is whether the saved text differs from the
-        // defaults it opened with.
-        let rich = ItemEdit.carriesFormatting(buffer.attributed) ? ItemEdit.rtf(from: buffer.attributed) : nil
+        guard let draft = session.resolvedDraft() else {
+            session.error = "That HTML could not be read."
+            return
+        }
+        let plain = draft.string
+        guard !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            // Reachable even with the Save button lit: in raw mode the button watches the source
+            // buffer, which is cheap, while this watches what the source actually renders to.
+            session.error = "There is nothing to save."
+            return
+        }
+        // Never `seed.formatted` — that only says the editor *allowed* formatting. What decides is
+        // whether the saved text differs from the defaults it opened with.
+        let rich = ItemEdit.carriesFormatting(draft) ? ItemEdit.rtf(from: draft) : nil
         ClipboardStore.shared.updateContent(id: item.id, text: plain,
                                             richData: rich,
                                             richType: rich == nil ? nil : ItemEdit.richType)
@@ -150,6 +172,14 @@ struct PreviewPopoverContent: View {
                 }
                 .buttonStyle(.plain)
                 .help("Edit")
+            }
+            if editingText {
+                Button { session.toggleMode() } label: {
+                    Image(systemName: session.mode == .raw ? "textformat" : "chevron.left.forwardslash.chevron.right")
+                        .font(.system(size: 13))
+                }
+                .buttonStyle(.plain)
+                .help(session.mode == .raw ? "Show formatted text" : "Show HTML source")
             }
             shareControl
         }
@@ -291,6 +321,12 @@ struct PreviewPopoverContent: View {
 
     private var editingFooter: some View {
         HStack(spacing: 8) {
+            if let error = session.error {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+            }
             Spacer()
             Button("Cancel") { setEditing(false) }
                 .controlSize(.small)
@@ -371,9 +407,11 @@ struct PreviewPopoverContent: View {
 private struct EditableRichText: NSViewRepresentable {
     let initial: NSAttributedString
     let allowsFormatting: Bool
+    let monospaced: Bool
     let fill: NSColor?
     let buffer: EditBuffer
     let onChange: () -> Void
+    let onSelectionChange: () -> Void
     let onCancel: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -392,8 +430,11 @@ private struct EditableRichText: NSViewRepresentable {
         view.textStorage?.setAttributedString(initial)
         if !allowsFormatting {
             // A plain item is edited plain, so nothing pasted into the editor can smuggle
-            // formatting into an item that never had any.
-            view.font = .systemFont(ofSize: 13)
+            // formatting into an item that never had any. Raw mode gets the monospaced face for the
+            // same reason the file pane does: what it shows is source, and its nesting carries
+            // meaning a proportional font throws away.
+            view.font = monospaced ? .monospacedSystemFont(ofSize: 12, weight: .regular)
+                                   : .systemFont(ofSize: 13)
             view.textColor = .labelColor
         }
 
@@ -410,18 +451,30 @@ private struct EditableRichText: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange, onCancel: onCancel) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onChange: onChange, onSelectionChange: onSelectionChange, onCancel: onCancel)
+    }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         let onChange: () -> Void
+        let onSelectionChange: () -> Void
         let onCancel: () -> Void
 
-        init(onChange: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        init(onChange: @escaping () -> Void,
+             onSelectionChange: @escaping () -> Void,
+             onCancel: @escaping () -> Void) {
             self.onChange = onChange
+            self.onSelectionChange = onSelectionChange
             self.onCancel = onCancel
         }
 
-        func textDidChange(_ notification: Notification) { onChange() }
+        func textDidChange(_ notification: Notification) {
+            onChange()
+            onSelectionChange()
+        }
+
+        /// What lights the toolbar's buttons: clicking through mixed formatting has to move them.
+        func textViewDidChangeSelection(_ notification: Notification) { onSelectionChange() }
 
         /// Escape reaches here rather than AppDelegate's monitor because entering edit mode posts
         /// the alert handshake, which stops the monitor swallowing it.
