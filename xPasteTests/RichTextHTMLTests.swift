@@ -146,4 +146,105 @@ final class RichTextHTMLTests: XCTestCase {
                                       attributes: plain)
         XCTAssertNil(RichTextHTML.html(from: huge))
     }
+
+    // MARK: - Reading
+
+    private func roundTrip(_ text: NSAttributedString) -> NSAttributedString {
+        let html = RichTextHTML.html(from: text)
+        XCTAssertNotNil(html)
+        let back = RichTextHTML.attributed(from: html ?? "")
+        XCTAssertNotNil(back)
+        return back ?? NSAttributedString()
+    }
+
+    /// The importer gives every `<p>` a trailing newline the source did not have, so the parse
+    /// drops exactly one. This is the test that pins that arithmetic.
+    func test_the_plain_string_survives_a_round_trip_including_its_newlines() {
+        for sample in ["hello", "a\nb", "a\n", "a\n\nb", ""] {
+            let text = NSAttributedString(string: sample, attributes: plain)
+            XCTAssertEqual(roundTrip(text).string, sample, "sample \(sample.debugDescription)")
+        }
+    }
+
+    func test_bold_and_italic_survive_a_round_trip() {
+        let manager = NSFontManager.shared
+        let bold = manager.convert(NSFont.systemFont(ofSize: 13), toHaveTrait: .boldFontMask)
+        let text = NSMutableAttributedString(string: "ab", attributes: plain)
+        text.addAttribute(.font, value: bold, range: NSRange(location: 0, length: 1))
+
+        let back = roundTrip(text)
+        let first = back.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        let second = back.attribute(.font, at: 1, effectiveRange: nil) as? NSFont
+        XCTAssertTrue(manager.traits(of: first ?? .systemFont(ofSize: 13)).contains(.boldFontMask))
+        XCTAssertFalse(manager.traits(of: second ?? .systemFont(ofSize: 13)).contains(.boldFontMask))
+    }
+
+    func test_underline_and_strikethrough_survive_a_round_trip() {
+        let text = NSAttributedString(string: "x", attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+        ])
+        let back = roundTrip(text)
+        XCTAssertNotEqual(back.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int, 0)
+        XCTAssertNotEqual(back.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) as? Int, 0)
+    }
+
+    /// The measurement behind the PostScript-name rule: the exact face comes back, weight and all.
+    func test_a_named_face_comes_back_as_exactly_itself() {
+        for name in ["Menlo-Regular", "Menlo-BoldItalic", "HelveticaNeue-Light"] {
+            guard let font = NSFont(name: name, size: 17) else { continue }
+            let back = roundTrip(NSAttributedString(string: "x", attributes: [.font: font]))
+            let got = back.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+            XCTAssertEqual(got?.fontName, name)
+            XCTAssertEqual(got?.pointSize, 17)
+        }
+    }
+
+    func test_colours_survive_a_round_trip() {
+        let red = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        let green = NSColor(srgbRed: 0, green: 1, blue: 0, alpha: 1)
+        let back = roundTrip(NSAttributedString(string: "x", attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: red,
+            .backgroundColor: green,
+        ]))
+        let fg = (back.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor)?
+            .usingColorSpace(.sRGB)
+        let bg = (back.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor)?
+            .usingColorSpace(.sRGB)
+        XCTAssertEqual(fg?.redComponent ?? 0, 1, accuracy: 0.01)
+        XCTAssertEqual(bg?.greenComponent ?? 0, 1, accuracy: 0.01)
+    }
+
+    func test_a_link_survives_a_round_trip() {
+        let back = roundTrip(NSAttributedString(string: "vidu", attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .link: URL(string: "https://vidu.com")!,
+        ]))
+        let link = back.attribute(.link, at: 0, effectiveRange: nil)
+        XCTAssertEqual((link as? URL)?.host ?? (link as? NSURL)?.host, "vidu.com")
+    }
+
+    /// Unstyled text has to come back on the editor's own defaults, or a plain item taken to raw
+    /// and back would arrive looking formatted and start storing RTF for no reason.
+    func test_unstyled_text_comes_back_on_the_editors_default_face_and_size() {
+        let back = roundTrip(NSAttributedString(string: "hello", attributes: plain))
+        let font = back.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(font?.familyName, NSFont.systemFont(ofSize: 13).familyName)
+        XCTAssertEqual(font?.pointSize, 13)
+        XCTAssertNil(back.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+    }
+
+    /// The importer is very forgiving, and here that is a feature: raw mode exists for hand-typed
+    /// markup, and half-finished markup should render rather than stop the user.
+    func test_half_typed_markup_still_renders() {
+        let back = RichTextHTML.attributed(from: "<p><b>unclosed")
+        XCTAssertEqual(back?.string, "unclosed")
+    }
+
+    func test_source_larger_than_the_cap_is_refused() {
+        let huge = String(repeating: "x", count: RichTextHTML.byteCap + 1)
+        XCTAssertNil(RichTextHTML.attributed(from: huge))
+    }
 }

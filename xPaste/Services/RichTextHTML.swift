@@ -125,4 +125,28 @@ enum RichTextHTML {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
     }
+
+    // MARK: - Reading
+
+    /// The attributed string for some markup, or nil when it is too large or unreadable.
+    ///
+    /// Cocoa's importer rather than a parser of our own: it is WebKit-backed and recovers from
+    /// exactly the half-finished markup hand-editing produces — `<p><b>unclosed` renders as bold
+    /// text rather than failing. So nil here is a genuine but rare path, not the response to a typo.
+    ///
+    /// `htmlDefaultFontPrelude` is prepended for the reason documented where it lives: left to
+    /// itself the importer applies Times-Roman 12 to anything the markup does not style, and this
+    /// markup deliberately leaves the ordinary case unstyled.
+    static func attributed(from html: String) -> NSAttributedString? {
+        let data = Data(html.utf8)
+        guard data.count <= byteCap else { return nil }
+        guard let parsed = NSAttributedString(html: RichTextRenderer.htmlDefaultFontPrelude + data,
+                                              documentAttributes: nil)
+        else { return nil }
+        // Every `<p>` comes back carrying a trailing newline the source did not have. Dropping
+        // exactly one is what makes the round trip exact: "a\nb" is written as two paragraphs,
+        // imported as "a\nb\n", and lands back on "a\nb".
+        guard parsed.length > 0, (parsed.string as NSString).hasSuffix("\n") else { return parsed }
+        return parsed.attributedSubstring(from: NSRange(location: 0, length: parsed.length - 1))
+    }
 }

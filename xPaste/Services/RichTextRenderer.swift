@@ -44,23 +44,9 @@ enum RichTextRenderer {
     /// Below this contrast ratio the text would be near-invisible, so we draw plain text instead.
     static let contrastFloor: CGFloat = 1.5
 
-    /// A stylesheet glued in front of every HTML fragment before it reaches the importer.
-    ///
-    /// A browser puts the *markup* of the selection on the pasteboard, not the page's stylesheet,
-    /// so a fragment copied from an ordinary web page usually names no font at all. Left to itself
-    /// the WebKit importer then applies its own default — Times-Roman 12 — and a card drawn from a
-    /// sans-serif page comes back in a serif the user never saw on screen.
-    ///
-    /// The `html` selector is the weakest one that still outranks the importer's default, so
-    /// anything the fragment *does* specify (an inline `font-family`, a `<pre>`, a page that
-    /// shipped its own `<style>`) keeps winning. Note this only restyles what the source left
-    /// unstyled; it is not a way to impose a house font on rich text.
-    ///
-    /// It is prepended to the raw bytes rather than the decoded string on purpose: the fragment
-    /// carries its own `<meta charset>` and may not be UTF-8, and decoding it here to concatenate
-    /// would be guessing at an encoding the importer already knows how to detect. ASCII-only, so
-    /// it cannot corrupt the bytes that follow under any of them.
-    private static let htmlDefaultFontPrelude = Data(
+    /// Shared with `RichTextHTML`, which faces the same importer from the other direction: markup
+    /// typed by hand names no font either, and would land in Times-Roman without this.
+    static let htmlDefaultFontPrelude = Data(
         "<style>html{font-family:-apple-system,'Helvetica Neue',Helvetica,sans-serif;font-size:13px}</style>".utf8)
 
     // MARK: - Parsing
