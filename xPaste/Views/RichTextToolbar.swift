@@ -131,7 +131,7 @@ struct RichTextToolbar: View {
 
     private func colourMenu(symbol: String,
                             help: String,
-                            swatches: [(name: String, colour: NSColor)],
+                            swatches: [(name: String, colour: NSColor, image: NSImage)],
                             clearTitle: String,
                             command: @escaping (NSColor?) -> RichTextCommand) -> some View {
         Menu {
@@ -144,7 +144,7 @@ struct RichTextToolbar: View {
                     Label {
                         Text(swatch.name)
                     } icon: {
-                        Image(systemName: "square.fill").foregroundStyle(Color(nsColor: swatch.colour))
+                        Image(nsImage: swatch.image)
                     }
                 }
             }
@@ -173,18 +173,20 @@ enum FontCatalogue {
         ("Light", .light), ("Regular", .regular), ("Semibold", .semibold), ("Bold", .bold),
     ]
 
-    static let textColours: [(name: String, colour: NSColor)] = [
+    private static let textColourValues: [(name: String, colour: NSColor)] = [
         ("Red", .systemRed), ("Orange", .systemOrange), ("Yellow", .systemYellow),
         ("Green", .systemGreen), ("Blue", .systemBlue), ("Purple", .systemPurple),
         ("Pink", .systemPink), ("Brown", .systemBrown), ("Grey", .systemGray),
         ("Black", NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)),
         ("White", NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)),
     ]
+    static let textColours: [(name: String, colour: NSColor, image: NSImage)] =
+        textColourValues.map { (name: $0.name, colour: $0.colour, image: swatchImage(for: $0.colour)) }
 
     /// Light washes, all of them. A highlight has to stay a highlight rather than become a block of
     /// colour, and `RichTextCommand.background` pins the text dark so these read in either
     /// appearance.
-    static let highlightColours: [(name: String, colour: NSColor)] = [
+    private static let highlightColourValues: [(name: String, colour: NSColor)] = [
         ("Yellow", NSColor(srgbRed: 1.00, green: 0.95, blue: 0.55, alpha: 1)),
         ("Green",  NSColor(srgbRed: 0.75, green: 0.95, blue: 0.75, alpha: 1)),
         ("Blue",   NSColor(srgbRed: 0.75, green: 0.88, blue: 1.00, alpha: 1)),
@@ -192,4 +194,29 @@ enum FontCatalogue {
         ("Orange", NSColor(srgbRed: 1.00, green: 0.85, blue: 0.65, alpha: 1)),
         ("Grey",   NSColor(srgbRed: 0.85, green: 0.85, blue: 0.85, alpha: 1)),
     ]
+    static let highlightColours: [(name: String, colour: NSColor, image: NSImage)] =
+        highlightColourValues.map { (name: $0.name, colour: $0.colour, image: swatchImage(for: $0.colour)) }
+
+    /// Renders one palette swatch as an actual coloured square, built once per colour and held
+    /// alongside it (see the note on `families` above for why).
+    ///
+    /// `isTemplate = false` is the whole fix here, not a redundant default: `NSMenuItem.image`
+    /// draws a *template* image as a flat monochrome mask, which is exactly what was reducing
+    /// every entry in these palettes to the same grey square. Leave it explicit.
+    static func swatchImage(for colour: NSColor) -> NSImage {
+        let side: CGFloat = 12
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
+            colour.setFill()
+            path.fill()
+            // White is in this palette, and a white square needs an edge to read against a light
+            // menu background — `separatorColor` holds up in both appearances, a fixed grey would not.
+            NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }
 }

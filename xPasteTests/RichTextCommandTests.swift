@@ -314,4 +314,21 @@ final class RichTextCommandTests: XCTestCase {
                                        typing: ItemEdit.plainDefaults)
         XCTAssertEqual(state.link, url)
     }
+
+    // MARK: - Colour swatches
+
+    /// `NSMenuItem.image` draws a template image as a flat monochrome mask — which is exactly the
+    /// bug that flattened every entry in these palettes to the same grey square. The swatch images
+    /// must opt out of that explicitly.
+    func test_colour_swatches_are_not_template_images() {
+        for swatch in FontCatalogue.textColours + FontCatalogue.highlightColours {
+            XCTAssertFalse(swatch.image.isTemplate, "\(swatch.name) swatch must not be a template image")
+        }
+    }
+
+    func test_colour_swatches_are_menu_icon_sized() {
+        for swatch in FontCatalogue.textColours + FontCatalogue.highlightColours {
+            XCTAssertEqual(swatch.image.size, NSSize(width: 12, height: 12))
+        }
+    }
 }
