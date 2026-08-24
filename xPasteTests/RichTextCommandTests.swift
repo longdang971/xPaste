@@ -278,6 +278,33 @@ final class RichTextCommandTests: XCTestCase {
         XCTAssertNil(state.size)
     }
 
+    /// At a caret in existing text, `size` used to read the *storage* run instead of the
+    /// just-armed `typing`, so the toolbar would show the old size until a character was typed.
+    func test_with_no_selection_the_state_reports_the_armed_size_not_the_storages() {
+        let store = storage()
+        _ = RichTextCommand.size(20).apply(to: store,
+                                           range: NSRange(location: 0, length: store.length),
+                                           typing: ItemEdit.plainDefaults)
+        let armed = RichTextCommand.size(28).apply(to: store, range: NSRange(location: 5, length: 0),
+                                                    typing: ItemEdit.plainDefaults)
+        let state = RichTextState.read(from: store, range: NSRange(location: 5, length: 0),
+                                       typing: armed)
+        XCTAssertEqual(state.size, 28)
+    }
+
+    /// Same bug as the size case above, for family.
+    func test_with_no_selection_the_state_reports_the_armed_family_not_the_storages() {
+        let store = storage()
+        _ = RichTextCommand.family("Menlo").apply(to: store,
+                                                   range: NSRange(location: 0, length: store.length),
+                                                   typing: ItemEdit.plainDefaults)
+        let armed = RichTextCommand.family("Helvetica Neue").apply(
+            to: store, range: NSRange(location: 5, length: 0), typing: ItemEdit.plainDefaults)
+        let state = RichTextState.read(from: store, range: NSRange(location: 5, length: 0),
+                                       typing: armed)
+        XCTAssertEqual(state.familyName, "Helvetica Neue")
+    }
+
     func test_the_state_reports_the_link_at_the_caret() {
         let store = storage()
         let url = URL(string: "https://vidu.com")!

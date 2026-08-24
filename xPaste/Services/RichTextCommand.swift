@@ -136,6 +136,12 @@ enum RichTextCommand {
                                               .subtracting(.boldFontMask),
                                           weight: RichTextCommand.managerWeight(for: weight),
                                           size: current.pointSize) ?? current
+            } else {
+                // No family to look the weight up under (a face with a nil familyName, which is not
+                // reachable through this file's own commands but is not guaranteed by NSFont either):
+                // fall back to leaving the face untouched, the same way every other unresolvable case
+                // in this switch does, rather than silently dropping the command.
+                out[.font] = current
             }
         case .size(let points):
             out[.font] = manager.convert(current, toSize: points)
@@ -222,6 +228,12 @@ struct RichTextState: Equatable {
             guard let first = all.first, all.allSatisfy({ $0 == first }) else { return nil }
             return first
         }
+        func familyName(_ attrs: [NSAttributedString.Key: Any]) -> String? {
+            guard let font = attrs[.font] as? NSFont, !RichTextHTML.isSystemFace(font) else {
+                return nil
+            }
+            return font.familyName
+        }
 
         let typingTraits = (typing[.font] as? NSFont)
             .map { NSFontManager.shared.traits(of: $0) } ?? []
@@ -236,13 +248,16 @@ struct RichTextState: Equatable {
                              : everywhere { ($0[.underlineStyle] as? Int ?? 0) != 0 },
             strikethrough: armed ? (typing[.strikethroughStyle] as? Int ?? 0) != 0
                                  : everywhere { ($0[.strikethroughStyle] as? Int ?? 0) != 0 },
-            familyName: single { attrs in
-                guard let font = attrs[.font] as? NSFont, !RichTextHTML.isSystemFace(font) else {
-                    return nil
-                }
-                return font.familyName
-            },
-            size: single { ($0[.font] as? NSFont)?.pointSize },
+            // Armed, the caret's own run in `runs` is still the storage run it sits in (see the
+            // comment above), so it has to be bypassed the same way the traits bypass `everywhere`
+            // above — otherwise a just-armed size or family would keep reporting the old one.
+            familyName: armed ? familyName(typing) : single(familyName),
+            size: armed ? (typing[.font] as? NSFont)?.pointSize
+                        : single { ($0[.font] as? NSFont)?.pointSize },
+            // `link` deliberately keeps reading from the storage run even when armed: NSTextView
+            // never carries `.link` in typingAttributes (so typing after a link does not extend it),
+            // so `typing` can never answer this. Reading the storage run is also what lets the link
+            // button pre-fill from the caret's surrounding link, which is the whole point of this.
             link: single { $0[.link] as? URL ?? ($0[.link] as? String).flatMap(URL.init(string:)) }
         )
     }
