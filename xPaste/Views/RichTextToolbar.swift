@@ -184,12 +184,29 @@ struct RichTextToolbar: View {
         .accessibilityLabel(help)
     }
 
-    private var familyLabel: String {
-        switch session.state.family {
+    private var familyLabel: String { Self.familyLabel(for: session.state.family) }
+
+    /// A mixed selection must not fall back to "System": that was the defect here — a selection
+    /// spanning two named families (Helvetica and Times, say), neither of them the system face, read
+    /// as `nil` under the old `String?` and rendered as "System", which was true of nothing in the
+    /// selection. "–" matches `sizeLabel`'s own mixed reading below — a screen-reader user who has
+    /// learned what "–" means from one menu should not have to learn a second spelling for the other.
+    ///
+    /// Pulled out as a `static func` (rather than left as the `private var` this used to be) so
+    /// `RichTextToolbarTests` can exercise the `.mixed` case without a live `EditSession` — see the
+    /// file header comment on why nothing else here is reachable from an XCTest target.
+    static func familyLabel(for family: RichTextFamily) -> String {
+        switch family {
         case .system:          return "System"
         case .named(let name): return name
         case .mixed:           return "–"
         }
+    }
+
+    /// No single number when the selection mixes sizes — a tick on one of them would be a claim
+    /// about the rest that is not true. Same pull-out-for-testing reasoning as `familyLabel(for:)`.
+    static func sizeLabel(for size: CGFloat?) -> String {
+        size.map { String(Int($0)) } ?? "–"
     }
 
     private var fontMenu: some View {
@@ -204,10 +221,6 @@ struct RichTextToolbar: View {
                 Button(family) { session.run(.family(family)) }
             }
         } label: {
-            // A mixed selection must not fall back to "System": that was the defect here — a
-            // selection spanning two named families (Helvetica and Times, say), neither of them the
-            // system face, read as `nil` under the old `String?` and rendered as "System", which was
-            // true of nothing in the selection. "–" matches the size menu's own mixed reading below.
             Text(familyLabel)
                 .font(.system(size: 11))
                 .lineLimit(1)
@@ -218,6 +231,13 @@ struct RichTextToolbar: View {
         .disabled(editingSource)
         .help("Font")
         .accessibilityLabel("Font")
+        // The visible text doubling as this control's title is not something to depend on: it is
+        // AppKit mirroring whatever string the label happens to render, which is exactly what let
+        // the size menu next to this one go silent — the same shape of label, but nothing declared
+        // as its accessible value, so VoiceOver had nothing reliable to read. Declaring the value
+        // explicitly (here and on `sizeMenu`) makes both controls announce label-then-value the same,
+        // documented way instead of one working by accident.
+        .accessibilityValue(familyLabel)
     }
 
     private var sizeMenu: some View {
@@ -226,9 +246,7 @@ struct RichTextToolbar: View {
                 Button(String(Int(size))) { session.run(.size(size)) }
             }
         } label: {
-            // No single number when the selection mixes sizes — a tick on one of them would be a
-            // claim about the rest that is not true.
-            Text(session.state.size.map { String(Int($0)) } ?? "–")
+            Text(Self.sizeLabel(for: session.state.size))
                 .font(.system(size: 11))
                 .frame(width: 22)
         }
@@ -237,6 +255,9 @@ struct RichTextToolbar: View {
         .disabled(editingSource)
         .help("Size")
         .accessibilityLabel("Size")
+        // See the matching comment on `fontMenu`: this is the actual fix for the size menu not
+        // announcing its value — declare it, rather than hope the rendered text gets picked up.
+        .accessibilityValue(Self.sizeLabel(for: session.state.size))
     }
 
     private func colourMenu(symbol: String,
@@ -259,7 +280,15 @@ struct RichTextToolbar: View {
                 }
             }
         } label: {
-            Image(systemName: symbol).font(.system(size: 12))
+            Image(systemName: symbol)
+                .font(.system(size: 12))
+                // An SF Symbol without a localised accessibility description exposes its own literal
+                // name instead — this is why the text-colour menu used to announce "paintpalette,
+                // Text colour" (the highlighter symbol has a translated name, so that one merely read
+                // as noisy rather than nonsense; the underlying leak is the same). Hiding the icon
+                // stops it contributing that name to the menu's accessible title; `.accessibilityLabel`
+                // below still supplies the one word that should be spoken.
+                .accessibilityHidden(true)
         }
         .menuStyle(.borderlessButton)
         // Indicator restored (not `.hidden`) to match `fontMenu`/`sizeMenu` right next to it: an

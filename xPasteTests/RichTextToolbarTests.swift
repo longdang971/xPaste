@@ -65,4 +65,33 @@ final class RichTextToolbarTests: XCTestCase {
                          "project's deployment target")
         XCTAssertNotEqual(RichTextToolbar.clearFormattingSymbol, "textformat.size.smaller")
     }
+
+    // MARK: - Font and size labels
+    //
+    // `familyLabel(for:)` and `sizeLabel(for:)` are the pure string-in/string-out halves of
+    // `fontMenu` and `sizeMenu` — pulled out for the same reason `isLinkableAddress` was: the
+    // views built around them are not reachable from this XCTest target, but the logic deciding
+    // what those views announce (accessibly, via `.accessibilityValue`, and visually) is.
+
+    func test_family_label_names_the_system_and_named_faces() {
+        XCTAssertEqual(RichTextToolbar.familyLabel(for: .system), "System")
+        XCTAssertEqual(RichTextToolbar.familyLabel(for: .named("Times")), "Times")
+    }
+
+    func test_size_label_names_a_single_size() {
+        XCTAssertEqual(RichTextToolbar.sizeLabel(for: 12), "12")
+    }
+
+    /// Regression guard for the defect this fixes: a mixed selection must read as "mixed", not
+    /// silently drop the size/family from the announcement altogether.
+    func test_mixed_family_and_nil_size_both_read_as_a_dash() {
+        XCTAssertEqual(RichTextToolbar.familyLabel(for: .mixed), "–")
+        XCTAssertEqual(RichTextToolbar.sizeLabel(for: nil), "–")
+    }
+
+    /// The font and size menus must teach a screen-reader user the same spelling of "mixed" —
+    /// see the comment on `familyLabel(for:)` in the toolbar itself.
+    func test_mixed_reads_the_same_way_across_both_menus() {
+        XCTAssertEqual(RichTextToolbar.familyLabel(for: .mixed), RichTextToolbar.sizeLabel(for: nil))
+    }
 }
