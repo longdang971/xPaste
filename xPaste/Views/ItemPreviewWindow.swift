@@ -363,17 +363,6 @@ struct PreviewPopoverContent: View {
     }
 }
 
-/// A handle on the live editor.
-///
-/// Holds the text view weakly and reads it on demand, rather than copying the document out on every
-/// keystroke — a large snippet would otherwise be duplicated per character typed.
-final class EditBuffer {
-    weak var textView: NSTextView?
-
-    var plain: String { textView?.string ?? "" }
-    var attributed: NSAttributedString { textView?.attributedString() ?? NSAttributedString() }
-}
-
 /// The editor itself: the same `NSTextView` the preview already uses, told it is editable.
 ///
 /// Seeded once in `makeNSView` and never written to again — `updateNSView` deliberately does
