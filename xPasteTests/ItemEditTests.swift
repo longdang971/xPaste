@@ -107,6 +107,9 @@ final class ItemEditTests: XCTestCase {
         let seed = ItemEdit.editorSeed(for: broken, parsed: nil)
         XCTAssertTrue(seed.formatted)
         XCTAssertEqual(seed.text.string, "hi")
+        // Even though the editor allows formatting, the fallback text is plain and must not be
+        // mistaken for text that actually carries formatting.
+        XCTAssertFalse(ItemEdit.carriesFormatting(seed.text))
     }
 
     // MARK: - Formatting out of the editor

@@ -121,10 +121,10 @@ struct PreviewPopoverContent: View {
     private func save() {
         let plain = buffer.plain
         guard !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        // The same decision the editor was opened with — never `keepsFormatting(item)` again here,
-        // or a session that opened plain would save plain RTF over the real formatting.
-        let seed = ItemEdit.editorSeed(for: item, parsed: richPreview?.text)
-        let rich = seed.formatted ? ItemEdit.rtf(from: buffer.attributed) : nil
+        // Never `seed.formatted` — that only says the editor *allowed* formatting, which is now
+        // true of every Text item. What decides is whether the saved text differs from the
+        // defaults it opened with.
+        let rich = ItemEdit.carriesFormatting(buffer.attributed) ? ItemEdit.rtf(from: buffer.attributed) : nil
         ClipboardStore.shared.updateContent(id: item.id, text: plain,
                                             richData: rich,
                                             richType: rich == nil ? nil : ItemEdit.richType)
