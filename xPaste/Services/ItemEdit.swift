@@ -97,10 +97,16 @@ enum ItemEdit {
     /// Always RTF, even for an item that arrived as HTML: `ClipboardItem.captureRich` already
     /// prefers RTF when reading the pasteboard, so it is the representation the rest of the app
     /// treats as primary, and an editor round-trip is the natural moment to settle on it.
+    ///
+    /// `SystemFontRTF.fixup` runs last: Cocoa's RTF writer cannot name the system face and quietly
+    /// substitutes Helvetica Neue into the font table, which is what used to make formatting an
+    /// item silently change its typeface. See that file for how the substitution is undone.
     static func rtf(from attributed: NSAttributedString) -> Data? {
         guard attributed.length > 0 else { return nil }
-        return attributed.rtf(from: NSRange(location: 0, length: attributed.length),
-                              documentAttributes: [:])
+        guard let data = attributed.rtf(from: NSRange(location: 0, length: attributed.length),
+                                        documentAttributes: [:])
+        else { return nil }
+        return SystemFontRTF.fixup(rtf: data, attributed: attributed)
     }
 
     /// The pasteboard type `rtf(from:)`'s bytes should be stored under.
