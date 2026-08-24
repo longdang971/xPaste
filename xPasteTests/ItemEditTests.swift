@@ -45,13 +45,18 @@ final class ItemEditTests: XCTestCase {
         XCTAssertFalse(ItemEdit.canEdit(.folder))
     }
 
-    func testOnlyATextItemThatArrivedFormattedKeepsItsFormatting() {
+    func testATextItemThatArrivedFormattedKeepsItsFormatting() {
         let rich = ClipboardItem(type: .text, text: "styled", richData: Data([1]), richType: "public.rtf")
         XCTAssertTrue(ItemEdit.keepsFormatting(rich))
     }
 
-    func testAPlainItemStaysPlainThroughTheEditor() {
-        XCTAssertFalse(ItemEdit.keepsFormatting(ClipboardItem(type: .text, text: "plain")))
+    /// The claim this used to make of `keepsFormatting` — that a plain item never starts storing
+    /// RTF just for having been opened — now belongs to `carriesFormatting`. The editor offers a
+    /// plain item formatting; only using some of it makes the item formatted.
+    func testAPlainItemStaysPlainThroughTheEditorUnlessItIsActuallyFormatted() {
+        let plain = ClipboardItem(type: .text, text: "plain")
+        XCTAssertTrue(ItemEdit.keepsFormatting(plain))
+        XCTAssertFalse(ItemEdit.carriesFormatting(ItemEdit.editorSeed(for: plain, parsed: nil).text))
     }
 
     /// A link is edited as the address it is, not as the styled anchor the browser put on the
@@ -92,20 +97,16 @@ final class ItemEditTests: XCTestCase {
         XCTAssertTrue(seed.formatted)
     }
 
-    func testAPlainItemOpensPlain() {
-        let seed = ItemEdit.editorSeed(for: ClipboardItem(type: .text, text: "plain"), parsed: nil)
-
-        XCTAssertFalse(seed.formatted)
-        XCTAssertEqual(seed.text.string, "plain")
-    }
-
-    /// Formatting nobody can parse is not formatting worth claiming to keep — and saying so is
-    /// what stops the save writing plain RTF over it.
-    func testUnreadableFormattingDoesNotClaimToBeKept() {
+    /// Formatting nobody can parse still opens on an editor that allows formatting — same as any
+    /// other Text item — it just falls back to the plain string, because there is nothing else to
+    /// seed the editor with.
+    func testUnreadableFormattingStillOpensOnAnEditorThatAllowsFormatting() {
         let broken = ClipboardItem(type: .text, text: "hi",
                                    richData: Data([0x00, 0x01]), richType: "public.rtf")
 
-        XCTAssertFalse(ItemEdit.editorSeed(for: broken, parsed: nil).formatted)
+        let seed = ItemEdit.editorSeed(for: broken, parsed: nil)
+        XCTAssertTrue(seed.formatted)
+        XCTAssertEqual(seed.text.string, "hi")
     }
 
     // MARK: - Formatting out of the editor
@@ -153,5 +154,78 @@ final class ItemEditTests: XCTestCase {
             ClipboardItem.self, from: try JSONEncoder().encode(item))
 
         XCTAssertEqual(restored.contentRevision, 3)
+    }
+
+    // MARK: - Which items get a toolbar
+
+    func test_every_text_item_opens_formatted_now_that_there_is_a_toolbar() {
+        let plain = ClipboardItem(type: .text, text: "hello")
+        let formatted = ClipboardItem(type: .text, text: "hello",
+                                      richData: Data("x".utf8),
+                                      richType: NSPasteboard.PasteboardType.rtf.rawValue)
+        XCTAssertTrue(ItemEdit.keepsFormatting(plain))
+        XCTAssertTrue(ItemEdit.keepsFormatting(formatted))
+    }
+
+    /// A Link is still edited as the address it is, not as the styled anchor a browser happened to
+    /// put on the pasteboard.
+    func test_a_link_is_still_edited_plain() {
+        let link = ClipboardItem(type: .url, text: "https://example.com")
+        XCTAssertFalse(ItemEdit.keepsFormatting(link))
+        XCTAssertFalse(ItemEdit.editorSeed(for: link, parsed: nil).formatted)
+    }
+
+    func test_a_plain_text_item_opens_on_an_editor_that_allows_formatting() {
+        let plain = ClipboardItem(type: .text, text: "hello")
+        let seed = ItemEdit.editorSeed(for: plain, parsed: nil)
+        XCTAssertTrue(seed.formatted)
+        XCTAssertEqual(seed.text.string, "hello")
+    }
+
+    // MARK: - Whether an edit is worth storing as RTF
+
+    /// The question is "does this differ from what it opened with?", never "does this have
+    /// attributes?" — an NSTextView gives a default font to everything it is handed, so the second
+    /// question answers yes for every plain snippet ever opened.
+    func test_text_on_the_editors_own_defaults_carries_no_formatting() {
+        let text = NSAttributedString(string: "hello", attributes: ItemEdit.plainDefaults)
+        XCTAssertFalse(ItemEdit.carriesFormatting(text))
+    }
+
+    func test_text_with_no_attributes_at_all_carries_no_formatting() {
+        XCTAssertFalse(ItemEdit.carriesFormatting(NSAttributedString(string: "hello")))
+    }
+
+    func test_one_bold_word_makes_the_whole_thing_formatted() {
+        let bold = NSFontManager.shared.convert(ItemEdit.plainFont, toHaveTrait: .boldFontMask)
+        let text = NSMutableAttributedString(string: "hi there", attributes: ItemEdit.plainDefaults)
+        text.addAttribute(.font, value: bold, range: NSRange(location: 0, length: 2))
+        XCTAssertTrue(ItemEdit.carriesFormatting(text))
+    }
+
+    func test_a_different_size_a_colour_a_highlight_a_link_or_a_rule_each_count() {
+        func decorated(_ attrs: [NSAttributedString.Key: Any]) -> NSAttributedString {
+            var merged = ItemEdit.plainDefaults
+            for (key, value) in attrs { merged[key] = value }
+            return NSAttributedString(string: "x", attributes: merged)
+        }
+        XCTAssertTrue(ItemEdit.carriesFormatting(decorated([.font: NSFont.systemFont(ofSize: 24)])))
+        XCTAssertTrue(ItemEdit.carriesFormatting(decorated([.foregroundColor: NSColor.systemRed])))
+        XCTAssertTrue(ItemEdit.carriesFormatting(decorated([.backgroundColor: NSColor.systemYellow])))
+        XCTAssertTrue(ItemEdit.carriesFormatting(decorated([.link: URL(string: "https://x.com")!])))
+        XCTAssertTrue(ItemEdit.carriesFormatting(
+            decorated([.underlineStyle: NSUnderlineStyle.single.rawValue])))
+        XCTAssertTrue(ItemEdit.carriesFormatting(
+            decorated([.strikethroughStyle: NSUnderlineStyle.single.rawValue])))
+    }
+
+    /// The whole reason a plain item is allowed near the rich editor at all: it has to come out the
+    /// other side still plain unless the user actually formatted something.
+    func test_a_plain_item_taken_through_raw_mode_and_back_is_still_plain() {
+        let text = NSAttributedString(string: "hello\nworld", attributes: ItemEdit.plainDefaults)
+        let html = try? XCTUnwrap(RichTextHTML.html(from: text))
+        let back = try? XCTUnwrap(RichTextHTML.attributed(from: html ?? ""))
+        XCTAssertEqual(back?.string, "hello\nworld")
+        XCTAssertFalse(ItemEdit.carriesFormatting(back ?? NSAttributedString()))
     }
 }

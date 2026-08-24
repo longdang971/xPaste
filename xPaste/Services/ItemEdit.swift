@@ -18,16 +18,56 @@ enum ItemEdit {
         }
     }
 
-    /// Whether the editor should keep formatting for this item.
+    /// What a plain, unformatted run looks like in the editor.
     ///
-    /// Only a Text item that arrived with formatting. Two exclusions, each deliberate: a Link is
-    /// edited as the address it is, not as the styled anchor a browser happened to put on the
-    /// pasteboard; and an item that never had formatting stays plain, because an `NSTextView`
-    /// applies a default font to everything it is given — asking "does the result carry
-    /// attributes?" would answer yes for every plain snippet ever opened, and they would all
-    /// silently start storing RTF.
+    /// One definition because three things have to agree on it: the seed for an item with no
+    /// formatting, what "clear formatting" returns a selection to, and the comparison
+    /// `carriesFormatting` makes when deciding whether an edit is worth storing as RTF. They drifted
+    /// apart the moment there were two copies of the literal.
+    static let plainFont = NSFont.systemFont(ofSize: 13)
+    static var plainDefaults: [NSAttributedString.Key: Any] {
+        [.font: plainFont, .foregroundColor: NSColor.labelColor]
+    }
+
+    /// Whether the editor offers formatting for this item.
+    ///
+    /// Every Text item, now that there is a toolbar — a plain snippet can be given a bold word or a
+    /// link. A Link is still excluded: it is edited as the address it is, not as the styled anchor
+    /// a browser happened to put on the pasteboard.
+    ///
+    /// This used to also require that the item *arrived* formatted. That was guarding against a
+    /// real hazard — an `NSTextView` applies a default font to everything it is given, so asking
+    /// "does the result carry attributes?" answers yes for every plain snippet ever opened, and
+    /// they would all silently start storing RTF. The guard has not been dropped, it has moved to
+    /// `carriesFormatting`, which asks the sharper question: does the saved text differ from the
+    /// defaults it opened with?
     static func keepsFormatting(_ item: ClipboardItem) -> Bool {
-        item.type == .text && item.richData != nil
+        item.type == .text
+    }
+
+    /// Whether an edited string carries anything `plainDefaults` does not.
+    ///
+    /// A missing `.font` or `.foregroundColor` counts as plain, because that is what unstyled text
+    /// comes back as from the HTML importer. Fonts are compared by name and size rather than by
+    /// `==`: the same face arrives as a different instance depending on which importer produced it.
+    static func carriesFormatting(_ attributed: NSAttributedString) -> Bool {
+        var formatted = false
+        attributed.enumerateAttributes(in: NSRange(location: 0, length: attributed.length),
+                                       options: []) { attrs, _, stop in
+            let font = attrs[.font] as? NSFont
+            let plainFace = font == nil
+                || (font?.fontName == plainFont.fontName && font?.pointSize == plainFont.pointSize)
+            let plainColour = (attrs[.foregroundColor] as? NSColor).map { $0 == .labelColor } ?? true
+            let unadorned = attrs[.link] == nil
+                && attrs[.backgroundColor] == nil
+                && (attrs[.underlineStyle] as? Int ?? 0) == 0
+                && (attrs[.strikethroughStyle] as? Int ?? 0) == 0
+            if !(plainFace && plainColour && unadorned) {
+                formatted = true
+                stop.pointee = true
+            }
+        }
+        return formatted
     }
 
     /// What the editor opens with, and whether that text is the formatted one.
@@ -42,14 +82,14 @@ enum ItemEdit {
     /// directly, which answers synchronously.
     static func editorSeed(for item: ClipboardItem,
                            parsed: NSAttributedString?) -> (text: NSAttributedString, formatted: Bool) {
-        if keepsFormatting(item),
+        if item.type == .text,
            let formatted = parsed ?? RichTextRenderer.cachedParse(item)?.text {
             return (formatted, true)
         }
-        return (NSAttributedString(string: item.text ?? "",
-                                   attributes: [.font: NSFont.systemFont(ofSize: 13),
-                                                .foregroundColor: NSColor.labelColor]),
-                false)
+        // A Text item with nothing to parse still opens on an editor that allows formatting — it
+        // just starts out plain. A Link opens plain and stays plain.
+        return (NSAttributedString(string: item.text ?? "", attributes: plainDefaults),
+                item.type == .text)
     }
 
     /// The RTF bytes for an edited attributed string, or nil when there is nothing to encode.
