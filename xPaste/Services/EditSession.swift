@@ -105,6 +105,16 @@ final class EditSession: ObservableObject {
         return RichTextHTML.attributed(from: typed)
     }
 
+    /// Replaces the whole document, through the text view's own change machinery so the rewrite
+    /// lands on its undo stack — a conversion the user did not mean must be one ⌘Z away.
+    func replaceAll(with string: String) {
+        guard let view = buffer.textView else { return }
+        let whole = NSRange(location: 0, length: (view.string as NSString).length)
+        guard view.shouldChangeText(in: whole, replacementString: string) else { return }
+        view.replaceCharacters(in: whole, with: string)
+        view.didChangeText()
+    }
+
     // MARK: - Commands
 
     func run(_ command: RichTextCommand) {

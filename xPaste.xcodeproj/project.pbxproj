@@ -28,6 +28,7 @@
 		3633F814EE372C8EE09E8037 /* SaveFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59F2C3ED8ECBAE599D2D59E6 /* SaveFormat.swift */; };
 		36D1D914A64791896C6BA966 /* NSImage+Compress.swift in Sources */ = {isa = PBXBuildFile; fileRef = E82CAAB3832FCA2A676416E2 /* NSImage+Compress.swift */; };
 		3797093C090025BEB3CE5EE2 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D87256E82B8E13BFED6DF205 /* ContentView.swift */; };
+		3922C51017D548BCC76A6A04 /* ColorEditRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2531EE16C704360E8AD46411 /* ColorEditRow.swift */; };
 		3A6865C304F0469AF8E6336A /* SaveFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C5107DFBED0C58C6AABE75F /* SaveFormatTests.swift */; };
 		3CC15CB2D2C8C5DB8A7FBBB8 /* LinkPreviewService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC0DD421E182B54D9454E7F /* LinkPreviewService.swift */; };
 		3F5FDFB5B2EFB6621514F5A1 /* HTMLCharsetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEB5584A116F674DF6CC31D2 /* HTMLCharsetTests.swift */; };
@@ -109,6 +110,7 @@
 		E8DE24745EF30151A95DED7F /* AXTextSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3909597696AC92E5A5CF0A8 /* AXTextSelectionTests.swift */; };
 		EC123A15D559171EA0E7A02A /* ClipboardStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23DE041CE5171E0778614CC5 /* ClipboardStoreTests.swift */; };
 		EF36E1ED0EC2F2FF3026D9AF /* PanelSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D94625AC15E9694AF14C9DB4 /* PanelSelectionTests.swift */; };
+		F11F8D2D3A1BF742472FADD8 /* ColorEditRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 233D51F915B712C8320E2C8E /* ColorEditRowTests.swift */; };
 		F1D7FC7395A8659E929376EC /* RichTextRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BE74587C82BFC319854ABEB /* RichTextRendererTests.swift */; };
 		F6EB34F2757CAED96AF3DF4B /* ReleaseNotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBACF14FD885E192BC581C43 /* ReleaseNotesView.swift */; };
 		FB9D1C1E32E2847F9F2D6539 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47CD9BF54E42FC2A5BDCC5EE /* AppDelegate.swift */; };
@@ -139,7 +141,9 @@
 		1D4F8FF023E1870D0D25FF65 /* RichTextHTMLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextHTMLTests.swift; sourceTree = "<group>"; };
 		1E5BFC8D6FBAD34229FBF364 /* SystemFontRTFTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemFontRTFTests.swift; sourceTree = "<group>"; };
 		1FFCFA47DD87111CF9EEECF9 /* DropTargetResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropTargetResolverTests.swift; sourceTree = "<group>"; };
+		233D51F915B712C8320E2C8E /* ColorEditRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorEditRowTests.swift; sourceTree = "<group>"; };
 		23DE041CE5171E0778614CC5 /* ClipboardStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStoreTests.swift; sourceTree = "<group>"; };
+		2531EE16C704360E8AD46411 /* ColorEditRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorEditRow.swift; sourceTree = "<group>"; };
 		25A64FF9690C12B715F10652 /* ReleaseInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseInfoTests.swift; sourceTree = "<group>"; };
 		25BB186F271DE2F66DC8547C /* TextFileReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextFileReader.swift; sourceTree = "<group>"; };
 		278A5B80FCD8806E1F4ADF7C /* SaveNameCaret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaveNameCaret.swift; sourceTree = "<group>"; };
@@ -268,6 +272,7 @@
 			children = (
 				58FD03BC0700D3C0C38A5756 /* CardDragSource.swift */,
 				B042F21E05C8F577B1BC3631 /* ClipboardItemCard.swift */,
+				2531EE16C704360E8AD46411 /* ColorEditRow.swift */,
 				D87256E82B8E13BFED6DF205 /* ContentView.swift */,
 				F02E7309431E160801B9345F /* DeleteConfirmDialog.swift */,
 				C1D1A520708631522EC71B50 /* FilterPopover.swift */,
@@ -291,6 +296,7 @@
 				666D180932C3A400D4A14ABF /* ClipboardItemTests.swift */,
 				9A90315EEE284E6A70C7240A /* ClipboardMonitorTests.swift */,
 				23DE041CE5171E0778614CC5 /* ClipboardStoreTests.swift */,
+				233D51F915B712C8320E2C8E /* ColorEditRowTests.swift */,
 				E437A8C68C2F154F3AF59DC2 /* ColorFormatTests.swift */,
 				37EAD895113A93696109B981 /* ColorItemTests.swift */,
 				1C0BAE8F76DBDABDA23190BE /* ColorParserTests.swift */,
@@ -544,6 +550,7 @@
 				D4C31C87769C671EEE6BF12E /* ClipboardItemCard.swift in Sources */,
 				931AEF302B3E6A7C4C55F1C4 /* ClipboardMonitor.swift in Sources */,
 				CA471219510EB2F9648973CA /* ClipboardStore.swift in Sources */,
+				3922C51017D548BCC76A6A04 /* ColorEditRow.swift in Sources */,
 				C030C00311D0CF5FA35B9D2A /* ColorFormat.swift in Sources */,
 				CDB4DEB2112CD2E90FF59452 /* ColorParser.swift in Sources */,
 				3797093C090025BEB3CE5EE2 /* ContentView.swift in Sources */,
@@ -606,6 +613,7 @@
 				5B285C5C89DE854BD0A96A5F /* ClipboardItemTests.swift in Sources */,
 				A40B9D266E976EEEAA716565 /* ClipboardMonitorTests.swift in Sources */,
 				EC123A15D559171EA0E7A02A /* ClipboardStoreTests.swift in Sources */,
+				F11F8D2D3A1BF742472FADD8 /* ColorEditRowTests.swift in Sources */,
 				DC915A994E3F323AEB9D33FC /* ColorFormatTests.swift in Sources */,
 				947F8D48883A61380BD25A69 /* ColorItemTests.swift in Sources */,
 				78CA7E921DFE367FA939EC88 /* ColorParserTests.swift in Sources */,

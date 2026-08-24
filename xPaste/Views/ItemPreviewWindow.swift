@@ -16,6 +16,10 @@ struct PreviewPopoverContent: View {
     /// Save refuses. Kept as its own flag and assigned only when it changes, so typing does not
     /// re-render the popover on every keystroke.
     @State private var draftIsEmpty = false
+    /// What the colour row is reading. Kept as its own `@State` rather than asking the buffer in
+    /// `body`, for the same reason `draftIsEmpty` is: `body` runs far more often than the text
+    /// changes.
+    @State private var colourDraft = ""
     /// Owns the mode, the seed and the live text view. See `EditSession`.
     @StateObject private var session = EditSession()
     /// Counted once in `.task`, not per body pass: three full walks of the string measured 50ms on
@@ -41,6 +45,7 @@ struct PreviewPopoverContent: View {
     }
 
     private var editingText: Bool { isEditing && item.type == .text }
+    private var editingColour: Bool { isEditing && item.type == .color }
 
     private var previewWidth: CGFloat {
         if editingText { return 560 }
@@ -106,8 +111,14 @@ struct PreviewPopoverContent: View {
         NotificationCenter.default.post(
             name: editing ? .clipboardAlertShown : .clipboardAlertHidden, object: nil)
         if editing {
-            session.begin(with: ItemEdit.editorSeed(for: item, parsed: richPreview?.text).text)
+            let seed = ItemEdit.editorSeed(for: item, parsed: richPreview?.text).text
+            session.begin(with: seed)
             draftIsEmpty = false
+            // Seeded from the same text the editor itself is about to open with, not from
+            // `session.buffer.plain`: the text view this reads is only wired up once `editor` is
+            // built below, one runloop turn after `setEditing` runs, so asking the buffer here
+            // would read whatever (or nothing) the previous edit left behind.
+            colourDraft = seed.string
         }
     }
 
@@ -124,9 +135,10 @@ struct PreviewPopoverContent: View {
             onAttach: { view in session.attach(view) },
             onChange: {
                 guard session.generation == myGeneration else { return }
-                let empty = session.buffer.plain
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let plain = session.buffer.plain
+                let empty = plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 if empty != draftIsEmpty { draftIsEmpty = empty }
+                if editingColour { colourDraft = plain }
             },
             onSelectionChange: { session.refreshState(ifCurrent: myGeneration) },
             onCancel: { setEditing(false) }
@@ -208,6 +220,14 @@ struct PreviewPopoverContent: View {
             if editingText {
                 VStack(spacing: 0) {
                     RichTextToolbar(session: session)
+                    Divider()
+                    editor
+                }
+            } else if editingColour {
+                VStack(spacing: 0) {
+                    ColorEditRow(text: colourDraft) { rewritten in
+                        session.replaceAll(with: rewritten)
+                    }
                     Divider()
                     editor
                 }
