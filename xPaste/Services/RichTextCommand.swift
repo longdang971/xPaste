@@ -186,18 +186,36 @@ enum RichTextCommand {
     }
 }
 
+/// The face under a selection, as `RichTextState.family` reports it.
+///
+/// A plain `String?` used to stand in for this and could not tell two very different situations
+/// apart: the face is the system one (unnameable — `.AppleSystemUIFont` is private) versus the
+/// selection mixing two or more named families. Both collapsed to `nil`, and the toolbar read that
+/// `nil` as "System" — so a selection spanning Helvetica and Times, neither of them the system face,
+/// was reported as the system face. Giving the two cases their own enum cases makes that conflation
+/// impossible to reintroduce.
+enum RichTextFamily: Equatable {
+    /// The editor's own face. Has no name to show — `.AppleSystemUIFont` is private API.
+    case system
+    /// Every run in the selection shares this one named family.
+    case named(String)
+    /// The selection spans two or more different faces (named, system, or both).
+    case mixed
+}
+
 /// The formatting under the selection, as the toolbar needs to show it.
 ///
 /// A trait reads as on only when it is on throughout, so a lit button always matches what pressing
-/// it again would do. A `nil` size or family means the selection mixes them, and the menu shows no
-/// tick rather than picking a winner.
+/// it again would do. `RichTextFamily.mixed` and a `nil` size mean the same thing for their
+/// respective properties — the selection mixes them — and the menu shows no tick rather than picking
+/// a winner.
 struct RichTextState: Equatable {
     var bold = false
     var italic = false
     var underline = false
     var strikethrough = false
-    /// nil when the selection mixes families, or when the face is the system one.
-    var familyName: String?
+    /// `.mixed` when the selection spans more than one face; never conflated with `.system`.
+    var family: RichTextFamily = .system
     /// nil when the selection mixes sizes.
     var size: CGFloat?
     var link: URL?
@@ -228,11 +246,11 @@ struct RichTextState: Equatable {
             guard let first = all.first, all.allSatisfy({ $0 == first }) else { return nil }
             return first
         }
-        func familyName(_ attrs: [NSAttributedString.Key: Any]) -> String? {
+        func family(_ attrs: [NSAttributedString.Key: Any]) -> RichTextFamily {
             guard let font = attrs[.font] as? NSFont, !RichTextHTML.isSystemFace(font) else {
-                return nil
+                return .system
             }
-            return font.familyName
+            return .named(font.familyName ?? "")
         }
 
         let typingTraits = (typing[.font] as? NSFont)
@@ -251,7 +269,8 @@ struct RichTextState: Equatable {
             // Armed, the caret's own run in `runs` is still the storage run it sits in (see the
             // comment above), so it has to be bypassed the same way the traits bypass `everywhere`
             // above — otherwise a just-armed size or family would keep reporting the old one.
-            familyName: armed ? familyName(typing) : single(familyName),
+            // `single` answers nil when the runs disagree, which is exactly what `.mixed` means.
+            family: armed ? family(typing) : (single { family($0) as RichTextFamily? } ?? .mixed),
             size: armed ? (typing[.font] as? NSFont)?.pointSize
                         : single { ($0[.font] as? NSFont)?.pointSize },
             // `link` deliberately keeps reading from the storage run even when armed: NSTextView

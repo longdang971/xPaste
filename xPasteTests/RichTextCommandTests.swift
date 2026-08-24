@@ -302,7 +302,40 @@ final class RichTextCommandTests: XCTestCase {
             to: store, range: NSRange(location: 5, length: 0), typing: ItemEdit.plainDefaults)
         let state = RichTextState.read(from: store, range: NSRange(location: 5, length: 0),
                                        typing: armed)
-        XCTAssertEqual(state.familyName, "Helvetica Neue")
+        XCTAssertEqual(state.family, .named("Helvetica Neue"))
+    }
+
+    /// A selection entirely in one named family reports that name, not `.mixed` and not `.system`.
+    func test_a_selection_in_one_named_family_reports_that_name() {
+        let store = storage()
+        let range = NSRange(location: 0, length: 5)
+        _ = RichTextCommand.family("Menlo").apply(to: store, range: range, typing: ItemEdit.plainDefaults)
+        let state = RichTextState.read(from: store, range: range, typing: ItemEdit.plainDefaults)
+        XCTAssertEqual(state.family, .named("Menlo"))
+    }
+
+    /// A selection entirely in the system face reports `.system`, not a name.
+    func test_a_selection_in_the_system_face_reports_system() {
+        let store = storage()
+        let range = NSRange(location: 0, length: 5)
+        let state = RichTextState.read(from: store, range: range, typing: ItemEdit.plainDefaults)
+        XCTAssertEqual(state.family, .system)
+    }
+
+    /// The defect this file exists to close: `familyName: String?` used to make "the face is the
+    /// system one" and "the selection mixes two named families" the same value (`nil`), and the
+    /// toolbar read that as "System" — false of every character in a Helvetica/Times selection.
+    /// Neither name, and not `.system`, may come out of a selection that spans two named families.
+    func test_a_selection_mixing_two_named_families_reports_mixed() {
+        let store = storage()
+        _ = RichTextCommand.family("Menlo").apply(to: store, range: NSRange(location: 0, length: 5),
+                                                   typing: ItemEdit.plainDefaults)
+        _ = RichTextCommand.family("Helvetica Neue").apply(to: store,
+                                                            range: NSRange(location: 6, length: 5),
+                                                            typing: ItemEdit.plainDefaults)
+        let state = RichTextState.read(from: store, range: NSRange(location: 0, length: store.length),
+                                       typing: ItemEdit.plainDefaults)
+        XCTAssertEqual(state.family, .mixed)
     }
 
     func test_the_state_reports_the_link_at_the_caret() {

@@ -88,6 +88,14 @@ struct RichTextToolbar: View {
         .help(help)
     }
 
+    private var familyLabel: String {
+        switch session.state.family {
+        case .system:          return "System"
+        case .named(let name): return name
+        case .mixed:           return "–"
+        }
+    }
+
     private var fontMenu: some View {
         Menu {
             Button("System") { session.run(.family(nil)) }
@@ -100,7 +108,11 @@ struct RichTextToolbar: View {
                 Button(family) { session.run(.family(family)) }
             }
         } label: {
-            Text(session.state.familyName ?? "System")
+            // A mixed selection must not fall back to "System": that was the defect here — a
+            // selection spanning two named families (Helvetica and Times, say), neither of them the
+            // system face, read as `nil` under the old `String?` and rendered as "System", which was
+            // true of nothing in the selection. "–" matches the size menu's own mixed reading below.
+            Text(familyLabel)
                 .font(.system(size: 11))
                 .lineLimit(1)
                 .frame(maxWidth: 110, alignment: .leading)
@@ -200,10 +212,14 @@ enum FontCatalogue {
     /// Renders one palette swatch as an actual coloured square, built once per colour and held
     /// alongside it (see the note on `families` above for why).
     ///
-    /// `isTemplate = false` is the whole fix here, not a redundant default: `NSMenuItem.image`
-    /// draws a *template* image as a flat monochrome mask, which is exactly what was reducing
-    /// every entry in these palettes to the same grey square. Leave it explicit.
-    static func swatchImage(for colour: NSColor) -> NSImage {
+    /// `isTemplate = false` is not a redundant default here — an `NSImage` built through
+    /// `NSImage(size:flipped:drawingHandler:)` already defaults to non-template, so this line is not
+    /// what makes any *single* swatch draw in colour. The real fix was moving off `Image(systemName:)`
+    /// in the first place: an SF-Symbol-backed image defaults to template, and that was what was
+    /// reducing every entry in these palettes to the same grey square. This assignment is kept —
+    /// and made explicit rather than relied on as a default — so a later reader does not reintroduce
+    /// a template-backed image here and silently bring the bug back.
+    private static func swatchImage(for colour: NSColor) -> NSImage {
         let side: CGFloat = 12
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
             let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
