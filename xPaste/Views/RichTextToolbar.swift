@@ -29,6 +29,17 @@ struct RichTextToolbar: View {
         // unlike every other control in `controls`, which the link *button* included is disabled
         // for raw mode. Closing it on any mode change keeps that same rule for the row itself.
         .onChange(of: session.mode) { _ in linkRowShown = false }
+        // `address` is otherwise only ever written when the link button is pressed, but the
+        // Apply/Update label and the Remove button's enabled state both track `session.state.link`
+        // live as the caret moves. Left unsynced, the field can go on showing link A's address while
+        // the button now reads "Update" for link B (or "Apply" for plain text) — pressing it then
+        // writes A's address onto whatever is under the caret now. Re-seeding here keeps the field
+        // and the button telling the same story. This does not fight the user mid-edit: typing in
+        // the field never moves the caret in the text view, so `session.state.link` cannot change
+        // out from under a keystroke here the way it can when the user clicks elsewhere.
+        .onChange(of: session.state.link) { newLink in
+            address = newLink?.absoluteString ?? ""
+        }
     }
 
     private var controls: some View {
@@ -101,7 +112,7 @@ struct RichTextToolbar: View {
 
             Button(session.state.link == nil ? "Apply" : "Update", action: applyLink)
                 .controlSize(.small)
-                .disabled(URL(string: address.trimmingCharacters(in: .whitespaces))?.scheme == nil)
+                .disabled(!Self.isLinkableAddress(address))
 
             Button("Remove") {
                 session.run(.link(nil))
@@ -115,11 +126,26 @@ struct RichTextToolbar: View {
     }
 
     private func applyLink() {
-        guard let url = URL(string: address.trimmingCharacters(in: .whitespaces)),
-              url.scheme != nil
+        // Repeats the `disabled` check above rather than trusting it: `.onSubmit` on the TextField
+        // also calls this, and Return fires regardless of whether the button was ever enabled.
+        guard Self.isLinkableAddress(address),
+              let url = URL(string: address.trimmingCharacters(in: .whitespaces))
         else { return }
         session.run(.link(url))
         linkRowShown = false
+    }
+
+    /// Whether `address` is safe to turn into a `.link` run.
+    ///
+    /// Mirrors `ClipboardItem.contentType(for:)`, which allows only `http` and `https` because those
+    /// are the schemes the app treats as safe to hand to the system — see its comment. This row adds
+    /// `mailto:` on top: an email address is an ordinary thing to link to, and `mailto:` is no more
+    /// dangerous than the other two. What both lists exclude is the point — `javascript:` and
+    /// `file:` addresses `URL(string:)` accepts happily, and before this row existed there was no
+    /// way for a user to type an arbitrary address and have it become a link at all.
+    static func isLinkableAddress(_ address: String) -> Bool {
+        guard let url = URL(string: address.trimmingCharacters(in: .whitespaces)) else { return false }
+        return url.scheme == "http" || url.scheme == "https" || url.scheme == "mailto"
     }
 
     private var divider: some View {
