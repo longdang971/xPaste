@@ -735,7 +735,7 @@ struct ClipboardItemCard: View {
 
     private var textPreview: some View {
         highlighted(cardText.preview)
-            .font(.system(size: 13))
+            .font(.system(size: 14))
             .foregroundColor(Color(NSColor.labelColor))
             // Ten fills the block now that it reaches the bottom of the card; the last couple of
             // lines land under the fade, which is the point — the text trails off rather than stops.

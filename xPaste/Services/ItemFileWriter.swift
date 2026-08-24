@@ -43,7 +43,11 @@ enum ItemFileWriter {
         case .remoteHTML:
             throw Failure.unresolvedPage
         case let .text(text):
-            try Data(text.utf8).write(to: url, options: .atomic)
+            var bytes = Data(text.utf8)
+            // A document saved out of a text item hits the same trap a saved page does: the bytes
+            // are UTF-8, and a browser opening a file that never says so falls back to windows-1252.
+            if suggestion.ext == "html" { bytes = HTMLCharset.declaring(bytes, charset: "utf-8") }
+            try bytes.write(to: url, options: .atomic)
         case let .data(data):
             try data.write(to: url, options: .atomic)
         }

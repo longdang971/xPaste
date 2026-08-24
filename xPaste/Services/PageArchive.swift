@@ -34,10 +34,15 @@ enum PageArchive {
         }
     }
 
-    /// The page at `url`, exactly as served.
+    /// The page at `url`, as served.
     ///
     /// What lands on disk is the markup and nothing else — no images, no stylesheets, no script
     /// results. A page that builds itself in the browser saves as the shell it was served as.
+    ///
+    /// One byte-for-byte exception, and only for pages that need it: a document whose encoding was
+    /// declared in the `Content-Type` header rather than in its own markup has that declaration
+    /// written into it before it is handed on, because the header does not survive being saved.
+    /// See `HTMLCharset`.
     static func html(for url: URL) async throws -> Data {
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -48,6 +53,6 @@ enum PageArchive {
         }
         guard !data.isEmpty else { throw Failure.empty }
         guard data.count <= byteCap else { throw Failure.tooLarge(bytes: data.count) }
-        return data
+        return HTMLCharset.declaring(data, charset: (response as? HTTPURLResponse)?.textEncodingName)
     }
 }

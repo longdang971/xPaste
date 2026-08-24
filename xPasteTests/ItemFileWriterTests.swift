@@ -35,6 +35,27 @@ final class ItemFileWriterTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "xin chào — ünïcode")
     }
 
+    func testAnHTMLDocumentSavedFromTextSaysItIsUTF8() throws {
+        // Same trap as a saved page: the bytes are UTF-8, but a file with nothing declaring that is
+        // read as windows-1252 and every accented character comes back as mojibake.
+        let target = url("page.html")
+
+        try ItemFileWriter.write(suggestion(.text("<html><head></head><body>Cửa hàng</body></html>"),
+                                            ext: "html"), to: target)
+
+        let written = try String(contentsOf: target, encoding: .utf8)
+        XCTAssertTrue(written.contains("<meta charset=\"utf-8\">"), written)
+        XCTAssertTrue(written.contains("Cửa hàng"))
+    }
+
+    func testTextThatIsNotADocumentIsWrittenWordForWord() throws {
+        let target = url("snippet.txt")
+
+        try ItemFileWriter.write(suggestion(.text("<p>Cửa hàng</p>"), ext: "txt"), to: target)
+
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "<p>Cửa hàng</p>")
+    }
+
     func testDataIsWrittenByteForByte() throws {
         let bytes = Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10])
         let target = url("shot.jpg")
