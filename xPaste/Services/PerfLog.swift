@@ -1,5 +1,7 @@
 import Foundation
 import os
+import AppKit
+import CoreVideo
 
 /// Main-thread timing for the panel's open/close path.
 ///
@@ -107,5 +109,76 @@ enum PerfLog {
         let ms = (CFAbsoluteTimeGetCurrent() - start) * 1000
         if ms > 0.5 { note("\(label): \(String(format: "%.2f", ms))ms") }
         return result
+    }
+}
+
+// MARK: - ĐO TẠM: chuyển động thật trên màn hình
+
+/// Lấy mẫu vị trí của *presentation layer* mỗi frame hiển thị.
+///
+/// `beginIdleWatch` chỉ nói main thread có rảnh không. Cú trượt lại do render server nội suy, nên
+/// một cú khựng ở đó là vô hình với phép đo kia mà mắt vẫn thấy. Đây là thứ thật sự trên màn hình.
+enum FrameProbe {
+    private static var link: CVDisplayLink?
+    private static weak var target: NSView?
+    private static var samples: [(t: CFAbsoluteTime, y: CGFloat)] = []
+    private static var label = ""
+
+    static func begin(_ name: String, view: NSView) {
+        guard PerfLog.enabled else { return }
+        stopLink()
+        label = name
+        target = view
+        samples.removeAll(keepingCapacity: true)
+        var l: CVDisplayLink?
+        CVDisplayLinkCreateWithActiveCGDisplays(&l)
+        guard let l else { return }
+        CVDisplayLinkSetOutputHandler(l) { _, _, _, _, _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { FrameProbe.tick() } }
+            return kCVReturnSuccess
+        }
+        CVDisplayLinkStart(l)
+        link = l
+    }
+
+    @MainActor private static func tick() {
+        guard let view = target, let pres = view.layer?.presentation() else { return }
+        samples.append((CFAbsoluteTimeGetCurrent(), pres.position.y))
+    }
+
+    static func end() {
+        guard PerfLog.enabled, link != nil else { return }
+        stopLink()
+        guard samples.count > 2 else { return }
+        let t0 = samples[0].t
+        var moves: [String] = []
+        var gaps: [Double] = []
+        var steps: [CGFloat] = []
+        for i in 1..<samples.count {
+            let dt = (samples[i].t - samples[i-1].t) * 1000
+            let dy = samples[i].y - samples[i-1].y
+            gaps.append(dt)
+            if abs(dy) > 0.01 { steps.append(abs(dy)) }
+            moves.append(String(format: "%.1f:%+.1f", (samples[i].t - t0) * 1000, dy))
+        }
+        let moving = steps.count
+        // A stall is a gap well past the display's own cadence, not merely past 12ms — this screen
+        // refreshes at 60Hz, so every healthy frame is already 16.7ms apart.
+        let median = gaps.sorted()[gaps.count / 2]
+        let stall = gaps.filter { $0 > median * 1.5 }.count
+        PerfLog.note("""
+        FRAME \(label): \(samples.count) frame, \(moving) frame CÓ dịch chuyển, \
+        span \(String(format: "%.0f", (samples.last!.t - t0) * 1000))ms, \
+        gap tb \(String(format: "%.1f", gaps.reduce(0,+)/Double(gaps.count)))ms \
+        max \(String(format: "%.1f", gaps.max() ?? 0))ms, khựng: \(stall), \
+        bước tb \(String(format: "%.1f", steps.isEmpty ? 0 : steps.reduce(0,+)/CGFloat(steps.count)))pt \
+        max \(String(format: "%.1f", steps.max() ?? 0))pt
+        """)
+        PerfLog.note("FRAME \(label) chuỗi: " + moves.prefix(40).joined(separator: " "))
+    }
+
+    private static func stopLink() {
+        if let l = link { CVDisplayLinkStop(l) }
+        link = nil
     }
 }

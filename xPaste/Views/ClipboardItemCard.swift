@@ -759,8 +759,10 @@ struct ClipboardItemCard: View {
         let tint = Self.onSwatchTint(NSColor(color))
         return ZStack {
             color
-            Text(item.text ?? "")
-                .font(.system(size: 14, weight: .medium, design: .monospaced))
+            // Upper-cased for the card only — see `ColorParser.displayLiteral`. Pasting still
+            // gives back exactly what was copied.
+            Text(ColorParser.displayLiteral(item.text ?? ""))
+                .font(.system(size: 18, weight: .medium, design: .monospaced))
                 .foregroundColor(tint)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

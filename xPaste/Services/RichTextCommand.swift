@@ -13,20 +13,9 @@ enum RichTextCommand {
     case family(String?)
     case weight(NSFont.Weight)
     case size(CGFloat)
-    /// nil returns to `labelColor`.
-    case foreground(NSColor?)
-    /// nil removes the highlight.
-    case background(NSColor?)
     /// nil removes the link.
     case link(URL?)
     case clearFormatting
-
-    /// The colour a highlight pins default-coloured text to.
-    ///
-    /// `labelColor` is white in dark mode and every highlight in the palette is a light wash, so
-    /// text left dynamic would vanish into its own highlight. Pinning it to the colour it shows in
-    /// light mode is what keeps a highlight readable in both.
-    static let pinnedBlack = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
 
     /// Applies to `storage` over `range`, and answers with the typing attributes the caret should
     /// adopt.
@@ -59,7 +48,7 @@ enum RichTextCommand {
         switch self {
         case .bold, .italic, .underline, .strikethrough:
             return !isOnEverywhere(in: storage, range: range, typing: typing)
-        case .family, .weight, .size, .foreground, .background, .link, .clearFormatting:
+        case .family, .weight, .size, .link, .clearFormatting:
             return true
         }
     }
@@ -85,7 +74,7 @@ enum RichTextCommand {
         case .italic:          return traits.contains(.italicFontMask)
         case .underline:       return (attrs[.underlineStyle] as? Int ?? 0) != 0
         case .strikethrough:   return (attrs[.strikethroughStyle] as? Int ?? 0) != 0
-        case .family, .weight, .size, .foreground, .background, .link, .clearFormatting:
+        case .family, .weight, .size, .link, .clearFormatting:
             return false
         }
     }
@@ -145,20 +134,6 @@ enum RichTextCommand {
             }
         case .size(let points):
             out[.font] = manager.convert(current, toSize: points)
-        case .foreground(let colour):
-            out[.foregroundColor] = colour ?? NSColor.labelColor
-        case .background(let colour):
-            if let colour {
-                out[.backgroundColor] = colour
-                if (attrs[.foregroundColor] as? NSColor ?? .labelColor) == .labelColor {
-                    out[.foregroundColor] = RichTextCommand.pinnedBlack
-                }
-            } else {
-                out.removeValue(forKey: .backgroundColor)
-                if (attrs[.foregroundColor] as? NSColor) == RichTextCommand.pinnedBlack {
-                    out[.foregroundColor] = NSColor.labelColor
-                }
-            }
         case .link(let url):
             if let url {
                 out[.link] = url

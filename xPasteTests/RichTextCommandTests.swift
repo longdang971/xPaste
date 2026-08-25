@@ -166,55 +166,6 @@ final class RichTextCommandTests: XCTestCase {
         XCTAssertLessThan(NSFontManager.shared.weight(of: font(store, at: 0)), 5)
     }
 
-    // MARK: - Colours
-
-    func test_a_foreground_colour_applies_and_nil_returns_to_the_default() {
-        let store = storage()
-        let range = NSRange(location: 0, length: 5)
-        _ = RichTextCommand.foreground(.systemRed).apply(to: store, range: range,
-                                                         typing: ItemEdit.plainDefaults)
-        XCTAssertEqual(store.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
-                       NSColor.systemRed)
-        _ = RichTextCommand.foreground(nil).apply(to: store, range: range,
-                                                  typing: ItemEdit.plainDefaults)
-        XCTAssertEqual(store.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
-                       NSColor.labelColor)
-    }
-
-    /// A highlight is a light wash and `labelColor` is white in dark mode, so text left dynamic
-    /// would vanish into it. The colour is pinned to what it shows in light mode.
-    func test_a_highlight_pins_default_coloured_text_so_it_survives_dark_mode() {
-        let store = storage()
-        let range = NSRange(location: 0, length: 5)
-        _ = RichTextCommand.background(.systemYellow).apply(to: store, range: range,
-                                                            typing: ItemEdit.plainDefaults)
-        XCTAssertEqual(store.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
-                       RichTextCommand.pinnedBlack)
-    }
-
-    func test_a_colour_the_user_chose_is_not_overridden_by_a_highlight() {
-        let store = storage()
-        let range = NSRange(location: 0, length: 5)
-        _ = RichTextCommand.foreground(.systemRed).apply(to: store, range: range,
-                                                         typing: ItemEdit.plainDefaults)
-        _ = RichTextCommand.background(.systemYellow).apply(to: store, range: range,
-                                                            typing: ItemEdit.plainDefaults)
-        XCTAssertEqual(store.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
-                       NSColor.systemRed)
-    }
-
-    func test_removing_a_highlight_releases_the_pinned_colour() {
-        let store = storage()
-        let range = NSRange(location: 0, length: 5)
-        _ = RichTextCommand.background(.systemYellow).apply(to: store, range: range,
-                                                            typing: ItemEdit.plainDefaults)
-        _ = RichTextCommand.background(nil).apply(to: store, range: range,
-                                                  typing: ItemEdit.plainDefaults)
-        XCTAssertNil(store.attribute(.backgroundColor, at: 0, effectiveRange: nil))
-        XCTAssertEqual(store.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
-                       NSColor.labelColor)
-    }
-
     // MARK: - Links
 
     func test_a_link_applies_with_its_own_blue_and_underline() {
@@ -346,22 +297,5 @@ final class RichTextCommandTests: XCTestCase {
         let state = RichTextState.read(from: store, range: NSRange(location: 2, length: 0),
                                        typing: ItemEdit.plainDefaults)
         XCTAssertEqual(state.link, url)
-    }
-
-    // MARK: - Colour swatches
-
-    /// `NSMenuItem.image` draws a template image as a flat monochrome mask — which is exactly the
-    /// bug that flattened every entry in these palettes to the same grey square. The swatch images
-    /// must opt out of that explicitly.
-    func test_colour_swatches_are_not_template_images() {
-        for swatch in FontCatalogue.textColours + FontCatalogue.highlightColours {
-            XCTAssertFalse(swatch.image.isTemplate, "\(swatch.name) swatch must not be a template image")
-        }
-    }
-
-    func test_colour_swatches_are_menu_icon_sized() {
-        for swatch in FontCatalogue.textColours + FontCatalogue.highlightColours {
-            XCTAssertEqual(swatch.image.size, NSSize(width: 12, height: 12))
-        }
     }
 }

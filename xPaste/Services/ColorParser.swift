@@ -19,6 +19,29 @@ enum ColorParser {
         return hex(s) ?? rgb(s) ?? hsl(s)
     }
 
+    /// A colour literal the way a card should show it: a hex code in upper case, anything else
+    /// exactly as it was copied.
+    ///
+    /// Display only. What is stored, what is pasted and what a Save writes are all still the bytes
+    /// that arrived — `#ffffff` pastes as `#ffffff`. The card is the one place it is normalised,
+    /// because a row of hex reads far better when the digits are all in one case, and the two forms
+    /// are the same colour either way.
+    ///
+    /// `rgb(…)` and `hsl(…)` are left alone: they are function syntax, and `RGB(255, 255, 255)` is
+    /// not how anybody writes one. Every hex length is covered, not only the six-digit form —
+    /// `#fff` and `#ffffffff` are the same kind of thing and would look wrong left in lower case
+    /// beside an upper-cased neighbour.
+    static func displayLiteral(_ raw: String) -> String {
+        guard raw.utf8.count <= maxLiteralBytes else { return raw }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("#") else { return raw }
+        let body = trimmed.dropFirst()
+        guard [3, 4, 6, 8].contains(body.count),
+              body.allSatisfy({ $0.isHexDigit })
+        else { return raw }
+        return "#" + body.uppercased()
+    }
+
     static func isColor(_ raw: String?) -> Bool {
         guard let raw else { return false }
         return parse(raw) != nil

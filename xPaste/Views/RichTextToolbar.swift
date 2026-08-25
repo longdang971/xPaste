@@ -18,10 +18,9 @@ struct RichTextToolbar: View {
 
     private var editingSource: Bool { session.mode == .raw }
 
-    /// Pulled out of `controls` (rather than left as inline `Image(systemName:)` literals) so a
+    /// Pulled out of `controls` (rather than left as an inline `Image(systemName:)` literal) so a
     /// test can assert against the same value the view actually draws, instead of a copy that
     /// could silently drift from it.
-    static let textColourSymbol = "paintpalette"
     static let clearFormattingSymbol = "eraser"
 
     var body: some View {
@@ -61,15 +60,6 @@ struct RichTextToolbar: View {
 
             fontMenu
             sizeMenu
-
-            divider
-
-            colourMenu(symbol: Self.textColourSymbol, help: "Text colour",
-                       swatches: FontCatalogue.textColours,
-                       clearTitle: "Automatic") { .foreground($0) }
-            colourMenu(symbol: "highlighter", help: "Highlight",
-                       swatches: FontCatalogue.highlightColours,
-                       clearTitle: "None") { .background($0) }
 
             divider
 
@@ -260,49 +250,6 @@ struct RichTextToolbar: View {
         .accessibilityValue(Self.sizeLabel(for: session.state.size))
     }
 
-    private func colourMenu(symbol: String,
-                            help: String,
-                            swatches: [(name: String, colour: NSColor, image: NSImage)],
-                            clearTitle: String,
-                            command: @escaping (NSColor?) -> RichTextCommand) -> some View {
-        Menu {
-            Button(clearTitle) { session.run(command(nil)) }
-            Divider()
-            ForEach(swatches, id: \.name) { swatch in
-                Button {
-                    session.run(command(swatch.colour))
-                } label: {
-                    Label {
-                        Text(swatch.name)
-                    } icon: {
-                        Image(nsImage: swatch.image)
-                    }
-                }
-            }
-        } label: {
-            // A `Label` with `.iconOnly` rather than a bare `Image`, for accessibility rather than
-            // looks — both draw exactly the icon.
-            //
-            // An SF Symbol with no localised description exposes its own literal name as the
-            // control's accessible title, which is why this menu announced "paintpalette" and the
-            // highlighter one announced its translated symbol name. `.accessibilityHidden(true)` on
-            // the image was tried first and does **not** clear it: the title is assembled below
-            // SwiftUI, at the AppKit menu button, so hiding the SwiftUI element comes too late.
-            // Giving the label real text and then drawing only its icon is what actually replaces
-            // the symbol name with a word worth hearing.
-            Label(help, systemImage: symbol)
-                .labelStyle(.iconOnly)
-                .font(.system(size: 12))
-        }
-        .menuStyle(.borderlessButton)
-        // Indicator restored (not `.hidden`) to match `fontMenu`/`sizeMenu` right next to it: an
-        // icon alone gives no hint that it opens a menu rather than acting immediately, which is
-        // exactly what made this row misread as buttons.
-        .fixedSize()
-        .disabled(editingSource)
-        .help(help)
-        .accessibilityLabel(help)
-    }
 }
 
 /// What the menus offer.
@@ -319,54 +266,5 @@ enum FontCatalogue {
         ("Light", .light), ("Regular", .regular), ("Semibold", .semibold), ("Bold", .bold),
     ]
 
-    private static let textColourValues: [(name: String, colour: NSColor)] = [
-        ("Red", .systemRed), ("Orange", .systemOrange), ("Yellow", .systemYellow),
-        ("Green", .systemGreen), ("Blue", .systemBlue), ("Purple", .systemPurple),
-        ("Pink", .systemPink), ("Brown", .systemBrown), ("Grey", .systemGray),
-        ("Black", NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)),
-        ("White", NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)),
-    ]
-    static let textColours: [(name: String, colour: NSColor, image: NSImage)] =
-        textColourValues.map { (name: $0.name, colour: $0.colour, image: swatchImage(for: $0.colour)) }
 
-    /// Light washes, all of them. A highlight has to stay a highlight rather than become a block of
-    /// colour, and `RichTextCommand.background` pins the text dark so these read in either
-    /// appearance.
-    private static let highlightColourValues: [(name: String, colour: NSColor)] = [
-        ("Yellow", NSColor(srgbRed: 1.00, green: 0.95, blue: 0.55, alpha: 1)),
-        ("Green",  NSColor(srgbRed: 0.75, green: 0.95, blue: 0.75, alpha: 1)),
-        ("Blue",   NSColor(srgbRed: 0.75, green: 0.88, blue: 1.00, alpha: 1)),
-        ("Pink",   NSColor(srgbRed: 1.00, green: 0.80, blue: 0.88, alpha: 1)),
-        ("Orange", NSColor(srgbRed: 1.00, green: 0.85, blue: 0.65, alpha: 1)),
-        ("Grey",   NSColor(srgbRed: 0.85, green: 0.85, blue: 0.85, alpha: 1)),
-    ]
-    static let highlightColours: [(name: String, colour: NSColor, image: NSImage)] =
-        highlightColourValues.map { (name: $0.name, colour: $0.colour, image: swatchImage(for: $0.colour)) }
-
-    /// Renders one palette swatch as an actual coloured square, built once per colour and held
-    /// alongside it (see the note on `families` above for why).
-    ///
-    /// `isTemplate = false` is not a redundant default here — an `NSImage` built through
-    /// `NSImage(size:flipped:drawingHandler:)` already defaults to non-template, so this line is not
-    /// what makes any *single* swatch draw in colour. The real fix was moving off `Image(systemName:)`
-    /// in the first place: an SF-Symbol-backed image defaults to template, and that was what was
-    /// reducing every entry in these palettes to the same grey square. This assignment is kept —
-    /// and made explicit rather than relied on as a default — so a later reader does not reintroduce
-    /// a template-backed image here and silently bring the bug back.
-    private static func swatchImage(for colour: NSColor) -> NSImage {
-        let side: CGFloat = 12
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 3, yRadius: 3)
-            colour.setFill()
-            path.fill()
-            // White is in this palette, and a white square needs an edge to read against a light
-            // menu background — `separatorColor` holds up in both appearances, a fixed grey would not.
-            NSColor.separatorColor.withAlphaComponent(0.6).setStroke()
-            path.lineWidth = 1
-            path.stroke()
-            return true
-        }
-        image.isTemplate = false
-        return image
-    }
 }

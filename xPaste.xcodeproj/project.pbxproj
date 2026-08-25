@@ -96,6 +96,7 @@
 		CA471219510EB2F9648973CA /* ClipboardStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2FB132D93A8BFAE5ECA53C2 /* ClipboardStore.swift */; };
 		CDB4DEB2112CD2E90FF59452 /* ColorParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C8768B3042119107630D95 /* ColorParser.swift */; };
 		CECC6B611ADA0B8CA0190EB2 /* DragPaste.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B6B8C7090D5D23BC636C762 /* DragPaste.swift */; };
+		D269B924E989EDCEECB90195 /* EditWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF0B0192733E225B77B22013 /* EditWindow.swift */; };
 		D38416A5BA9223B5D65A2711 /* xPasteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 155AF65BB95A30EB50C50D11 /* xPasteApp.swift */; };
 		D4C31C87769C671EEE6BF12E /* ClipboardItemCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B042F21E05C8F577B1BC3631 /* ClipboardItemCard.swift */; };
 		D545F074BD74FB5C96751C27 /* AccessibilityPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A9A03461D38597ED8BCC7D8 /* AccessibilityPermission.swift */; };
@@ -203,6 +204,7 @@
 		9D244C7872AFC7C1FD6D6155 /* OCRService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRService.swift; sourceTree = "<group>"; };
 		AC7CD003E8667D4DE9CA37FC /* ColorFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorFormat.swift; sourceTree = "<group>"; };
 		AE650E00068BA1F55CAEF00B /* PanelPerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelPerformanceTests.swift; sourceTree = "<group>"; };
+		AF0B0192733E225B77B22013 /* EditWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditWindow.swift; sourceTree = "<group>"; };
 		AFA5AF6EFCB37181CB25C5AD /* RichTextToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextToolbar.swift; sourceTree = "<group>"; };
 		B042F21E05C8F577B1BC3631 /* ClipboardItemCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardItemCard.swift; sourceTree = "<group>"; };
 		B1E26B968A3B7B091B0045C1 /* PasteboardPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteboardPayload.swift; sourceTree = "<group>"; };
@@ -288,6 +290,7 @@
 				2531EE16C704360E8AD46411 /* ColorEditRow.swift */,
 				D87256E82B8E13BFED6DF205 /* ContentView.swift */,
 				F02E7309431E160801B9345F /* DeleteConfirmDialog.swift */,
+				AF0B0192733E225B77B22013 /* EditWindow.swift */,
 				C1D1A520708631522EC71B50 /* FilterPopover.swift */,
 				C8A607B4A8D2B02DCCF0E7E5 /* HotkeyRecorderButton.swift */,
 				56DC1FD216AF061320A8A99A /* ItemPreviewWindow.swift */,
@@ -588,6 +591,7 @@
 				E08ECF3C17D8DF48D0AFB204 /* DragTempFile.swift in Sources */,
 				D6260516DB39B2420E8DCBD7 /* DropTargetResolver.swift in Sources */,
 				2DDF751280E70D295824F45A /* EditSession.swift in Sources */,
+				D269B924E989EDCEECB90195 /* EditWindow.swift in Sources */,
 				DB2814040C442BB2ADBB24A7 /* ExclusionRules.swift in Sources */,
 				2F7ED5A2C11A74DCEE2A4522 /* FilterPopover.swift in Sources */,
 				C222C45D47E37E0F8C93FDD6 /* HTMLCharset.swift in Sources */,

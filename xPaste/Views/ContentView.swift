@@ -14,8 +14,6 @@ struct ContentView: View {
     @State private var copiedID: UUID?
     @State private var showSearch = false
     @State private var previewItemID: UUID?
-    /// Whether the preview about to open should start in edit mode, for the menu's "Edit…".
-    @State private var previewStartsEditing = false
     @State private var scrollTargetID: UUID?
     @State private var pendingReorderID: UUID?
     @State private var activeTab: ClipboardTab = .all
@@ -32,6 +30,14 @@ struct ContentView: View {
     /// The live NSPopover behind the filter sheet while it is open — see the notification
     /// handlers on `body` for why it has to be held onto.
     @State private var filterPopover: NSPopover?
+    /// The live NSPopover behind the item preview, held for one reason: closing it directly.
+    ///
+    /// Clearing `previewItemID` asks SwiftUI to dismiss it, and SwiftUI does that on its next pass
+    /// — through a hosting view whose window is in the middle of being ordered out. When that pass
+    /// does not land, the popover stays on screen with its parent gone: not key, no first
+    /// responder, and its own close button running the same state change that already failed. So
+    /// the panel closes it by hand as well.
+    @State private var previewPopover: NSPopover?
     @FocusState private var searchFocused: Bool
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     @AppStorage("accessibilityBannerDismissed") private var accessibilityBannerDismissed = false
@@ -228,12 +234,27 @@ struct ContentView: View {
         // Matched by identity, so the item-preview popover — which wants its animation — is
         // untouched.
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { note in
-            guard showFilters, filterPopover == nil, let popover = note.object as? NSPopover else { return }
-            popover.animates = false
-            filterPopover = popover
+            guard let popover = note.object as? NSPopover else { return }
+            if showFilters, filterPopover == nil {
+                popover.animates = false
+                filterPopover = popover
+                return
+            }
+            guard previewItemID != nil, popover !== previewPopover else { return }
+            // At most one preview on screen, ever.
+            //
+            // Measured with two editors open at once: a click landed on the older one while the
+            // newer one was what the user could see, so a colour chosen for the visible selection
+            // was applied to the hidden document — and appeared only when the top one was closed.
+            // The older popover had leaked between two openings of the editor, with the panel
+            // never hiding in between, so closing on `.panelWillHide` alone never reached it.
+            if let stale = previewPopover { stale.performClose(nil) }
+            previewPopover = popover
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { note in
-            guard let popover = note.object as? NSPopover, popover === filterPopover else { return }
+            guard let popover = note.object as? NSPopover else { return }
+            if popover === previewPopover { previewPopover = nil }
+            guard popover === filterPopover else { return }
             filterPopover = nil
             if showFilters { showFilters = false }
         }
@@ -253,6 +274,9 @@ struct ContentView: View {
         // than by watching `displayedItems` itself: that would mean filtering the whole history on
         // every body pass just to compare, and ContentView deliberately does not re-render on
         // selection changes.
+        // Whatever cleared it — Save, Escape, the close button, the item being deleted — the
+        // window goes with it. Relying on SwiftUI to notice is what left one on screen.
+        .onChange(of: previewItemID) { id in if id == nil { closePreviewPopover() } }
         .onChange(of: activeTab) { _ in rebaseSelection() }
         .onChange(of: store.searchQuery) { _ in rebaseSelection() }
         .onChange(of: store.filters) { _ in rebaseSelection() }
@@ -270,8 +294,10 @@ struct ContentView: View {
             if showFilters { showFilters = false }
             if !store.filters.isEmpty { store.filters.clear() }
             selection.clear()
+            // Both, in this order: the state change is what SwiftUI needs to agree the popover is
+            // gone, and the direct close is what guarantees it actually goes — see `previewPopover`.
             if previewItemID != nil { previewItemID = nil }
-            if previewStartsEditing { previewStartsEditing = false }
+            closePreviewPopover()
             // Drop a half-finished rename rather than reopening the panel into edit mode.
             if renameItemID != nil { renameItemID = nil }
         }
@@ -504,9 +530,9 @@ struct ContentView: View {
                             ))
                             .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                             .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
-                                PreviewPopoverContent(item: item,
-                                                      startEditing: previewStartsEditing) {
+                                PreviewPopoverContent(item: item) {
                                     previewItemID = nil
+                                    closePreviewPopover()
                                 }
                             }
                         }
@@ -561,9 +587,9 @@ struct ContentView: View {
                         .onTapGesture(count: 1) { selectItem(item) }
                         .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                         .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
-                            PreviewPopoverContent(item: item,
-                                                  startEditing: previewStartsEditing) {
+                            PreviewPopoverContent(item: item) {
                                 previewItemID = nil
+                                closePreviewPopover()
                             }
                         }
                     }
@@ -795,10 +821,13 @@ struct ContentView: View {
 
     /// Opens the preview popover already in edit mode. The popover is where editing lives — it is
     /// the only surface with room to type in and a footer to put Save and Cancel on.
+    /// Opens the editor. A window of its own since the popover proved unable to hold one — see
+    /// `EditWindowPresenter`.
     private func beginEdit(_ item: ClipboardItem) {
         selection.select(item.id)
-        previewStartsEditing = true
-        previewItemID = item.id
+        if previewItemID != nil { previewItemID = nil }
+        closePreviewPopover()
+        EditWindowPresenter.shared.present(item)
     }
 
     private func beginRename(_ item: ClipboardItem) {
@@ -1025,8 +1054,15 @@ struct ContentView: View {
     private func previewBinding(for item: ClipboardItem) -> Binding<Bool> {
         Binding(
             get: { previewItemID == item.id },
-            set: { show in if !show { previewItemID = nil; previewStartsEditing = false } }
+            set: { show in if !show { previewItemID = nil } }
         )
+    }
+
+    /// Takes the preview popover off the screen itself, whatever SwiftUI does about it.
+    private func closePreviewPopover() {
+        guard let popover = previewPopover else { return }
+        previewPopover = nil
+        popover.performClose(nil)
     }
 
     private func togglePreview(_ item: ClipboardItem) {

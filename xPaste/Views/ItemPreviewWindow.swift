@@ -4,24 +4,11 @@ import WebKit
 
 struct PreviewPopoverContent: View {
     let item: ClipboardItem
-    /// Open straight into edit mode, for the card menu's "Edit…".
-    var startEditing: Bool = false
     var onClose: () -> Void
 
     @State private var loadedImage: NSImage?
     @State private var richPreview: RichFullPreview?
     @State private var fileText: String?
-    @State private var isEditing = false
-    /// Whether what is in the editor right now is nothing but whitespace, which is the one thing
-    /// Save refuses. Kept as its own flag and assigned only when it changes, so typing does not
-    /// re-render the popover on every keystroke.
-    @State private var draftIsEmpty = false
-    /// What the colour row is reading. Kept as its own `@State` rather than asking the buffer in
-    /// `body`, for the same reason `draftIsEmpty` is: `body` runs far more often than the text
-    /// changes.
-    @State private var colourDraft = ""
-    /// Owns the mode, the seed and the live text view. See `EditSession`.
-    @StateObject private var session = EditSession()
     /// Counted once in `.task`, not per body pass: three full walks of the string measured 50ms on
     /// a 468KB item, and the popover re-renders several times while it settles.
     @State private var stats = ""
@@ -39,7 +26,6 @@ struct PreviewPopoverContent: View {
     private var shownText: String? { wholeText ?? item.text }
 
     private var title: String {
-        if isEditing { return "Edit" }
         switch item.type {
         case .url:    return "Link"
         case .color:  return "Color"
@@ -55,17 +41,15 @@ struct PreviewPopoverContent: View {
         return URL(string: text)
     }
 
-    private var editingText: Bool { isEditing && item.type == .text }
-    private var editingColour: Bool { isEditing && item.type == .color }
-
-    private var previewWidth: CGFloat {
-        if editingText { return 560 }
-        return item.type == .url ? 560 : 420
-    }
-    private var previewHeight: CGFloat {
-        if editingText { return 460 }
-        return item.type == .url ? 440 : 340
-    }
+    /// One size, whatever the popover is showing.
+    ///
+    /// It used to be three: 420x340 for a text item, 560x440 for a link, 560x460 once the pencil
+    /// was pressed. So opening a preview and choosing Edit resized the window under the pointer,
+    /// and the text reflowed into a different shape at the moment the user was about to work on
+    /// it. The editor's size is the one that has to be big enough, so it is the one everything
+    /// else takes.
+    private var previewWidth: CGFloat { 560 }
+    private var previewHeight: CGFloat { 460 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,7 +58,7 @@ struct PreviewPopoverContent: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            footer
+            previewFooter
         }
         .frame(width: previewWidth, height: previewHeight)
         // Keyed on the appearance as well as the item, the same way the card is: the legibility
@@ -100,96 +84,11 @@ struct PreviewPopoverContent: View {
                 }.value
             }
         }
-        .onAppear { if startEditing { setEditing(true) } }
-        // Whatever takes the popover away — Save, Cancel, the panel hiding, the item being
-        // deleted — the handshake has to be undone. Left set, `alertIsPresented` stays true in
-        // AppDelegate and Escape stops closing the panel for the rest of the session.
-        .onDisappear { setEditing(false) }
         .background {
-            // Space closes the preview, but while editing it is a character the user is typing.
             Button("") { onClose() }
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(isEditing)
                 .opacity(0).frame(width: 0, height: 0)
         }
-    }
-
-    // MARK: - Editing
-
-    /// Borrows the alert handshake that renaming uses, so `AppDelegate`'s key monitor stops
-    /// swallowing Escape — while the editor is up, Escape must cancel the edit rather than close
-    /// the panel out from under it.
-    private func setEditing(_ editing: Bool) {
-        guard isEditing != editing else { return }
-        isEditing = editing
-        NotificationCenter.default.post(
-            name: editing ? .clipboardAlertShown : .clipboardAlertHidden, object: nil)
-        if editing {
-            // Hydrated: the editor's contents become the item's contents when it is saved, so
-            // seeding it with the prefix the card shows would be a way to lose the rest by opening
-            // the preview and pressing Save.
-            let seed = ItemEdit.editorSeed(for: ClipboardStore.shared.hydrated(item),
-                                           parsed: richPreview?.text).text
-            session.begin(with: seed)
-            draftIsEmpty = false
-            // Seeded from the same text the editor itself is about to open with, not from
-            // `session.buffer.plain`: the text view this reads is only wired up once `editor` is
-            // built below, one runloop turn after `setEditing` runs, so asking the buffer here
-            // would read whatever (or nothing) the previous edit left behind.
-            colourDraft = seed.string
-        }
-    }
-
-    private var editor: some View {
-        // Captured once, when this particular text view is built, not read again later: it is what
-        // lets a callback from a view a later mode switch has already torn down recognise that it no
-        // longer speaks for the session, instead of overwriting the new view's state with its own.
-        let myGeneration = session.generation
-        return EditableRichText(
-            initial: session.seed,
-            allowsFormatting: session.mode == .formatted && ItemEdit.keepsFormatting(item),
-            monospaced: session.mode == .raw,
-            fill: session.mode == .formatted ? richPreview?.fill : nil,
-            onAttach: { view in session.attach(view) },
-            onChange: {
-                guard session.generation == myGeneration else { return }
-                let plain = session.buffer.plain
-                let empty = plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                if empty != draftIsEmpty { draftIsEmpty = empty }
-                if editingColour { colourDraft = plain }
-            },
-            onSelectionChange: { session.refreshState(ifCurrent: myGeneration) },
-            onCancel: { setEditing(false) }
-        )
-        // A mode switch is a rebuild, not an update — see `EditSession`.
-        .id(session.generation)
-    }
-
-    /// Writes the edit and closes.
-    ///
-    /// Closing rather than returning to the preview because `item` is a value captured when this
-    /// view was built: it still holds the old content, so staying open would show the text the
-    /// edit has just replaced. The card behind the popover updates from the store.
-    private func save() {
-        guard let draft = session.resolvedDraft() else {
-            session.error = "That HTML could not be read."
-            return
-        }
-        let plain = draft.string
-        guard !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            // Reachable even with the Save button lit: in raw mode the button watches the source
-            // buffer, which is cheap, while this watches what the source actually renders to.
-            session.error = "There is nothing to save."
-            return
-        }
-        // Never `seed.formatted` — that only says the editor *allowed* formatting. What decides is
-        // whether the saved text differs from the defaults it opened with.
-        let rich = ItemEdit.carriesFormatting(draft) ? ItemEdit.rtf(from: draft) : nil
-        ClipboardStore.shared.updateContent(id: item.id, text: plain,
-                                            richData: rich,
-                                            richType: rich == nil ? nil : ItemEdit.richType)
-        setEditing(false)
-        onClose()
     }
 
     private var header: some View {
@@ -204,8 +103,11 @@ struct PreviewPopoverContent: View {
 
             Text(title).font(.system(size: 13, weight: .semibold))
             Spacer()
-            if !isEditing, ItemEdit.canEdit(item.type) {
-                Button { setEditing(true) } label: {
+            if ItemEdit.canEdit(item.type) {
+                Button {
+                    onClose()
+                    EditWindowPresenter.shared.present(item)
+                } label: {
                     Image(systemName: "pencil").font(.system(size: 13))
                 }
                 .buttonStyle(.plain)
@@ -234,35 +136,15 @@ struct PreviewPopoverContent: View {
 
     @ViewBuilder
     private var content: some View {
-        if isEditing {
-            if editingText {
-                VStack(spacing: 0) {
-                    RichTextToolbar(session: session)
-                    Divider()
-                    editor
-                }
-            } else if editingColour {
-                VStack(spacing: 0) {
-                    ColorEditRow(text: colourDraft) { rewritten in
-                        session.replaceAll(with: rewritten)
-                    }
-                    Divider()
-                    editor
-                }
-            } else {
-                editor
-            }
-        } else {
-            switch item.type {
-            case .url:
-                if let url = itemURL { WebPreview(url: url) } else { textContent }
-            case .image:
-                imageContent
-            case .text, .color:
-                textContent
-            case .file, .folder:
-                fileContent
-            }
+        switch item.type {
+        case .url:
+            if let url = itemURL { WebPreview(url: url) } else { textContent }
+        case .image:
+            imageContent
+        case .text, .color:
+            textContent
+        case .file, .folder:
+            fileContent
         }
     }
 
@@ -356,38 +238,6 @@ struct PreviewPopoverContent: View {
         }.value
     }
 
-    @ViewBuilder
-    private var footer: some View {
-        if isEditing {
-            editingFooter
-        } else {
-            previewFooter
-        }
-    }
-
-    private var editingFooter: some View {
-        HStack(spacing: 8) {
-            if let error = session.error {
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.red)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Button("Cancel") { setEditing(false) }
-                .controlSize(.small)
-                .keyboardShortcut(.cancelAction)
-            // ⌘S, the key everyone reaches for. It does not collide with the panel's own ⌘S
-            // (save to a file) because entering edit mode raises the alert handshake, which stops
-            // AppDelegate's key monitor claiming the keystroke at all.
-            Button("Save") { save() }
-                .controlSize(.small)
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(draftIsEmpty)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-    }
 
     @ViewBuilder
     private var previewFooter: some View {
@@ -402,7 +252,7 @@ struct PreviewPopoverContent: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
-                    Button("Open in \(browserName(for: url))") { NSWorkspace.shared.open(url) }
+                    Button("Open in \(DefaultBrowser.name(for: url))") { NSWorkspace.shared.open(url) }
                         .controlSize(.small)
                 }
             case .image:
@@ -429,11 +279,6 @@ struct PreviewPopoverContent: View {
         return "\(chars) characters · \(words) words · \(lines) lines"
     }
 
-    private func browserName(for url: URL) -> String {
-        guard let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) else { return "Browser" }
-        return FileManager.default.displayName(atPath: appURL.path)
-            .replacingOccurrences(of: ".app", with: "")
-    }
 
     private func loadImageIfNeeded() async {
         guard item.type == .image, loadedImage == nil else { return }
@@ -453,7 +298,7 @@ struct PreviewPopoverContent: View {
 /// Seeded once in `makeNSView` and never written to again — `updateNSView` deliberately does
 /// nothing, because pushing the seed back in on a SwiftUI update would throw away what the user has
 /// typed and move the caret back to the start.
-private struct EditableRichText: NSViewRepresentable {
+struct EditableRichText: NSViewRepresentable {
     let initial: NSAttributedString
     let allowsFormatting: Bool
     let monospaced: Bool
@@ -467,10 +312,8 @@ private struct EditableRichText: NSViewRepresentable {
     let onCancel: () -> Void
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
-        scroll.hasVerticalScroller = true
+        let (scroll, view) = makeScrollableTextView()
         scroll.drawsBackground = true
-        guard let view = scroll.documentView as? NSTextView else { return scroll }
 
         view.isEditable = true
         view.isSelectable = true
@@ -526,7 +369,9 @@ private struct EditableRichText: NSViewRepresentable {
         }
 
         /// What lights the toolbar's buttons: clicking through mixed formatting has to move them.
-        func textViewDidChangeSelection(_ notification: Notification) { onSelectionChange() }
+        func textViewDidChangeSelection(_ notification: Notification) {
+            onSelectionChange()
+        }
 
         /// Escape reaches here rather than AppDelegate's monitor because entering edit mode posts
         /// the alert handshake, which stops the monitor swallowing it.
@@ -536,6 +381,59 @@ private struct EditableRichText: NSViewRepresentable {
             return true
         }
     }
+}
+
+/// An `NSTextView` that keeps the I-beam over its text even though xPaste is never the active app.
+///
+/// The panel is a `nonactivatingPanel` and `showPanel` never calls `NSApp.activate` — that is the
+/// whole point of it, and it means whatever the user was working in stays frontmost. But the cursor
+/// rects AppKit sets for a selectable text view are only honoured for the *active* application, so
+/// the pointer stayed an arrow over text that could be selected and typed into. A tracking area
+/// marked `.activeAlways` is what still gets a say when the app is not the one in front.
+final class IBeamTextView: NSTextView {
+    private static let marker = "xPaste.iBeam"
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas where area.userInfo?[Self.marker] != nil {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.cursorUpdate, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: [Self.marker: true]))
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.iBeam.set() }
+}
+
+/// A scrollable `IBeamTextView`, assembled by hand because `NSTextView.scrollableTextView()` can
+/// only ever build a plain `NSTextView`.
+func makeScrollableTextView() -> (scroll: NSScrollView, text: IBeamTextView) {
+    let scroll = NSScrollView()
+    scroll.borderType = .noBorder
+    scroll.hasVerticalScroller = true
+    scroll.hasHorizontalScroller = false
+    scroll.autohidesScrollers = true
+
+    let huge: CGFloat = .greatestFiniteMagnitude
+    let container = NSTextContainer(size: NSSize(width: 0, height: huge))
+    container.widthTracksTextView = true
+    let layout = NSLayoutManager()
+    layout.addTextContainer(container)
+    let storage = NSTextStorage()
+    storage.addLayoutManager(layout)
+
+    let text = IBeamTextView(frame: NSRect(x: 0, y: 0, width: 100, height: 100),
+                             textContainer: container)
+    text.autoresizingMask = [.width]
+    text.isVerticallyResizable = true
+    text.isHorizontallyResizable = false
+    text.minSize = NSSize(width: 0, height: 0)
+    text.maxSize = NSSize(width: huge, height: huge)
+    scroll.documentView = text
+    return (scroll, text)
 }
 
 private struct WebPreview: NSViewRepresentable {
@@ -557,10 +455,9 @@ private struct RichTextPreview: NSViewRepresentable {
     let fill: NSColor?
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
+        let (scroll, view) = makeScrollableTextView()
         scroll.drawsBackground = true
-        scroll.hasVerticalScroller = true
-        if let view = scroll.documentView as? NSTextView {
+        do {
             view.isEditable = false
             view.isSelectable = true
             view.drawsBackground = true

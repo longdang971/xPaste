@@ -240,6 +240,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
 
         NotificationCenter.default.addObserver(
+            self, selector: #selector(handleHidePanelForEditing),
+            name: .hidePanelForEditing, object: nil
+        )
+        NotificationCenter.default.addObserver(
             self, selector: #selector(openSettings),
             name: .openSettingsWindow, object: nil
         )
@@ -820,8 +824,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     /// How long the bar takes to arrive, and to leave.
-    static let revealDuration: TimeInterval = 0.11
-    static let hideDuration: TimeInterval = 0.10
+    ///
+    /// Measured against Paste on the same 5K 60Hz display, because "smoother" turned out not to be
+    /// about dropped frames at all. Sampling this app's own presentation layer every display tick
+    /// found the main thread free and **no frame missed** — the reveal simply had only six frames
+    /// to cross 380pt, so each one moved 45–101pt and the eye read it as a snap rather than a
+    /// glide. Paste's own reveal, measured off a 60fps screen recording, runs eight to nine frames
+    /// (~133ms) with its per-frame change decaying 63 → 44 → 28 → 18 → 13 → 9 → 6 → 3.5.
+    ///
+    /// 0.15 and 0.13 buy nine and eight frames at 60Hz, which is the difference that was actually
+    /// being seen. Nothing about the machinery changed: the reveal is still one Core Animation on
+    /// one view inside a window that never moves.
+    static let revealDuration: TimeInterval = 0.15
+    static let hideDuration: TimeInterval = 0.13
 
     private func slideGeometry(for target: NSRect) -> PanelLayout.PanelSlideGeometry {
         let pos = UserDefaults.standard.string(forKey: "panelPosition") ?? "bottom"
@@ -882,6 +897,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let slider = panelSlider else { completion?(); return }
         let displaced = geo.displacedBarFrame
         PerfLog.beginIdleWatch()
+        FrameProbe.begin(hiding ? "hide" : "reveal", view: slider)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             // Matches the old hand-rolled easing: out on the way in, in on the way out.
@@ -890,6 +906,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             slider.animator().setFrameOrigin(hiding ? displaced.origin : geo.barFrame.origin)
         } completionHandler: { [weak self] in
             PerfLog.endIdleWatch(hiding ? "hide" : "reveal")
+            FrameProbe.end()
             self?.revealFinished(hiding: hiding, completion: completion)
         }
     }
@@ -920,6 +937,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if let button = self.statusItem?.button, let win = button.window {
                 if win.convertToScreen(button.frame).contains(NSEvent.mouseLocation) { return }
             }
+            // Not while an editor, a rename or a confirmation is up — the same flag Escape already
+            // stands down for.
+            //
+            // Clicking into another application used to take the panel away underneath an open
+            // editor. That left the editor's popover orphaned: with its parent window gone it is no
+            // longer key, so its selection greys out, its text view is no longer first responder,
+            // clicks stop moving the caret and the toolbar's commands land on nothing — and a
+            // half-finished edit goes with it. Measured directly: ordering the panel out flips the
+            // popover window's `isKeyWindow` to false and moves first responder off the text view.
+            guard !self.alertIsPresented else { return }
             self.hidePanel()
         }
     }
@@ -990,6 +1017,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard !panelVisible else { return }
         showPanel()
     }
+
+    /// The editor is a window of its own now, and it opens with the bar out of the way — see
+    /// `EditWindowPresenter`.
+    @objc private func handleHidePanelForEditing() { if panelVisible { hidePanel() } }
 
     @objc private func handleAlertShown()  { alertIsPresented = true  }
     @objc private func handleAlertHidden() { alertIsPresented = false }

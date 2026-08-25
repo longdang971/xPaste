@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import xPaste
 
 /// What the payload keeps, what it refuses, and what it costs.
@@ -872,5 +873,302 @@ final class HistoryCapTests: XCTestCase {
         XCTAssertEqual(store.items.count, ClipboardStore.minHistoryCount)
         XCTAssertFalse(store.items.contains { $0.text == "item 0" }, "the newest were trimmed")
         XCTAssertTrue(store.items.contains { $0.text == "item 699" })
+    }
+}
+
+/// The editor's text view, and the toolbar commands that act on it.
+@MainActor
+final class EditorTextViewTests: XCTestCase {
+
+    private func editor(_ text: String) -> (EditSession, NSTextView) {
+        let session = EditSession()
+        session.begin(with: NSAttributedString(string: text, attributes: ItemEdit.plainDefaults))
+        let (_, view) = makeScrollableTextView()
+        view.isRichText = true
+        view.textStorage?.setAttributedString(session.seed)
+        session.attach(view)
+        return (session, view)
+    }
+
+    func testACommandChangesTheSelectionAndNothingElse() throws {
+        let (session, view) = editor("Enjoy car driving simulator")
+        view.setSelectedRange(NSRange(location: 0, length: 5))
+
+        session.run(.bold)
+
+        let storage = try XCTUnwrap(view.textStorage)
+        let manager = NSFontManager.shared
+        let inside = try XCTUnwrap(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        let outside = try XCTUnwrap(storage.attribute(.font, at: 10, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(manager.traits(of: inside).contains(.boldFontMask))
+        XCTAssertFalse(manager.traits(of: outside).contains(.boldFontMask),
+                       "the command ran past the selection")
+    }
+
+    /// A command does not depend on the text view holding first responder — which is what said the
+    /// old "chose a colour, nothing happened" symptom was the click never arriving at the visible
+    /// editor, not the command failing. See `EditWindowPresenter`.
+    func testACommandStillAppliesWhenTheViewIsNotFirstResponder() throws {
+        let (session, view) = editor("Enjoy car driving simulator")
+        view.setSelectedRange(NSRange(location: 0, length: 5))
+        _ = view.window?.makeFirstResponder(nil)
+
+        session.run(.bold)
+
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 0, length: 5),
+                       "the selection was lost, so the command had nothing to act on")
+        let applied = try XCTUnwrap(try XCTUnwrap(view.textStorage)
+            .attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(NSFontManager.shared.traits(of: applied).contains(.boldFontMask))
+    }
+
+    /// The I-beam has to come from a tracking area, not from a cursor rect: xPaste is never the
+    /// active application, and cursor rects are only honoured for the one that is.
+    func testTheTextViewCarriesAnAlwaysActiveCursorArea() {
+        let (_, view) = makeScrollableTextView()
+        view.frame = NSRect(x: 0, y: 0, width: 200, height: 100)
+        view.updateTrackingAreas()
+
+        let ours = view.trackingAreas.filter {
+            $0.options.contains(.activeAlways) && $0.options.contains(.cursorUpdate)
+        }
+        XCTAssertEqual(ours.count, 1)
+    }
+
+    /// And `updateTrackingAreas` runs on every resize, so it must not stack them up.
+    func testTheCursorAreaIsNotDuplicatedOnEveryLayout() {
+        let (_, view) = makeScrollableTextView()
+        view.frame = NSRect(x: 0, y: 0, width: 200, height: 100)
+        for _ in 0..<5 { view.updateTrackingAreas() }
+
+        let ours = view.trackingAreas.filter {
+            $0.options.contains(.activeAlways) && $0.options.contains(.cursorUpdate)
+        }
+        XCTAssertEqual(ours.count, 1, "a tracking area was added per layout pass")
+    }
+}
+
+/// The editor window's own chrome.
+@MainActor
+final class EditWindowTests: XCTestCase {
+
+    override func tearDown() {
+        EditWindowPresenter.shared.dismiss()
+        super.tearDown()
+    }
+
+    /// One editor, ever. Two of them on screen at once is what made a colour chosen for the visible
+    /// selection land on the hidden document — see `EditWindowPresenter`.
+    func testPresentingTwiceLeavesOnlyOneEditor() {
+        EditWindowPresenter.shared.present(ClipboardItem(type: .text, text: "một"))
+        XCTAssertTrue(EditWindowPresenter.shared.isOpen)
+        EditWindowPresenter.shared.present(ClipboardItem(type: .text, text: "hai"))
+        XCTAssertTrue(EditWindowPresenter.shared.isOpen)
+
+        let editors = NSApp.windows.filter { $0.identifier == EditWindowPresenter.windowIdentifier }
+        XCTAssertEqual(editors.filter(\.isVisible).count, 1, "a second editor was left on screen")
+    }
+
+    /// And it closes by being closed — the popover's own button ran a state change that could
+    /// fail to arrive, which is how one got stuck on screen with no way to dismiss it.
+    func testDismissTakesTheWindowAway() {
+        EditWindowPresenter.shared.present(ClipboardItem(type: .text, text: "xin chào"))
+        EditWindowPresenter.shared.dismiss()
+
+        XCTAssertFalse(EditWindowPresenter.shared.isOpen)
+        let visible = NSApp.windows
+            .filter { $0.identifier == EditWindowPresenter.windowIdentifier }
+            .filter(\.isVisible)
+        XCTAssertTrue(visible.isEmpty)
+    }
+
+    /// Kinds that have nothing to type into never open one.
+    func testOnlyEditableKindsOpenAnEditor() {
+        EditWindowPresenter.shared.present(ClipboardItem(type: .image, imageData: Data([1, 2, 3])))
+        XCTAssertFalse(EditWindowPresenter.shared.isOpen)
+        EditWindowPresenter.shared.present(
+            ClipboardItem(type: .file, fileURLs: [URL(fileURLWithPath: "/tmp/x")]))
+        XCTAssertFalse(EditWindowPresenter.shared.isOpen)
+    }
+
+    /// The footer's "Open in …" appears exactly when what is in the editor is a link — including
+    /// one typed into an item that started as prose, which is what the card will become on save.
+    func testTheFooterOffersToOpenWhateverIsALink() {
+        XCTAssertEqual(EditWindowView.link(in: "https://example.com"),
+                       URL(string: "https://example.com"))
+        XCTAssertEqual(EditWindowView.link(in: "  http://example.com/a?b=1  "),
+                       URL(string: "http://example.com/a?b=1"))
+        XCTAssertNil(EditWindowView.link(in: "Enjoy car driving simulator"))
+        XCTAssertNil(EditWindowView.link(in: ""))
+        // Only what can actually be opened — the same rule the card files a Link by.
+        XCTAssertNil(EditWindowView.link(in: "mailto:someone@example.com"))
+        XCTAssertNil(EditWindowView.link(in: "file:///tmp/x"))
+    }
+
+    func testTheFooterCountsTheWayPasteDoes() {
+        XCTAssertEqual(EditWindowView.describe("dfgdfgfdgdfgdfgdf"),
+                       "17 characters  ·  1 words  ·  1 lines")
+        XCTAssertEqual(EditWindowView.describe(""), "0 characters  ·  0 words  ·  0 lines")
+        XCTAssertEqual(EditWindowView.describe("a b\nc"), "5 characters  ·  3 words  ·  2 lines")
+    }
+}
+
+/// How a colour literal is shown, as against how it is stored.
+final class ColourLiteralDisplayTests: XCTestCase {
+
+    func testHexIsShownInUpperCase() {
+        XCTAssertEqual(ColorParser.displayLiteral("#ffffff"), "#FFFFFF")
+        XCTAssertEqual(ColorParser.displayLiteral("#1e90ff"), "#1E90FF")
+        XCTAssertEqual(ColorParser.displayLiteral("#FFF"), "#FFF")
+    }
+
+    /// Every hex length, not only the six-digit one: a short form left in lower case beside an
+    /// upper-cased neighbour is the inconsistency this exists to remove.
+    func testEveryHexLengthIsCovered() {
+        XCTAssertEqual(ColorParser.displayLiteral("#fff"), "#FFF")
+        XCTAssertEqual(ColorParser.displayLiteral("#fffa"), "#FFFA")
+        XCTAssertEqual(ColorParser.displayLiteral("#ff00aa80"), "#FF00AA80")
+    }
+
+    /// Function syntax is left alone — `RGB(255, 255, 255)` is not how anybody writes one.
+    func testFunctionalNotationIsUntouched() {
+        XCTAssertEqual(ColorParser.displayLiteral("rgb(255, 255, 255)"), "rgb(255, 255, 255)")
+        XCTAssertEqual(ColorParser.displayLiteral("hsla(210, 100%, 56%, 0.5)"),
+                       "hsla(210, 100%, 56%, 0.5)")
+    }
+
+    /// Anything that is not a hex literal comes back byte for byte.
+    func testNonColourTextIsUntouched() {
+        XCTAssertEqual(ColorParser.displayLiteral("#zzzzzz"), "#zzzzzz")
+        XCTAssertEqual(ColorParser.displayLiteral("#ffff"), "#FFFF")
+        XCTAssertEqual(ColorParser.displayLiteral("#fffff"), "#fffff", "five digits is not a colour")
+        XCTAssertEqual(ColorParser.displayLiteral("hello"), "hello")
+        XCTAssertEqual(ColorParser.displayLiteral(""), "")
+    }
+
+    /// The point of the whole thing: the item itself never changes, so a paste is what was copied.
+    func testTheStoredItemIsNotRewritten() {
+        let item = ClipboardItem(type: .color, text: "#ffffff")
+        XCTAssertEqual(item.text, "#ffffff")
+        XCTAssertEqual(ColorParser.displayLiteral(item.text ?? ""), "#FFFFFF")
+
+        let board = NSPasteboard(name: .init("Colour-" + UUID().uuidString))
+        defer { board.releaseGlobally() }
+        item.write(to: board)
+        XCTAssertEqual(board.string(forType: .string), "#ffffff",
+                       "the card's upper case leaked into what gets pasted")
+    }
+}
+
+/// Editing a colour: the notation it keeps, and the readings under the swatch.
+@MainActor
+final class ColourEditTests: XCTestCase {
+
+    override func tearDown() {
+        EditWindowPresenter.shared.dismiss()
+        super.tearDown()
+    }
+
+    /// A colour picked from the system panel is written back in the notation the item arrived in —
+    /// an `rgb(…)` item does not silently become hex because that is what the picker thinks in.
+    func testTheOriginalNotationIsKept() {
+        XCTAssertEqual(ColourDraft.format(of: "#1e90ff"), .hex)
+        XCTAssertEqual(ColourDraft.format(of: "rgb(30, 144, 255)"), .rgb)
+        XCTAssertEqual(ColourDraft.format(of: "hsla(210, 100%, 56%, 0.5)"), .hsl)
+        XCTAssertEqual(ColourDraft.format(of: "  RGB(1, 2, 3)  "), .rgb)
+
+        let draft = ColourDraft(literal: "rgb(30, 144, 255)")
+        draft.take(NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+        XCTAssertEqual(draft.literal, "rgb(255, 0, 0)")
+    }
+
+    func testTakingAColourKeepsHexAsHex() {
+        let draft = ColourDraft(literal: "#1e90ff")
+        draft.take(NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1))
+        XCTAssertEqual(draft.literal, "#000000")
+    }
+
+    /// Every reading at once, the way Paste puts them under the swatch — and 255, not 256.
+    func testTheReadingsUnderTheSwatch() {
+        let white = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+        XCTAssertEqual(ColourDraft.readings(for: white),
+                       "RGB 255, 255, 255  ·  HSL 0, 0, 100  ·  HSB 0, 0, 100")
+        let red = NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        XCTAssertEqual(ColourDraft.readings(for: red),
+                       "RGB 255, 0, 0  ·  HSL 0, 100, 50  ·  HSB 0, 100, 100")
+    }
+
+    /// Text the picker can no longer make sense of leaves the draft without a colour, and Save
+    /// refuses rather than writing something that is not one.
+    func testTextThatIsNoLongerAColourHasNoColour() {
+        let draft = ColourDraft(literal: "#1e90ff")
+        XCTAssertNotNil(draft.colour)
+        draft.literal = "not a colour"
+        XCTAssertNil(draft.colour)
+    }
+
+    /// The colour editor is a window like any other, and closing it takes the system picker down
+    /// with it — a picker left messaging a draft that no longer exists is the leak this avoids.
+    func testClosingTheEditorTakesThePickerWithIt() {
+        EditWindowPresenter.shared.present(ClipboardItem(type: .color, text: "#1e90ff"))
+        XCTAssertTrue(EditWindowPresenter.shared.isOpen)
+        XCTAssertTrue(EditWindowPresenter.shared.isColourPickerAttached)
+
+        EditWindowPresenter.shared.dismiss()
+
+        XCTAssertFalse(EditWindowPresenter.shared.isOpen)
+        XCTAssertFalse(EditWindowPresenter.shared.isColourPickerAttached)
+    }
+}
+
+/// The colour picker beside the editor.
+@MainActor
+final class ColourPickerTests: XCTestCase {
+
+    override func tearDown() {
+        EditWindowPresenter.shared.dismiss()
+        super.tearDown()
+    }
+
+    /// It was opening all along — at `.floating` (3), underneath an editor at `.statusBar + 1`
+    /// (26) and underneath every other floating window on screen, which is indistinguishable from
+    /// never opening.
+    func testThePickerSitsAtTheEditorsLevel() throws {
+        EditWindowPresenter.shared.present(ClipboardItem(type: .color, text: "#1e90ff"))
+
+        let editor = try XCTUnwrap(NSApp.windows
+            .first { $0.identifier == EditWindowPresenter.windowIdentifier })
+        XCTAssertTrue(NSColorPanel.shared.isVisible)
+        XCTAssertEqual(NSColorPanel.shared.level, editor.level,
+                       "the picker is below the editor, so it cannot be seen")
+    }
+
+    func testThePickerOpensOnTheItemsOwnColour() throws {
+        EditWindowPresenter.shared.present(ClipboardItem(type: .color, text: "#1e90ff"))
+        let shown = try XCTUnwrap(NSColorPanel.shared.color.usingColorSpace(.sRGB))
+        XCTAssertEqual(ColorFormat.hex.render(shown), "#1e90ff")
+    }
+
+    /// Typing a different notation over the code changes what a later turn of the wheel writes —
+    /// the field is the source of truth, not the notation the item happened to arrive in.
+    func testTypingANotationChangesWhatTheWheelWritesBack() {
+        let draft = ColourDraft(literal: "#1e90ff")
+        XCTAssertEqual(draft.format, .hex)
+
+        draft.literal = "rgb(255, 0, 0)"
+        XCTAssertEqual(draft.format, .rgb)
+        draft.take(NSColor(srgbRed: 0, green: 1, blue: 0, alpha: 1))
+        XCTAssertEqual(draft.literal, "rgb(0, 255, 0)")
+    }
+
+    /// Half-typed text is left exactly as typed: the swatch simply has no colour until it parses
+    /// again, rather than the field being corrected underneath the caret.
+    func testHalfTypedTextIsNotRewritten() {
+        let draft = ColourDraft(literal: "#1e90ff")
+        draft.literal = "#1e90f"
+        XCTAssertEqual(draft.literal, "#1e90f")
+        XCTAssertNil(draft.colour)
+        draft.literal = "#1e90ff"
+        XCTAssertNotNil(draft.colour)
     }
 }

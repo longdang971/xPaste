@@ -40,21 +40,9 @@ final class RichTextToolbarTests: XCTestCase {
     // MARK: - Toolbar symbols
     //
     // The toolbar's controls are inline SwiftUI view builders with no XCTest target reaching
-    // them (see the file comment above), so the symbol names are pulled out into `static let`s
-    // the view actually draws from — see `RichTextToolbar.textColourSymbol` and
-    // `.clearFormattingSymbol` — so these tests assert against the same value the running app
-    // uses rather than a copy that could drift from it.
-
-    /// Regression guard for the bug this fixes: the text-colour menu used to draw as `"textformat"`
-    /// — the exact glyph the font and mode-toggle controls also use — so it read as a font control
-    /// sitting in the middle of two other font controls, with nothing saying "colour".
-    func test_text_colour_symbol_resolves_and_is_not_the_font_glyph() {
-        XCTAssertNotNil(NSImage(systemSymbolName: RichTextToolbar.textColourSymbol,
-                                 accessibilityDescription: nil),
-                         "\(RichTextToolbar.textColourSymbol) must exist on macOS 13, this " +
-                         "project's deployment target")
-        XCTAssertNotEqual(RichTextToolbar.textColourSymbol, "textformat")
-    }
+    // them (see the file comment above), so the symbol name is pulled out into a `static let`
+    // the view actually draws from — see `RichTextToolbar.clearFormattingSymbol` — so this test
+    // asserts against the same value the running app uses rather than a copy that could drift.
 
     /// Regression guard: the clear-formatting button used to draw `"textformat.size.smaller"`,
     /// which literally means "make the text smaller" — the opposite of clearing formatting.
