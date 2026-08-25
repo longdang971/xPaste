@@ -42,6 +42,9 @@ extension Notification.Name {
     /// the window is an `NSWindow` the delegate owns, not a SwiftUI scene.
     static let closeUpdateWindow    = Notification.Name("com.user.xPaste.closeUpdateWindow")
     static let settingsWindowWillShow = Notification.Name("com.user.xPaste.settingsWindowWillShow")
+    /// The Settings window has gone. Two things wait on it: the store goes back to coalescing its
+    /// updates, and the Accessibility poll inside the window stops.
+    static let settingsWindowDidClose = Notification.Name("com.user.xPaste.settingsWindowDidClose")
     static let menuBarIconChanged   = Notification.Name("com.user.xPaste.menuBarIconChanged")
     static let screenSharingVisibilityChanged = Notification.Name("com.user.xPaste.screenSharingVisibilityChanged")
 }
@@ -423,6 +426,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let closing = notification.object as? NSWindow, closing === settingsWindow {
+            // Publishing was switched on for this window and nothing switched it back.
+            //
+            // Every other path that stops it — hiding the panel, the prewarm — is guarded on the
+            // Settings window not being visible, and none of them runs on the way out of Settings.
+            // So after one visit the store went on publishing live: with the panel hidden and
+            // nobody watching, every copy in the system paid a full SwiftUI layout of it, until
+            // the next time the panel happened to be opened and closed.
+            NotificationCenter.default.post(name: .settingsWindowDidClose, object: nil)
+            if !panelVisible { ClipboardStore.shared.publishingSuppressed = true }
+            return
+        }
         guard let closing = notification.object as? NSWindow, closing === onboardingWindow else { return }
         onboardingWindow = nil
         UserDefaults.standard.set(true, forKey: "didCompleteOnboarding")
@@ -887,18 +902,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         completion?()
     }
 
+    /// Each monitor guarded on its own.
+    ///
+    /// One `guard mouseMonitor == nil` used to cover both. `addGlobalMonitorForEvents` returns nil
+    /// when the system refuses the monitor, and a nil mouse monitor then left the guard open — so
+    /// every subsequent open installed another key monitor on top of the last. Duplicates are not
+    /// merely a leak here: each one posts `pasteNumberedItem`, so ⌘1 would paste the same card
+    /// once per open the panel had ever had.
     private func addMonitors() {
-        guard mouseMonitor == nil else { return }
+        if mouseMonitor == nil { mouseMonitor = makeMouseMonitor() }
+        if keyMonitor == nil { keyMonitor = makeKeyMonitor() }
+    }
 
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+    private func makeMouseMonitor() -> Any? {
+        NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             guard let self else { return }
             if let button = self.statusItem?.button, let win = button.window {
                 if win.convertToScreen(button.frame).contains(NSEvent.mouseLocation) { return }
             }
             self.hidePanel()
         }
+    }
 
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+    private func makeKeyMonitor() -> Any? {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             if event.keyCode == 53 {
                 if self.alertIsPresented { return event }
@@ -1029,14 +1056,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// click outside the panel.
     @objc private func handleSaveItemToFile(_ note: Notification) {
         guard let id = note.userInfo?["itemID"] as? UUID,
-              let item = ClipboardStore.shared.items.first(where: { $0.id == id }),
-              SaveFormat.canSave(item.type)
+              let stored = ClipboardStore.shared.items.first(where: { $0.id == id }),
+              SaveFormat.canSave(stored.type)
         else { return }
+        // Hydrated for the same reason the pixels are read below: `SaveFormat` knows nothing about
+        // the store, and a file saved from the prefix a card shows would be a truncated file with
+        // nothing to say it was.
+        let item = ClipboardStore.shared.hydrated(stored)
 
         // An image's pixels may live on disk rather than on the item, and `SaveFormat` deliberately
         // knows nothing about the store — so they are read here and handed in.
+        // The original. Someone asking to save a picture is asking for that picture, and saving a
+        // re-encode while the bytes that were copied sit right beside it is a loss with nothing on
+        // screen to say it happened.
         let imageBytes: Data? = item.type == .image
-            ? (item.imageData ?? ClipboardStore.shared.imageBytes(for: item.id))
+            ? ClipboardStore.shared.originalImageBytes(for: item)
             : nil
         let suggestion = SaveFormat.suggest(for: item, imageBytes: imageBytes)
 
@@ -1153,6 +1187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.isMovableByWindowBackground = true
             window.setContentSize(NSSize(width: 800, height: 480))
             window.center()
+            window.delegate = self
             settingsWindow = window
         }
         // The Settings window shows live history counts, so it needs the store publishing.

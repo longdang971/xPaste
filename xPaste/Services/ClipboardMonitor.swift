@@ -107,6 +107,10 @@ final class ClipboardMonitor {
             // Read on this thread, decode on the other: the bytes are `Sendable`, the `NSImage`
             // built from them is not.
             let raw = pb.data(forType: .png) ?? pb.data(forType: .tiff)
+            // Read here, not on the capture queue: the pasteboard is shared state that the next
+            // copy replaces, and by the time a queued block runs it can be describing something
+            // else entirely.
+            let payload = PasteboardPayload.capture(from: pb)
             if let raw {
                 captureQueue.async {
                     // Explicitly pooled. Compressing one 2200x1400 capture allocates the decoded
@@ -122,7 +126,15 @@ final class ClipboardMonitor {
                               let compressed = bitmap.compressedData(maxBytes: 1_000_000) else { return }
                         var item = ClipboardItem(type: .image, imageData: compressed)
                         item.sourceAppBundleID = sourceBundleID
+                        // The compressed copy is the card's thumbnail; the payload keeps what the
+                        // source actually put on the pasteboard. Storing both is what makes a paste
+                        // give back the original picture rather than xPaste's re-encoding of it —
+                        // which is all the history used to be able to return.
+                        item.payload = payload
                         DispatchQueue.main.async { ClipboardStore.shared.add(item) }
+                        // `compressed`, not `raw`, even though the original is right here: Vision
+                        // resizes its input, so the smaller copy is both cheaper and no worse at
+                        // small text. See `OCRService.tileSide` and the note in `startBackfill`.
                         OCRService.scan(itemID: item.id, imageData: compressed)
                     }
                 }

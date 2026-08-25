@@ -86,8 +86,17 @@ final class ClipboardStore: ObservableObject {
         let stored = UserDefaults.standard.object(forKey: "maxHistoryCount") as? Int ?? defaultMaxItems
         return min(Self.maxHistoryCount, max(Self.minHistoryCount, stored))
     }
-    private let itemsDir: URL?
+    /// Where the history lives. Nil when the store has nowhere to write, which is what the tests
+    /// that do not care about persistence use.
+    private let database: ClipboardDatabase?
     private let imagesDir: URL?
+
+    /// Checksum → id, kept in step with `items`, so "have I already got this?" is a lookup.
+    ///
+    /// The store's own index answers the same question, but not from here: dedup runs on the main
+    /// thread inside `add`, and going to the database for it would put a fetch on the path every
+    /// copy in the system takes. This mirrors it in memory for that one question.
+    private var idsByChecksum: [String: Set<UUID>] = [:]
     /// Utility rather than background: this queue now carries the *only* copy of a freshly
     /// captured image, and background work can be starved for seconds under load — long enough for
     /// a paste or a save to look for a file that has not been written yet.
@@ -109,17 +118,22 @@ final class ClipboardStore: ObservableObject {
 
     init(maxItems: Int, storageDir: URL? = ClipboardStore.defaultStorageDir()) {
         self.defaultMaxItems = maxItems
-        self.itemsDir  = storageDir?.appendingPathComponent("items",  isDirectory: true)
         self.imagesDir = storageDir?.appendingPathComponent("images", isDirectory: true)
+        self.database = ClipboardDatabase(storageDir: storageDir)
 
-        if let itemsDir, let imagesDir {
-            try? FileManager.default.createDirectory(at: itemsDir,  withIntermediateDirectories: true)
+        guard let database else { return }
+        if let imagesDir {
             try? FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
-            if let storageDir { migrateFromLegacyIfNeeded(in: storageDir) }
-            load()
-            trim()          // enforce the count cap at launch too, not only on the next add()
-            pruneExpired()
         }
+        if let storageDir { LegacyJSONImport.run(from: storageDir, into: database) }
+        load()
+        trim()          // enforce the count cap at launch too, not only on the next add()
+        pruneExpired()
+        // Rows whose item is gone, and image files whose item is gone. Both are unreachable bytes
+        // and nothing else; both are cheap to look for and neither is guaranteed absent — see
+        // `pruneOrphanedPayloads`.
+        database.pruneOrphanedPayloads()
+        pruneOrphanedImages()
     }
 
     /// Waits for every queued write to reach disk.
@@ -129,6 +143,7 @@ final class ClipboardStore: ObservableObject {
     /// six item files and the whole of an image when the app was closed straight after copying.
     func flushPendingWrites() {
         saveQueue.sync {}
+        database?.flush()
     }
 
     /// An image's bytes, from the one place that has them.
@@ -141,6 +156,79 @@ final class ClipboardStore: ObservableObject {
         flushPendingWrites()
         guard let url = imageURL(for: id) else { return nil }
         return try? Data(contentsOf: url)
+    }
+
+    /// Every representation stored for an item, faulted in from the database.
+    ///
+    /// This is the cold half of the split, and the whole reason a card never touches it: drawing
+    /// the history means materialising every row in it, and a row that carried its payload would
+    /// mean loading every representation of every item to draw a list of titles.
+    func payload(for id: UUID) -> PasteboardPayload? {
+        database?.payload(for: id)
+    }
+
+    /// The formatted bytes for an item — from the item when it still carries them, from the store
+    /// otherwise. Mirrors `imageBytes(for:)`, and for the same reason.
+    func richBytes(for item: ClipboardItem) -> Data? {
+        if let inHand = item.richData, !inHand.isEmpty { return inHand }
+        guard item.hasRichText, let type = item.richType else { return nil }
+        return payload(for: item.id)?.data(forType: type)
+    }
+
+    /// The item's full text, which `item.text` may be a prefix of.
+    func fullText(for item: ClipboardItem) -> String? {
+        guard item.isTextTruncated else { return item.text }
+        return payload(for: item.id)?.string ?? item.text
+    }
+
+    /// The item with its cold half filled in.
+    ///
+    /// Anything that pastes, saves, drags or edits an item must go through this: those are the
+    /// paths where a prefix of the text is the wrong answer, and the only ones that are worth a
+    /// disk read. Everything that merely draws or searches reads the hot fields directly.
+    func hydrated(_ item: ClipboardItem) -> ClipboardItem {
+        guard item.isTextTruncated || (item.hasRichText && item.richData == nil) else { return item }
+        var full = item
+        if let payload = payload(for: item.id) {
+            full.payload = payload
+            if item.isTextTruncated, let text = payload.string { full.text = text }
+            if item.richData == nil, let type = item.richType {
+                full.richData = payload.data(forType: type)
+            }
+        }
+        return full
+    }
+
+    /// The picture as the source app put it on the clipboard.
+    ///
+    /// `imageBytes` returns the other one: a re-encode capped at a megabyte, which exists so a card
+    /// can be drawn without decoding a 63 MB screenshot. That copy is the card's and nobody else's.
+    /// Everything that hands the picture on — a paste, a drag into Finder, a Save as File, a share,
+    /// and the OCR that has to read small text in it — wants what was actually copied.
+    ///
+    /// Falls back to the re-encode for items imported from the JSON history: that format never kept
+    /// an original, so for those two there is only ever one picture.
+    func originalImageBytes(for item: ClipboardItem) -> Data? {
+        if let payload = item.payload ?? payload(for: item.id),
+           let picture = payload.imageRepresentation {
+            return picture.data
+        }
+        return item.imageData ?? imageBytes(for: item.id)
+    }
+
+    /// The original, decoded, for a view that shows one picture at a time.
+    ///
+    /// Deliberately not through `imageCache`. That cache is bounded at 64 MB because it holds the
+    /// thumbnails of everything scrolled past; one original can be twice that on its own, so
+    /// putting one in would evict the whole cache to hold a single image the moment a preview is
+    /// opened. This decodes, hands it over, and lets it go with the window.
+    func loadOriginalImage(for item: ClipboardItem) async -> NSImage? {
+        guard item.type == .image else { return nil }
+        let bytes = await Task.detached(priority: .userInitiated) { [weak self] in
+            self?.originalImageBytes(for: item)
+        }.value
+        guard let bytes else { return nil }
+        return NSImage(data: bytes)
     }
 
     func imageURL(for id: UUID) -> URL? {
@@ -205,24 +293,20 @@ final class ClipboardStore: ObservableObject {
 
     func add(_ item: ClipboardItem) {
         var item = item
-        let removedIDs: [UUID] = items.compactMap { existing in
-            guard !existing.isPinned, existing.type == item.type else { return nil }
-            switch item.type {
-            case .text, .url, .color:
-                return existing.text == item.text ? existing.id : nil
-            case .image:
-                if let eh = existing.imageHash, let nh = item.imageHash { return eh == nh ? existing.id : nil }
-                guard let ed = existing.imageData, let nd = item.imageData else { return nil }
-                return ed == nd ? existing.id : nil
-            case .file, .folder:
-                return existing.fileURLs == item.fileURLs ? existing.id : nil
-            }
+        // By checksum through the index rather than by walking the history: this runs on the main
+        // thread for every copy made anywhere in the system, and the walk it replaces compared the
+        // full text of every item of the same type on the way past.
+        let candidates = idsByChecksum[item.checksum] ?? []
+        let removedIDs: [UUID] = candidates.isEmpty ? [] : items.compactMap { existing in
+            guard candidates.contains(existing.id), !existing.isPinned else { return nil }
+            return existing.id
         }
-        for id in removedIDs {
-            deleteFiles(for: id)
-            imageCache.removeObject(forKey: id.uuidString as NSString)
+        if !removedIDs.isEmpty {
+            unindex(items.filter { removedIDs.contains($0.id) })
+            removedIDs.forEach { forget($0) }
+            items.removeAll { removedIDs.contains($0.id) }
+            database?.delete(ids: removedIDs)
         }
-        items.removeAll { removedIDs.contains($0.id) }
 
         if let data = item.imageData, let imagesDir {
             let imgURL = imagesDir.appendingPathComponent(item.id.uuidString + ".jpg")
@@ -241,16 +325,35 @@ final class ClipboardStore: ObservableObject {
             item.imageData = nil
         }
 
+        let payload = item.payload
+        // Dropped for the same reason `imageData` is, and it matters more: the payload is every
+        // representation the source offered, and keeping it on the item would put all of them in
+        // the array for as long as the app runs — the exact cost this schema exists to avoid.
+        item.payload = nil
+
         items.insert(item, at: 0)
+        index(item)
         trim()
         pruneExpired()
-        writeMetadata(item)
+        database?.upsert(item, payload: payload)
+    }
+
+    /// Records an item in the checksum index.
+    private func index(_ item: ClipboardItem) {
+        idsByChecksum[item.checksum, default: []].insert(item.id)
+    }
+
+    /// Removes ids from the checksum index. Takes the items rather than the ids because a checksum
+    /// is derived from content, and the content is what has just been removed from `items`.
+    private func unindex(_ removed: [ClipboardItem]) {
+        for item in removed {
+            idsByChecksum[item.checksum]?.remove(item.id)
+            if idsByChecksum[item.checksum]?.isEmpty == true { idsByChecksum[item.checksum] = nil }
+        }
     }
 
     func delete(_ item: ClipboardItem) {
-        imageCache.removeObject(forKey: item.id.uuidString as NSString)
-        items.removeAll { $0.id == item.id }
-        deleteFiles(for: item.id)
+        deleteItems(ids: [item.id])
     }
 
     func togglePin(_ item: ClipboardItem) {
@@ -288,16 +391,36 @@ final class ClipboardStore: ObservableObject {
         // Built up on a copy and written back once. `items` carries willSet/didSet, so every
         // assignment through the subscript is a separate `objectWillChange` — five of them for one
         // edit, each one a full SwiftUI pass over the panel.
-        var edited = items[idx]
+        let previous = items[idx]
+        var edited = previous
         edited.text = text
         edited.richData = richData
         edited.richType = richData == nil ? nil : richType
+        edited.hasRichText = richData != nil
+        edited.fullTextLength = text.count
         edited.type = ClipboardItem.contentType(for: text)
         edited.revision = edited.contentRevision + 1
+        // Recomputed, not carried over: `edited` started as a copy of the item before the edit, so
+        // its key still describes the old text. Leaving it would file the item under what it used
+        // to say — and the next copy of that old text would dedup this one away.
+        edited.checksum = ClipboardItem.makeChecksum(type: edited.type, id: edited.id, text: text,
+                                                     imageHash: edited.imageHash,
+                                                     fileURLs: edited.fileURLs)
         items[idx] = edited
 
+        // The checksum is derived from the content, so an edit moves the item to a different
+        // bucket. Missing this leaves it findable under what it used to say, which is how an edited
+        // item gets silently deduplicated away by the next copy of its own old text.
+        unindex([previous])
+        index(edited)
+
         forgetCachedContent(for: id)
-        writeMetadata(items[idx])
+        // Rewritten in full rather than as metadata: the payload's plain and formatted
+        // representations are what a paste replays, and leaving them at the pre-edit text would
+        // mean the card shows one thing and pasting produces another.
+        let base = payload(for: id) ?? PasteboardPayload.plainText(text)
+        let updated = base.replacingText(text, rich: richData.map { ($0, richType ?? ItemEdit.richType) })
+        database?.upsert(edited, payload: updated)
     }
 
     /// The caches that key on an item's id and stop being true the moment its content changes.
@@ -339,94 +462,91 @@ final class ClipboardStore: ObservableObject {
     }
 
     func deleteItems(ids: Set<UUID>) {
-        ids.forEach {
-            deleteFiles(for: $0)
-            imageCache.removeObject(forKey: $0.uuidString as NSString)
-        }
+        guard !ids.isEmpty else { return }
+        unindex(items.filter { ids.contains($0.id) })
+        ids.forEach { forget($0) }
         items.removeAll { ids.contains($0.id) }
+        database?.delete(ids: Array(ids))
     }
 
     func clearUnpinned() {
-        items.filter { !$0.isPinned }.forEach {
-            deleteFiles(for: $0.id)
-            imageCache.removeObject(forKey: $0.id.uuidString as NSString)
-        }
-        items.removeAll { !$0.isPinned }
+        deleteItems(ids: Set(items.filter { !$0.isPinned }.map(\.id)))
     }
 
     func clearAll() {
-        items.forEach { imageCache.removeObject(forKey: $0.id.uuidString as NSString) }
+        items.forEach { forget($0.id) }
         items.removeAll()
-        let dirs = [itemsDir, imagesDir].compactMap { $0 }
-        // Tear the directories down ON the save queue so it runs AFTER any in-flight
-        // metadata/image writes. Doing it on the main thread races those writes, which can
-        // drop a file into the freshly recreated dir and resurrect a "ghost" item on relaunch.
+        idsByChecksum.removeAll()
+        database?.deleteAll()
+        guard let imagesDir else { return }
+        // Torn down ON the save queue so it runs AFTER any in-flight image write. On the main
+        // thread it races them, which can drop a file into the freshly recreated directory and
+        // leave a picture behind for an item that no longer exists.
         saveQueue.async {
             let fm = FileManager.default
-            for dir in dirs {
-                try? fm.removeItem(at: dir)
-                try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            }
+            try? fm.removeItem(at: imagesDir)
+            try? fm.createDirectory(at: imagesDir, withIntermediateDirectories: true)
         }
     }
 
+    /// Persists an item's hot fields, leaving its payload alone.
+    ///
+    /// Every caller here is a metadata change — a pin, a rename, an OCR result, a reorder — and
+    /// none of them touch the representations. Passing nil is what says so; see
+    /// `ClipboardDatabase.upsert`.
     private func writeMetadata(_ item: ClipboardItem) {
-        guard let itemsDir else { return }
-        let url = itemsDir.appendingPathComponent(item.id.uuidString + ".json")
-        saveQueue.async {
-            if let data = try? JSONEncoder().encode(item) {
-                try? data.write(to: url, options: .atomic)
-            }
-        }
+        database?.upsert(item, payload: nil)
     }
 
-    private func deleteFiles(for id: UUID) {
-        guard let itemsDir, let imagesDir else { return }
-        let metaURL = itemsDir.appendingPathComponent(id.uuidString + ".json")
-        let imgURL  = imagesDir.appendingPathComponent(id.uuidString + ".jpg")
+    /// Drops an item's in-memory caches and its picture on disk. The database row is deleted by the
+    /// caller, in one batch — see `deleteItems`.
+    private func forget(_ id: UUID) {
+        imageCache.removeObject(forKey: id.uuidString as NSString)
+        guard let imagesDir else { return }
+        let imgURL = imagesDir.appendingPathComponent(id.uuidString + ".jpg")
+        saveQueue.async { try? FileManager.default.removeItem(at: imgURL) }
+    }
+
+    /// Deletes pictures no item claims.
+    ///
+    /// The database owns the payloads and takes them with the row; images live beside it as files
+    /// and do not. A write that lands after its item was deleted, or a crash between the two, is
+    /// enough to leave one — and nothing would ever look at it again.
+    private func pruneOrphanedImages() {
+        guard let imagesDir, let database else { return }
+        let live = database.storedIDs()
         saveQueue.async {
-            try? FileManager.default.removeItem(at: metaURL)
-            try? FileManager.default.removeItem(at: imgURL)
+            let fm = FileManager.default
+            guard let files = try? fm.contentsOfDirectory(at: imagesDir, includingPropertiesForKeys: nil)
+            else { return }
+            for file in files where file.pathExtension == "jpg" {
+                guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
+                      !live.contains(id)
+                else { continue }
+                try? fm.removeItem(at: file)
+            }
         }
     }
 
     private func load() {
-        guard let itemsDir else { return }
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: itemsDir, includingPropertiesForKeys: nil
-        ) else { return }
-
-        let jsonURLs = urls.filter { $0.pathExtension == "json" }
-        guard !jsonURLs.isEmpty else { return }
-
-        var results = [ClipboardItem?](repeating: nil, count: jsonURLs.count)
-        // Through a buffer pointer rather than by subscripting the array: `results[i] = item` from
-        // several threads at once runs the copy-on-write uniqueness check and exclusivity
-        // enforcement concurrently on one array, which is undefined behaviour however well it
-        // happens to work. The pointer is plain memory, and each iteration owns its own slot.
-        results.withUnsafeMutableBufferPointer { buffer in
-            DispatchQueue.concurrentPerform(iterations: jsonURLs.count) { i in
-                let decoder = JSONDecoder()
-                guard let data = try? Data(contentsOf: jsonURLs[i]),
-                      var item = try? decoder.decode(ClipboardItem.self, from: data)
-                else { return }
-                // Colour became a type of its own after these items were written, so every colour
-                // ever copied is on disk as `.text`. Reclassifying on load is what stops there
-                // being two classes of colour item — old ones the editor treats as prose, new ones
-                // it does not. Cheap: `ColorParser`'s length gate rejects anything over 64 bytes
-                // before it looks at the string.
-                if item.type == .text, let text = item.text,
-                   ClipboardItem.contentType(for: text) == .color {
-                    item.type = .color
-                }
-                buffer[i] = item
-            }
+        guard let database else { return }
+        // Sorted by the store, on an index that covers exactly this order — see
+        // `ClipboardSchema`'s `byPinnedAndTimestamp`. What used to happen here was a directory
+        // listing, a concurrent decode of every JSON file in it, and a sort of the result.
+        items = database.loadItems().map { item -> ClipboardItem in
+            // Colour became a type of its own after some of these items were stored, so a colour
+            // copied before that is on disk as `.text`. Reclassifying on load is what stops there
+            // being two classes of colour item — old ones the editor treats as prose, new ones it
+            // does not. Cheap: `ColorParser`'s length gate rejects anything over 64 bytes before it
+            // looks at the string.
+            guard item.type == .text, let text = item.text,
+                  ClipboardItem.contentType(for: text) == .color
+            else { return item }
+            var reclassified = item
+            reclassified.type = .color
+            return reclassified
         }
-
-        items = results.compactMap { $0 }.sorted {
-            if $0.isPinned != $1.isPinned { return $0.isPinned }
-            return $0.timestamp > $1.timestamp
-        }
+        items.forEach(index)
     }
 
     static let keepHistoryDaysByIndex = [1, 7, 30, 365, 0]
@@ -441,13 +561,7 @@ final class ClipboardStore: ObservableObject {
         let days = keepHistoryDays
         guard days > 0 else { return }
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
-        let expiredIDs = Set(items.filter { !$0.isPinned && $0.timestamp < cutoff }.map(\.id))
-        guard !expiredIDs.isEmpty else { return }
-        expiredIDs.forEach {
-            deleteFiles(for: $0)
-            imageCache.removeObject(forKey: $0.uuidString as NSString)
-        }
-        items.removeAll { expiredIDs.contains($0.id) }
+        deleteItems(ids: Set(items.filter { !$0.isPinned && $0.timestamp < cutoff }.map(\.id)))
     }
 
     /// Enforce the count cap now — call after the user lowers the history slider so
@@ -457,52 +571,7 @@ final class ClipboardStore: ObservableObject {
     private func trim() {
         let unpinned = items.filter { !$0.isPinned }.sorted { $0.timestamp < $1.timestamp }
         guard unpinned.count > maxItems else { return }
-        let toRemove = unpinned.prefix(unpinned.count - maxItems)
-        toRemove.forEach {
-            deleteFiles(for: $0.id)
-            imageCache.removeObject(forKey: $0.id.uuidString as NSString)
-        }
-        let removeIDs = Set(toRemove.map(\.id))
-        items.removeAll { removeIDs.contains($0.id) }
-    }
-
-    private func migrateFromLegacyIfNeeded(in dir: URL) {
-        let legacyURL = dir.appendingPathComponent("history.json")
-        guard FileManager.default.fileExists(atPath: legacyURL.path),
-              let data = try? Data(contentsOf: legacyURL)
-        else { return }
-
-        struct LegacyItem: Decodable {
-            let id: UUID
-            let type: ClipboardContentType
-            let text: String?
-            let imageData: Data?
-            let fileURLs: [URL]?
-            let timestamp: Date
-            let isPinned: Bool
-            let label: String?
-            let sourceAppBundleID: String?
-        }
-
-        guard let legacyItems = try? JSONDecoder().decode([LegacyItem].self, from: data) else { return }
-
-        let encoder = JSONEncoder()
-        for legacy in legacyItems {
-            let item = ClipboardItem(
-                id: legacy.id, type: legacy.type, text: legacy.text,
-                imageData: legacy.imageData, fileURLs: legacy.fileURLs,
-                timestamp: legacy.timestamp, isPinned: legacy.isPinned,
-                label: legacy.label, sourceAppBundleID: legacy.sourceAppBundleID
-            )
-            if let imgData = legacy.imageData, let imagesDir {
-                try? imgData.write(to: imagesDir.appendingPathComponent(legacy.id.uuidString + ".jpg"))
-            }
-            if let metaData = try? encoder.encode(item), let itemsDir {
-                try? metaData.write(to: itemsDir.appendingPathComponent(legacy.id.uuidString + ".json"))
-            }
-        }
-
-        try? FileManager.default.removeItem(at: legacyURL)
+        deleteItems(ids: Set(unpinned.prefix(unpinned.count - maxItems).map(\.id)))
     }
 
     static func defaultStorageDir() -> URL {
@@ -513,6 +582,19 @@ final class ClipboardStore: ObservableObject {
         if let override = ProcessInfo.processInfo.environment["XPASTE_STORAGE_DIR"],
            !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
+        }
+
+        // Under XCTest, somewhere disposable — never the real history.
+        //
+        // Not belt-and-braces. `ClipboardStore.shared` is reachable from `ClipboardItem.write`,
+        // `RichTextRenderer.parse` and `hydrated`, so merely touching one of those in a test builds
+        // the shared store against whatever this returns; and opening the real directory now runs
+        // a migration that takes the old files away when it is done. Setting the variable in the
+        // scheme would work until someone ran the tests another way, which is how this was found.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil {
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("xPaste-tests", isDirectory: true)
         }
         let support = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask

@@ -25,7 +25,18 @@ struct PreviewPopoverContent: View {
     /// Counted once in `.task`, not per body pass: three full walks of the string measured 50ms on
     /// a 468KB item, and the popover re-renders several times while it settles.
     @State private var stats = ""
+    /// The item's whole text, fetched once when the popover appears.
+    ///
+    /// `item.text` is capped at `ItemEntity.previewCharLimit` — it is what a card draws and what
+    /// search matches, not the item. This window is where someone comes to read the whole thing,
+    /// so showing the cap here meant a long paste appeared to end at 4096 characters, with the
+    /// footer agreeing that it did.
+    @State private var wholeText: String?
     @Environment(\.colorScheme) private var colorScheme
+
+    /// The text to show, count and share: the whole of it once it has arrived, the prefix until
+    /// then. Never `item.text` directly.
+    private var shownText: String? { wholeText ?? item.text }
 
     private var title: String {
         if isEditing { return "Edit" }
@@ -79,8 +90,11 @@ struct PreviewPopoverContent: View {
             await loadFileTextIfNeeded()
             // `.color` shares the footer's character count with `.text` (see the `previewFooter`
             // switch below), so it needs the same stats computed here.
+            if item.isTextTruncated, wholeText == nil {
+                wholeText = ClipboardStore.shared.fullText(for: item)
+            }
             if (item.type == .text || item.type == .color), stats.isEmpty {
-                let text = item.displayText
+                let text = shownText ?? item.displayText
                 stats = await Task.detached(priority: .userInitiated) {
                     Self.textStats(text)
                 }.value
@@ -111,7 +125,11 @@ struct PreviewPopoverContent: View {
         NotificationCenter.default.post(
             name: editing ? .clipboardAlertShown : .clipboardAlertHidden, object: nil)
         if editing {
-            let seed = ItemEdit.editorSeed(for: item, parsed: richPreview?.text).text
+            // Hydrated: the editor's contents become the item's contents when it is saved, so
+            // seeding it with the prefix the card shows would be a way to lose the rest by opening
+            // the preview and pressing Save.
+            let seed = ItemEdit.editorSeed(for: ClipboardStore.shared.hydrated(item),
+                                           parsed: richPreview?.text).text
             session.begin(with: seed)
             draftIsEmpty = false
             // Seeded from the same text the editor itself is about to open with, not from
@@ -206,7 +224,7 @@ struct PreviewPopoverContent: View {
                 Image(systemName: "square.and.arrow.up").font(.system(size: 13))
             }
             .buttonStyle(.plain)
-        } else if (item.type == .text || item.type == .color), let text = item.text {
+        } else if (item.type == .text || item.type == .color), let text = shownText {
             ShareLink(item: text) {
                 Image(systemName: "square.and.arrow.up").font(.system(size: 13))
             }
@@ -263,7 +281,7 @@ struct PreviewPopoverContent: View {
     /// exactly what the file pane below already avoids for the same reason, in its own words. A
     /// half-megabyte note is a normal thing to copy and this is the pane you open to read it.
     private var plainTextContent: some View {
-        RichTextPreview(text: Self.plainBody(item.displayText), fill: nil)
+        RichTextPreview(text: Self.plainBody(shownText ?? item.displayText), fill: nil)
     }
 
     private static func plainBody(_ text: String) -> NSAttributedString {
@@ -419,10 +437,13 @@ struct PreviewPopoverContent: View {
 
     private func loadImageIfNeeded() async {
         guard item.type == .image, loadedImage == nil else { return }
-        if let data = item.imageData, let img = NSImage(data: data) {
+        // The original, not the card's thumbnail. This window is where someone goes to actually
+        // look at the picture, and the thumbnail can be a quality-0.10 JPEG — or scaled down
+        // outright — for exactly the large screenshots most worth opening full size.
+        if let img = await ClipboardStore.shared.loadOriginalImage(for: item) {
             loadedImage = img
-        } else {
-            loadedImage = await ClipboardStore.shared.loadImage(for: item.id)
+        } else if let data = item.imageData, let img = NSImage(data: data) {
+            loadedImage = img
         }
     }
 }

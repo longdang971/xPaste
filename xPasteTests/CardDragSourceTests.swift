@@ -36,17 +36,34 @@ final class CardDragSourceTests: XCTestCase {
         XCTAssertEqual(CardDragSourceView.nativeWriter(for: item) as? NSURL, url as NSURL)
     }
 
-    /// An item whose picture is not on disk still has to travel as a picture, from the bytes it
-    /// carries.
-    func testAnImageWithNoFileOnDiskTravelsAsTheBitmap() {
+    /// An item whose picture cannot be written as a file still has to travel as a picture, from
+    /// the bytes it carries.
+    ///
+    /// BMP rather than TIFF: a TIFF now gets a real file, so it travels as a URL — see
+    /// `SaveFormat.recognisedImageExtension`. This is the path for bytes nothing can name.
+    func testAnImageWithNoFileOnDiskTravelsAsTheBitmap() throws {
         let bitmap = NSImage(size: NSSize(width: 4, height: 4))
         bitmap.lockFocus()
         NSColor.green.setFill()
         NSBezierPath(rect: NSRect(x: 0, y: 0, width: 4, height: 4)).fill()
         bitmap.unlockFocus()
-        guard let data = bitmap.tiffRepresentation else { return XCTFail("no bitmap data") }
-        let item = ClipboardItem(type: .image, imageData: data)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(bitmap.tiffRepresentation)))
+        let bmp = try XCTUnwrap(rep.representation(using: .bmp, properties: [:]))
+        let item = ClipboardItem(type: .image, imageData: bmp)
         XCTAssertNotNil(CardDragSourceView.nativeWriter(for: item) as? NSImage)
+    }
+
+    /// And a TIFF — what an ordinary image copy actually is — travels as a real file.
+    func testARealImageCopyTravelsAsAFile() throws {
+        let bitmap = NSImage(size: NSSize(width: 4, height: 4))
+        bitmap.lockFocus()
+        NSColor.orange.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 4, height: 4)).fill()
+        bitmap.unlockFocus()
+        let item = ClipboardItem(type: .image,
+                                 imageData: try XCTUnwrap(bitmap.tiffRepresentation))
+        defer { DragTempFile.clearLeftovers() }
+        XCTAssertNotNil(CardDragSourceView.nativeWriter(for: item) as? NSURL)
     }
 
     /// An item carrying nothing to build a URL or a file from still has to travel as something, so

@@ -99,8 +99,8 @@ enum RichTextRenderer {
 
     static func parse(_ item: ClipboardItem) -> ParsedRich? {
         guard item.type == .text || item.type == .url,
-              let data = item.richData, !data.isEmpty,
-              let rawType = item.richType
+              let rawType = item.richType,
+              let data = ClipboardStore.shared.richBytes(for: item), !data.isEmpty
         else { return nil }
 
         var docAttrs: NSDictionary?

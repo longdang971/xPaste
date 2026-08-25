@@ -173,12 +173,19 @@ final class CardDragSourceView: NSView, NSDraggingSource {
     /// itself: the real file where there is one, so Finder copies it and an upload zone receives it,
     /// and the picture or the link otherwise.
     static func nativeWriter(for item: ClipboardItem) -> NSPasteboardWriting {
+        let item = ClipboardStore.shared.hydrated(item)
         switch item.type {
         case .file, .folder:
             if let url = item.fileURLs?.first { return url as NSURL }
         case .image:
             if let url = DragTempFile.url(for: item) { return url as NSURL }
-            if let data = item.imageData, let image = NSImage(data: data) { return image }
+            // The bitmap itself when no file could be written — bytes in a format
+            // `recognisedImageExtension` cannot name, so there is no honest extension to give a
+            // file. `item.imageData` alone is not enough: a restored item never carries one, so
+            // this fell through to the line below and dropped the literal word "Image" into
+            // whatever the drag was released over.
+            if let data = item.imageData ?? ClipboardStore.shared.originalImageBytes(for: item),
+               let image = NSImage(data: data) { return image }
         case .url:
             if let text = item.text, let url = URL(string: text) { return url as NSURL }
         case .text, .color:

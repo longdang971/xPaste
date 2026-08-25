@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 private enum ClipboardTab { case all, pinned }
 
@@ -34,7 +35,15 @@ struct ContentView: View {
     @FocusState private var searchFocused: Bool
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     @AppStorage("accessibilityBannerDismissed") private var accessibilityBannerDismissed = false
-    private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    /// Polls for the Accessibility grant while the banner could still change.
+    ///
+    /// Started when the panel opens and stopped when it hides — and stopped for good the moment
+    /// permission is granted, because there is nothing left to detect. It used to be an
+    /// `.autoconnect()` publisher held for the app's whole life: a main-thread wake-up every two
+    /// seconds, forever, in an app whose entire design is about not paying for work nobody is
+    /// waiting on. It kept firing with the panel hidden, and kept firing long after the answer
+    /// had stopped being able to change.
+    @State private var permissionPoll: AnyCancellable?
 
     private var showAccessibilityBanner: Bool {
         !accessibilityTrusted && !accessibilityBannerDismissed
@@ -253,6 +262,7 @@ struct ContentView: View {
             // whole ContentView and force a ~110ms synchronous re-layout right as the close
             // animation starts — freezing the slide. Guarding keeps the close smooth.
             selection.isHidingPanel = true
+            stopPermissionPoll()
             if showSearch { showSearch = false }
             if !store.searchQuery.isEmpty { store.searchQuery = "" }
             // Filters go with the search box: reopening to a silently narrowed history reads
@@ -312,11 +322,9 @@ struct ContentView: View {
             if let first = displayedItems.first {
                 selection.select(first.id)
             }
+            startPermissionPoll()
         }
-        .onReceive(permissionTimer) { _ in
-            let trusted = AccessibilityPermission.isTrusted
-            if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
-        }
+
         .onReceive(NotificationCenter.default.publisher(for: .clipboardAlertShown)) { _ in
             alertPresented = true
         }
@@ -687,6 +695,7 @@ struct ContentView: View {
     }
 
     private func shareItems(for item: ClipboardItem) -> [Any] {
+        let item = ClipboardStore.shared.hydrated(item)
         switch item.type {
         case .url:
             if let text = item.text, let url = URL(string: text) { return [url] }
@@ -694,7 +703,8 @@ struct ContentView: View {
         case .text, .color:
             return [item.text ?? item.displayText]
         case .image:
-            let data = item.imageData ?? ClipboardStore.shared.imageBytes(for: item.id)
+            // Shared out of the app, so the original — same reason as Save as File.
+            let data = ClipboardStore.shared.originalImageBytes(for: item)
             if let data, let img = NSImage(data: data) { return [img] }
             return [item.displayText]
         case .file, .folder:
@@ -707,7 +717,7 @@ struct ContentView: View {
     /// Built only while the context menu is being assembled — i.e. once, on an explicit
     /// right-click — because deciding applicability means actually running each transform.
     private func transformMenu(for item: ClipboardItem) -> NSMenu? {
-        guard let text = item.text else { return nil }
+        guard let text = ClipboardStore.shared.fullText(for: item) else { return nil }
         let transforms = TextTransform.applicable(to: text, type: item.type)
         guard !transforms.isEmpty else { return nil }
         let submenu = NSMenu()
@@ -728,7 +738,10 @@ struct ContentView: View {
     }
 
     private func pasteTransformed(_ item: ClipboardItem, using transform: TextTransform) {
-        guard let text = item.text, let transformed = transform.apply(to: text) else { return }
+        // The whole text, not the prefix the card shows: a transform rewrites what gets pasted, and
+        // one applied to a truncated copy would paste a truncated result.
+        guard let text = ClipboardStore.shared.fullText(for: item),
+              let transformed = transform.apply(to: text) else { return }
         writePlainTextAndPaste(transformed, reorder: item.id)
     }
 
@@ -737,7 +750,8 @@ struct ContentView: View {
     /// still carry an image or a real file instead of text.
     private func pasteSelected() {
         let chosen = displayedItems.filter { selection.contains($0.id) }
-        guard let joined = MultiPaste.joinedText(for: chosen, separator: .stored()) else {
+        guard let joined = MultiPaste.joinedText(for: chosen.map(ClipboardStore.shared.hydrated),
+                                                 separator: .stored()) else {
             if let single = chosen.first { pasteItem(single) }
             return
         }
@@ -980,7 +994,8 @@ struct ContentView: View {
         // `writePlainTextAndPaste` also tells the monitor the change is ours; otherwise it
         // re-captures the pasted text with the target app as the source and overwrites the
         // item's real source app.
-        writePlainTextAndPaste(item.text ?? item.displayText, reorder: item.id)
+        writePlainTextAndPaste(ClipboardStore.shared.fullText(for: item) ?? item.displayText,
+                               reorder: item.id)
     }
 
     private func toggleSelection(_ id: UUID) {
@@ -1026,6 +1041,24 @@ struct ContentView: View {
     /// Moves the single-item selection by `delta` in display order (clamped to the ends) and
     /// asks the list to scroll the newly selected card into view. With nothing selected yet,
     /// the first arrow press lands on an end so navigation can start from a clean state.
+    /// See `permissionPoll`. Never started once the answer is settled.
+    private func startPermissionPoll() {
+        guard permissionPoll == nil, !accessibilityTrusted else { return }
+        permissionPoll = Timer.publish(every: 2, on: .main, in: .common)
+            .autoconnect()
+            .sink { _ in
+                let trusted = AccessibilityPermission.isTrusted
+                guard trusted != accessibilityTrusted else { return }
+                accessibilityTrusted = trusted
+                if trusted { stopPermissionPoll() }
+            }
+    }
+
+    private func stopPermissionPoll() {
+        permissionPoll?.cancel()
+        permissionPoll = nil
+    }
+
     private func moveSelection(by delta: Int) {
         let ids = displayedItems.map(\.id)
         guard !ids.isEmpty else { return }

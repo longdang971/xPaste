@@ -151,6 +151,28 @@ enum SaveFormat {
     static func recognisedImageExtension(for data: Data) -> String? {
         if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "png" }
         if data.starts(with: [0xFF, 0xD8, 0xFF]) { return "jpg" }
+        if data.starts(with: [0x47, 0x49, 0x46, 0x38]) { return "gif" }
+        // TIFF, both byte orders. Not an exotic case: it is what a picture copied on macOS
+        // actually is. `NSPasteboard` offers `public.tiff` and nothing else for an ordinary image
+        // copy — measured — so leaving it out meant the one format people copy most was the one
+        // format this could not name. A drag then wrote no file at all and handed the target the
+        // word "Image"; a save wrote TIFF bytes into a file called `.png`.
+        if data.starts(with: [0x49, 0x49, 0x2A, 0x00]) { return "tiff" }
+        if data.starts(with: [0x4D, 0x4D, 0x00, 0x2A]) { return "tiff" }
+        // HEIC/HEIF: `ftyp` box at offset 4, brand at 8.
+        if data.count >= 12, data[4..<8].elementsEqual([0x66, 0x74, 0x79, 0x70]) {
+            let brand = data[8..<12]
+            if brand.elementsEqual([0x68, 0x65, 0x69, 0x63])      // heic
+                || brand.elementsEqual([0x68, 0x65, 0x69, 0x78])   // heix
+                || brand.elementsEqual([0x6D, 0x69, 0x66, 0x31] ) { // mif1
+                return "heic"
+            }
+        }
+        // WebP: "RIFF" .... "WEBP"
+        if data.count >= 12, data.starts(with: [0x52, 0x49, 0x46, 0x46]),
+           data[8..<12].elementsEqual([0x57, 0x45, 0x42, 0x50]) {
+            return "webp"
+        }
         return nil
     }
 

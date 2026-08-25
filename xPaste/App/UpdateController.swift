@@ -168,7 +168,7 @@ final class UpdateController: NSObject, ObservableObject, URLSessionDownloadDele
                 self.state = .error(message: "The downloaded file could not be saved.")
                 return
             }
-            self.prepare(archiveAt: temp)
+            await self.prepare(archiveAt: temp)
         }
     }
 
@@ -187,7 +187,7 @@ final class UpdateController: NSObject, ObservableObject, URLSessionDownloadDele
 
     /// Unpacks the download and stops at `.readyToInstall`, which is as far as this goes without
     /// being asked: replacing the app quits it, and quitting an app is the user's call.
-    private func prepare(archiveAt archive: URL) {
+    private func prepare(archiveAt archive: URL) async {
         state = .preparing
         let destination = Bundle.main.bundleURL
 
@@ -203,7 +203,14 @@ final class UpdateController: NSObject, ObservableObject, URLSessionDownloadDele
         // out of it on success, and no failure below has any further use for it.
         defer { try? FileManager.default.removeItem(at: archive) }
         do {
-            let staged = try UpdateInstaller.stageApp(fromArchiveAt: archive)
+            // Off the main actor. `stageApp` shells out to `ditto -x -k` (or `hdiutil attach` and
+            // then `ditto`) and waits for it, which for an app bundle is seconds — spent with the
+            // main thread blocked inside `waitUntilExit`. The window could not even repaint the
+            // "Preparing" it had just been put into: the whole app beachballed until the unpack
+            // finished.
+            let staged = try await Task.detached(priority: .userInitiated) {
+                try UpdateInstaller.stageApp(fromArchiveAt: archive)
+            }.value
             state = .readyToInstall(version: pendingVersion, stagingApp: staged,
                                     destApp: destination)
         } catch {

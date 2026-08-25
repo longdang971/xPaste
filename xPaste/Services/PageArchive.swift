@@ -52,6 +52,12 @@ enum PageArchive {
             throw Failure.unreachable(status: http.statusCode)
         }
         guard !data.isEmpty else { throw Failure.empty }
+        // The declared length first, so a response that announced itself as too large is refused
+        // on its header. Then what actually arrived, because a server may declare nothing at all
+        // (-1) or declare wrongly. Neither stops the body being received — `data(for:)` has
+        // already buffered it — so this bounds what is written, not what is read.
+        let declared = response.expectedContentLength
+        if declared > 0, declared > Int64(byteCap) { throw Failure.tooLarge(bytes: Int(declared)) }
         guard data.count <= byteCap else { throw Failure.tooLarge(bytes: data.count) }
         return HTMLCharset.declaring(data, charset: (response as? HTTPURLResponse)?.textEncodingName)
     }

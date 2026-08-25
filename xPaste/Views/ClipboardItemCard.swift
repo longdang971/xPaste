@@ -272,7 +272,7 @@ struct ClipboardItemCard: View {
 
             // Built here, never in `body`: parsing RTF and laying it out is TextKit work, and a
             // card that did it per body pass would re-measure on every panel re-layout.
-            if item.richData != nil,
+            if item.carriesRichText,
                item.type == .text || item.type == .url,
                resolved.url == nil,
                detectedColor == nil {
@@ -1069,8 +1069,10 @@ struct ClipboardItemCard: View {
     private func buildFooterLabel() -> String {
         switch item.type {
         case .text, .url, .color:
-            let n = item.text?.count ?? 0
-            return "\(n) characters"
+            // `textLength`, not `text.count`: what the card holds is capped at
+            // `ItemEntity.previewCharLimit`, so counting it reported the cap instead of the item
+            // for anything longer — every long paste read "4096 characters".
+            return "\(item.textLength) characters"
         case .image:
             let kb = (item.imageSize ?? item.imageData?.count ?? 0) / 1024
             return "\(kb) KB"

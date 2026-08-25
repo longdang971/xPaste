@@ -34,7 +34,14 @@ final class ClipboardStoreTests: XCTestCase {
         XCTAssertTrue(store.items.contains { $0.isPinned })
     }
 
-    func test_trim_never_removes_pinned() {
+    /// Deliberately NOT a test of the cap, despite what it used to be called.
+    ///
+    /// `maxItems` clamps its own argument up to `ClipboardStore.minHistoryCount` (500), so the `5`
+    /// this store was built with is 500 by the time `trim()` reads it — eight items never came near
+    /// it and the assertion passed without a trim ever running. What this does check is still worth
+    /// checking: adding a run of items leaves a pinned one alone. The cap itself is exercised in
+    /// `HistoryCapTests`, which is the only place that can, because it takes 501 items to get there.
+    func test_adding_many_items_leaves_a_pinned_one_alone() {
         var pinned = ClipboardItem(type: .text, text: "keep me")
         pinned.isPinned = true
         store.add(pinned)

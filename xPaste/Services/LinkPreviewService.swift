@@ -26,7 +26,13 @@ private struct CachedLinkMeta: Codable {
 actor LinkPreviewService {
     static let shared = LinkPreviewService()
 
+    /// Bounded to the same size as the directory behind it.
+    ///
+    /// It used to be a plain dictionary that only ever grew: the disk cache was evicted at 200
+    /// entries and this was not, so a long session accumulated an entry for every link ever
+    /// previewed. `metaOrder` is the insertion order eviction reads.
     private var metaCache: [URL: CachedLinkMeta] = [:]
+    private var metaOrder: [URL] = []
     // NSCache (thread-safe, count-bounded) instead of plain dictionaries: the old dict eviction
     // removed `keys.first`, whose order is unspecified, so it could drop the entry just inserted,
     // and neither dict was ever bounded — decoded NSImages leaked for the whole session.
@@ -47,9 +53,20 @@ actor LinkPreviewService {
     /// The largest preview picture worth holding. A card draws it at 232pt.
     private static let imageByteCap = 8 * 1024 * 1024
 
-    /// Refuses a body the server has already declared too large, before it is decoded.
+    /// Whether a response is small enough to keep.
+    ///
+    /// Both halves matter and they answer different questions. `expectedContentLength` is what the
+    /// server declared, checked so an oversized body is refused on its header rather than after it
+    /// has been decoded into an `NSImage`; `data.count` is what actually arrived, checked because a
+    /// server may declare nothing (-1) or declare wrongly.
+    ///
+    /// What this does *not* do is stop the bytes being received: `URLSession.data(for:)` has
+    /// already buffered the whole response by the time it returns. Closing that would mean reading
+    /// the body a byte at a time, which every ordinary preview would pay for.
     private static func withinCap(_ response: URLResponse, _ data: Data, cap: Int) -> Bool {
-        data.count <= cap
+        let declared = response.expectedContentLength
+        if declared > 0, declared > Int64(cap) { return false }
+        return data.count <= cap
     }
 
     init() {
@@ -107,7 +124,7 @@ actor LinkPreviewService {
             imageCache.setObject(image, forKey: url as NSURL, cost: image.approximateDecodedBytes)
             var meta = CachedLinkMeta(url: url, title: nil, imageURL: url, domain: domain)
             meta.isDirectImage = true
-            metaCache[url] = meta
+            remember(meta)
             persistToDisk(meta)
             evictDiskIfNeeded()
             return LinkPreviewData(title: nil, imageURL: url, image: nil, domain: domain,
@@ -133,7 +150,7 @@ actor LinkPreviewService {
         // Don't cache a fully-empty result — an error/redirect page that still returns HTML
         // would otherwise poison the cache and block a real preview once the site recovers.
         if title != nil || ogImageURL != nil {
-            metaCache[url] = meta
+            remember(meta)
             persistToDisk(meta)
             evictDiskIfNeeded()
         }
@@ -183,6 +200,16 @@ actor LinkPreviewService {
         return nil
     }
 
+    /// Records a metadata entry, dropping the oldest once there are more than the disk keeps.
+    private func remember(_ meta: CachedLinkMeta) {
+        if metaCache[meta.url] == nil { metaOrder.append(meta.url) }
+        metaCache[meta.url] = meta
+        while metaOrder.count > maxDiskEntries {
+            let oldest = metaOrder.removeFirst()
+            metaCache.removeValue(forKey: oldest)
+        }
+    }
+
     private func cacheKey(for url: URL) -> String {
         let hash = url.absoluteString.utf8.reduce(UInt64(5381)) { ($0 &* 31) &+ UInt64($1) }
         return String(format: "%016llx", hash)
@@ -203,7 +230,7 @@ actor LinkPreviewService {
             guard let data = try? Data(contentsOf: file),
                   let meta = try? decoder.decode(CachedLinkMeta.self, from: data)
             else { continue }
-            metaCache[meta.url] = meta
+            remember(meta)
         }
     }
 

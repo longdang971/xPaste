@@ -87,7 +87,8 @@ enum DragPaste {
             // unrelated captures. `joinedText` returns nil when fewer than two of them have any
             // text to contribute — two unnamed images, say — and then the first item is the best
             // that can be done, picture and all.
-            if let joined = MultiPaste.joinedText(for: plan.items, separator: separator) {
+            if let joined = MultiPaste.joinedText(for: plan.items.map(ClipboardStore.shared.hydrated),
+                                                  separator: separator) {
                 return .plain(joined)
             }
             return .item(first)
@@ -125,8 +126,11 @@ enum DragPaste {
         case let .plain(text):
             return text.utf16.count
         case let .item(item):
+            // What actually lands, not what the card shows: this length is the range the paste
+            // then re-selects through Accessibility, and measuring the prefix would leave the
+            // selection short of the text it just inserted.
             guard item.type == .text || item.type == .url || item.type == .color,
-                  let text = item.text else { return nil }
+                  let text = ClipboardStore.shared.fullText(for: item) else { return nil }
             return text.utf16.count
         }
     }

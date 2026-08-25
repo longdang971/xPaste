@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import ServiceManagement
 import Carbon.HIToolbox
 import UniformTypeIdentifiers
@@ -231,7 +232,31 @@ private struct GeneralTab: View {
     @AppStorage("multiPasteSeparator") private var multiPasteSeparator: String = "newline"
     @AppStorage("alwaysPastePlainText") private var alwaysPastePlainText: Bool = false
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
-    private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    /// Polls for the Accessibility grant while this window is on screen.
+    ///
+    /// It used to be an `.autoconnect()` publisher held by the view, and the Settings window is
+    /// kept between visits rather than rebuilt — so nothing ever tore it down. One visit to
+    /// Settings left `AXIsProcessTrusted()` being called every two seconds for the rest of the
+    /// session, with the window closed and the answer no longer able to change.
+    @State private var permissionPoll: AnyCancellable?
+
+    /// See `permissionPoll`. Never started once the answer is settled.
+    private func startPermissionPoll() {
+        guard permissionPoll == nil, !accessibilityTrusted else { return }
+        permissionPoll = Timer.publish(every: 2, on: .main, in: .common)
+            .autoconnect()
+            .sink { _ in
+                let trusted = AccessibilityPermission.isTrusted
+                guard trusted != accessibilityTrusted else { return }
+                accessibilityTrusted = trusted
+                if trusted { stopPermissionPoll() }
+            }
+    }
+
+    private func stopPermissionPoll() {
+        permissionPoll?.cancel()
+        permissionPoll = nil
+    }
 
     private let keepLabels = HistoryRetention.labels
     private var keepDescription: String {
@@ -435,11 +460,15 @@ private struct GeneralTab: View {
         .onAppear {
             launchAtLogin = SMAppService.mainApp.status == .enabled
             accessibilityTrusted = AccessibilityPermission.isTrusted
+            startPermissionPoll()
         }
-        .onReceive(permissionTimer) { _ in
-            let trusted = AccessibilityPermission.isTrusted
-            if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsWindowWillShow)) { _ in
+            startPermissionPoll()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .settingsWindowDidClose)) { _ in
+            stopPermissionPoll()
+        }
+        .onDisappear(perform: stopPermissionPoll)
         .confirmationDialog(
             "Delete all unpinned clipboard history?",
             isPresented: $showEraseConfirm,

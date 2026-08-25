@@ -28,6 +28,10 @@ final class DurabilityTests: XCTestCase {
     /// Saves are queued, so quitting straight after a copy used to leave most of them unwritten —
     /// measured at two of six item files, and none of the image, at the moment
     /// `applicationWillTerminate` would have run.
+    ///
+    /// Asserted by reopening rather than by counting files: the history is a database now, and
+    /// "written" means a second store opened on the same directory can see it. That is also the
+    /// only thing the old file count was ever standing in for.
     func testFlushingLeavesNothingUnwritten() {
         let store = ClipboardStore(maxItems: 50, storageDir: directory)
         for i in 0..<5 { store.add(ClipboardItem(type: .text, text: "item \(i)")) }
@@ -35,7 +39,7 @@ final class DurabilityTests: XCTestCase {
 
         store.flushPendingWrites()
 
-        XCTAssertEqual(fileCount("items"), 6)
+        XCTAssertEqual(ClipboardStore(maxItems: 50, storageDir: directory).items.count, 6)
         XCTAssertEqual(fileCount("images"), 1)
     }
 
@@ -115,14 +119,20 @@ final class DragTempFileTests: XCTestCase {
 
     /// Bytes that do not announce a format get no file — naming one would put the same lie
     /// somewhere new. The caller drags the bitmap instead.
+    ///
+    /// Written with BMP. It used to use TIFF, on the understanding that TIFF was among the formats
+    /// this could not name — which was true, and was itself the bug: TIFF is what `NSPasteboard`
+    /// hands over for an ordinary image copy, so the commonest picture in the history was the one
+    /// a drag refused to write. See `testARealImageCopyCanBeDraggedOutAsAFile`.
     func testBytesThatNameNoFormatGetNoFile() throws {
         let drawn = NSImage(size: NSSize(width: 2, height: 2))
         drawn.lockFocus()
         NSColor.black.setFill()
         NSBezierPath(rect: NSRect(x: 0, y: 0, width: 2, height: 2)).fill()
         drawn.unlockFocus()
-        let tiff = try XCTUnwrap(drawn.tiffRepresentation)
-        let item = ClipboardItem(type: .image, imageData: tiff)
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(drawn.tiffRepresentation)))
+        let bmp = try XCTUnwrap(rep.representation(using: .bmp, properties: [:]))
+        let item = ClipboardItem(type: .image, imageData: bmp)
 
         XCTAssertNil(DragTempFile.url(for: item))
     }
