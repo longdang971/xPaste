@@ -2,6 +2,59 @@ import SwiftUI
 import AppKit
 import WebKit
 
+/// Whether a key press should close the item preview.
+///
+/// Space opens the preview from the bar, so space is what a user reaches for to put it away —
+/// and for a text item it did nothing. The popover's own hidden `.keyboardShortcut(.space)`
+/// button never resolved, because a text preview hands first responder to its `NSTextView`
+/// (measured: `firstResponder` is `IBeamTextView` with the popover up) and a text view treats a
+/// plain space as its own — it scrolls a page and swallows the event. The bar's space button,
+/// one window up, never saw it either. So the decision is made from a key monitor instead, which
+/// runs before the window dispatches the event to anything.
+enum PreviewSpaceKey {
+    static let spaceKeyCode: UInt16 = 49
+
+    /// `firstResponder` is whatever holds focus at the moment of the press. Editable text is the
+    /// one thing a space still belongs to: the search box, a card being renamed, the editor.
+    static func closes(keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
+                       firstResponder: NSResponder?) -> Bool {
+        guard keyCode == spaceKeyCode else { return false }
+        // Caps Lock is not a binding anyone makes, so it is not treated as a modifier here.
+        let mods = modifiers.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        guard mods.isEmpty else { return false }
+        if let text = firstResponder as? NSText, text.isEditable { return false }
+        return true
+    }
+}
+
+/// Watches for that space for as long as the preview is on screen.
+///
+/// A local monitor, not a global one: this is xPaste's own key press. It is torn down both when
+/// the popover disappears and in `deinit`, because a monitor left behind would keep eating spaces
+/// with nothing left to close — the shape of a leak this app has been bitten by before.
+final class PreviewSpaceMonitor: ObservableObject {
+    private var monitor: Any?
+
+    func start(onClose: @escaping () -> Void) {
+        stop()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard PreviewSpaceKey.closes(keyCode: event.keyCode,
+                                         modifiers: event.modifierFlags,
+                                         firstResponder: event.window?.firstResponder)
+            else { return event }
+            onClose()
+            return nil
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    deinit { stop() }
+}
+
 struct PreviewPopoverContent: View {
     let item: ClipboardItem
     var onClose: () -> Void
@@ -19,6 +72,8 @@ struct PreviewPopoverContent: View {
     /// so showing the cap here meant a long paste appeared to end at 4096 characters, with the
     /// footer agreeing that it did.
     @State private var wholeText: String?
+    /// See `PreviewSpaceKey`: the space that closes this window cannot be a key equivalent.
+    @StateObject private var spaceMonitor = PreviewSpaceMonitor()
     @Environment(\.colorScheme) private var colorScheme
 
     /// The text to show, count and share: the whole of it once it has arrived, the prefix until
@@ -84,11 +139,8 @@ struct PreviewPopoverContent: View {
                 }.value
             }
         }
-        .background {
-            Button("") { onClose() }
-                .keyboardShortcut(.space, modifiers: [])
-                .opacity(0).frame(width: 0, height: 0)
-        }
+        .onAppear { spaceMonitor.start(onClose: onClose) }
+        .onDisappear { spaceMonitor.stop() }
     }
 
     private var header: some View {
