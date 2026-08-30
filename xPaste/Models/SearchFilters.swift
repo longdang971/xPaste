@@ -94,8 +94,6 @@ struct SearchFilters: Equatable {
 
     var isEmpty: Bool { types.isEmpty && apps.isEmpty && date == nil }
 
-    var activeCount: Int { types.count + apps.count + (date == nil ? 0 : 1) }
-
     mutating func toggle(_ type: FilterType) {
         if types.contains(type) { types.remove(type) } else { types.insert(type) }
     }

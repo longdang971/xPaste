@@ -1,0 +1,13 @@
+# Dead-code scan: `periphery scan`
+#
+# Tests are indexed, so a declaration only a test uses is not reported — several of those are
+# deliberate observation seams (`ClipboardMonitor.ownsCurrentChange`, `EditWindowPresenter.isOpen`)
+# that exist so a test can see behaviour the app drives internally.
+#
+# False positives the tool cannot see through are marked at the declaration with
+# `// periphery:ignore`, next to the reason. Anything this reports should be real.
+project: xPaste.xcodeproj
+schemes:
+  - xPaste
+retain_objc_accessible: true
+retain_swift_ui_previews: true

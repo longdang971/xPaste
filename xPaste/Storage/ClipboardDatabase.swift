@@ -19,9 +19,6 @@ final class ClipboardDatabase {
     /// `performAndWait` behind the backlog is what `flush()` is.
     private let writeContext: NSManagedObjectContext
 
-    /// Where the store file lives, or nil for an in-memory store.
-    let storeURL: URL?
-
     /// Opens (or creates) the store under `storageDir`. A nil directory gives an in-memory store,
     /// which is what the tests use and what a store with nowhere to write falls back to.
     init?(storageDir: URL?) {
@@ -37,11 +34,9 @@ final class ClipboardDatabase {
             // A clipboard history is written on nearly every copy and read in one burst at launch.
             // WAL is what keeps a write from blocking that read.
             description.setValue("WAL" as NSString, forPragmaNamed: "journal_mode")
-            storeURL = url
         } else {
             description = NSPersistentStoreDescription()
             description.type = NSInMemoryStoreType
-            storeURL = nil
         }
         description.shouldAddStoreAsynchronously = false
         container.persistentStoreDescriptions = [description]

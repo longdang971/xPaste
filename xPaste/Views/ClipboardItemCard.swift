@@ -15,10 +15,15 @@ struct CardActions {
 /// it is showing, and which appearance it is showing it in. A light/dark flip must re-run the task
 /// so the rich preview is rebuilt for the mode now on screen.
 struct CardTaskKey: Equatable {
+    // Every property here exists to be compared by synthesised `==`, which is the entire job of
+    // the type; none is read anywhere else by design.
+    // periphery:ignore
     let itemID: UUID
+    // periphery:ignore
     let isLightAppearance: Bool
     /// The search term the card's work was done for. A formatted card bakes the highlight into its
     /// bitmap, so a new term is new work — the same way a light/dark flip is.
+    // periphery:ignore
     var highlightTerm: String = ""
     /// Which version of the item's content the work was done for.
     ///
@@ -26,13 +31,13 @@ struct CardTaskKey: Equatable {
     /// card keeps every piece of `@State` it derived from the old text — the parsed bitmap, the file
     /// it used to point at, the thumbnail of that file. Purging the shared caches cannot reach any
     /// of those; only re-running the task can.
+    // periphery:ignore
     var contentRevision: Int = 0
 }
 
 struct ClipboardItemCard: View {
     let item: ClipboardItem
     let index: Int
-    let isCopied: Bool
     var actions: CardActions? = nil
     /// Turns the header title into an editable field. Driven by ContentView, which owns
     /// "which card is being renamed" so only one can be at a time.
@@ -1320,16 +1325,12 @@ struct ClipboardItemCard: View {
     }
 
     /// Whether a header bar is pale enough to need dark text. Deliberately higher than the 0.5
-    /// mid-point `isLightColor` uses: white still reads better on saturated brand colours such
-    /// as Mail's or Xcode's blue, whose luminance drifts just past 0.5 on the green coefficient.
+    /// mid-point `isLight` uses: white still reads better on saturated brand colours such as
+    /// Mail's or Xcode's blue, whose luminance drifts just past 0.5 on the green coefficient.
     private func isPaleColor(_ color: Color) -> Bool {
         guard let ns = NSColor(color).usingColorSpace(.deviceRGB) else { return true }
         let luminance = 0.2126 * ns.redComponent + 0.7152 * ns.greenComponent + 0.0722 * ns.blueComponent
         return luminance > 0.62
-    }
-
-    private func isLightColor(_ color: Color) -> Bool {
-        Self.isLight(NSColor(color))
     }
 
     /// Whether `colour` is light enough that dark text reads better on it.
@@ -1368,17 +1369,6 @@ private extension ClipboardContentType {
         case .image:  return "Image"
         case .file:   return "File"
         case .folder: return "Folder"
-        }
-    }
-
-    var iconName: String {
-        switch self {
-        case .text:   return "text.alignleft"
-        case .url:    return "link"
-        case .color:  return "paintpalette"
-        case .image:  return "photo"
-        case .file:   return "doc.fill"
-        case .folder: return "folder.fill"
         }
     }
 

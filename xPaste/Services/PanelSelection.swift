@@ -40,13 +40,6 @@ final class PanelSelection: ObservableObject {
         set(next)
     }
 
-    func remove(_ id: UUID) {
-        guard ids.contains(id) else { return }
-        var next = ids
-        next.remove(id)
-        set(next)
-    }
-
     func clear() { set([]) }
 
     /// What the selection should become once the visible row has changed underneath it.
@@ -89,7 +82,6 @@ final class PanelSelection: ObservableObject {
         return items[..<firstGap].last(where: { !deleted.contains($0) })
     }
 
-    var isEmpty: Bool { ids.isEmpty }
     var count: Int { ids.count }
     func contains(_ id: UUID) -> Bool { ids.contains(id) }
 }

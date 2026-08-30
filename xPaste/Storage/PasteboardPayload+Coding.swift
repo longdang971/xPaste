@@ -77,8 +77,13 @@ private enum PayloadEnvelope {
 /// cheap and rarely wrong, not unique. Same shape as `ClipboardItem.makeHash`, which does this for
 /// image dedup at the item level.
 struct BlobKey: Hashable {
+    // The three below are what synthesised `Hashable` and `==` read, and nothing else is meant
+    // to — which is exactly what an unused-property check sees.
+    // periphery:ignore
     private let count: Int
+    // periphery:ignore
     private let head: [UInt8]
+    // periphery:ignore
     private let tail: [UInt8]
 
     init(_ data: Data) {

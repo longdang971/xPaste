@@ -537,7 +537,7 @@ final class ImageFidelityTests: XCTestCase {
 
     func testEverythingElseGetsTheOriginal() throws {
         let (png, jpeg) = try picture(120)
-        let item = addImage(original: png, thumbnail: jpeg)
+        _ = addImage(original: png, thumbnail: jpeg)
         let restored = try XCTUnwrap(store.items.first)
 
         XCTAssertEqual(store.originalImageBytes(for: restored), png)

@@ -197,7 +197,7 @@ enum SaveFormat {
         if TextTransform.jsonObject(in: raw) != nil { return "json" }
         if let ext = structuralExtension(lower: lower) { return ext }
         if let ext = shebangExtension(in: trimmed) { return ext }
-        if let ext = languageExtension(trimmed: trimmed, lower: lower) { return ext }
+        if let ext = languageExtension(trimmed: trimmed) { return ext }
         if isCSV(head, truncated: truncated) { return "csv" }
         return "txt"
     }
@@ -231,7 +231,7 @@ enum SaveFormat {
     /// because `import Foundation` is an import statement in both grammars; TypeScript and
     /// JavaScript come before CSS because `interface User { id: number; }` is also, letter for
     /// letter, a valid CSS rule.
-    private static func languageExtension(trimmed: String, lower: String) -> String? {
+    private static func languageExtension(trimmed: String) -> String? {
         if trimmed.contains("<?php") { return "php" }
 
         if trimmed.contains("import SwiftUI") || trimmed.contains("import AppKit")

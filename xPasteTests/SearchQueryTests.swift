@@ -3,7 +3,7 @@ import XCTest
 
 final class SearchQueryTests: XCTestCase {
 
-    private func noAppNames(_ bundleID: String) -> String? { nil }
+    private func noAppNames(_: String) -> String? { nil }
 
     func test_plain_query_is_free_text() {
         let q = SearchQuery.parse("hello world")

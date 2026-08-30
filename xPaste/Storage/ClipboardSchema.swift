@@ -96,8 +96,6 @@ final class ApplicationEntity: NSManagedObject {
 /// `allowsExternalBinaryDataStorage`, is settable here and verifiable in a test.
 enum ClipboardSchema {
 
-    static let modelVersion = 1
-
     /// Built once for the process.
     ///
     /// `NSManagedObject` subclasses resolve their entity through `+entity`, which searches every

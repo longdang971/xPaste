@@ -176,11 +176,6 @@ struct ClipboardItem: Identifiable, Codable {
         }
     }
 
-    var previewImage: NSImage? {
-        guard let data = imageData else { return nil }
-        return NSImage(data: data)
-    }
-
     static func from(pasteboard: NSPasteboard) -> ClipboardItem? {
         // Read once, up front, and attach to whichever item is built below. Every branch wants it,
         // and reading the pasteboard twice is reading it at two different moments: the contents can

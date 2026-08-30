@@ -11,7 +11,6 @@ struct ContentView: View {
     private var selection: PanelSelection { .shared }
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("panelPosition") private var panelPosition: String = "bottom"
-    @State private var copiedID: UUID?
     @State private var showSearch = false
     @State private var previewItemID: UUID?
     @State private var scrollTargetID: UUID?
@@ -510,7 +509,7 @@ struct ContentView: View {
                         }
                         ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                             ClipboardItemCard(
-                                item: item, index: index + 1, isCopied: copiedID == item.id,
+                                item: item, index: index + 1,
                                 actions: cardActions(for: item),
                                 isRenaming: renameItemID == item.id,
                                 onRenameEnd: { endRename($0) },
@@ -564,7 +563,7 @@ struct ContentView: View {
                     }
                     ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                         ClipboardItemCard(
-                            item: item, index: index + 1, isCopied: copiedID == item.id,
+                            item: item, index: index + 1,
                             actions: cardActions(for: item),
                             isRenaming: renameItemID == item.id,
                             onRenameEnd: { endRename($0) },
@@ -996,13 +995,7 @@ struct ContentView: View {
 
     private func copyItem(_ item: ClipboardItem) {
         item.copyToPasteboard()
-        withAnimation(.spring(response: 0.3)) {
-            store.moveToTop(item)
-            copiedID = item.id
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            withAnimation { copiedID = nil }
-        }
+        withAnimation(.spring(response: 0.3)) { store.moveToTop(item) }
     }
 
     private func pasteItem(_ item: ClipboardItem) {

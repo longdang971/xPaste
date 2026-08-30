@@ -192,7 +192,7 @@ final class SearchFiltersTests: XCTestCase {
         filters.toggle(.image)
         filters.toggle(app: "com.google.Chrome")
         filters.toggle(date: .today)
-        XCTAssertEqual(filters.activeCount, 3)
+        XCTAssertFalse(filters.isEmpty)
 
         filters.clear()
 

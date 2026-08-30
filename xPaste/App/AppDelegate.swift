@@ -3,6 +3,9 @@ import Carbon.HIToolbox
 import SwiftUI
 import UniformTypeIdentifiers
 
+// periphery:ignore:parameters nextHandler,event,userData
+// The signature is Carbon's `EventHandlerUPP`, not ours: every parameter is required for the
+// function to be installable, and this handler needs none of them.
 private func hotKeyEventHandler(
     _ nextHandler: EventHandlerCallRef?,
     _ event: EventRef?,
@@ -530,6 +533,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem?.isVisible = UserDefaults.standard.object(forKey: "showMenuBarIcon") as? Bool ?? true
     }
 
+    // periphery:ignore:parameters sender
+    // Target/action hands the button in; the event this needs comes from `NSApp.currentEvent`.
     @objc private func statusBarButtonClicked(_ sender: NSStatusBarButton) {
         guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {

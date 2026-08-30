@@ -37,15 +37,6 @@ enum PerfLog {
         lastMark = now
     }
 
-    /// Times a single synchronous step.
-    @discardableResult
-    static func step<T>(_ label: String, _ body: () -> T) -> T {
-        guard enabled else { return body() }
-        let result = body()
-        mark(label)
-        return result
-    }
-
     /// Prints every mark of the current run, slowest step first in the summary line.
     static func end(_ note: String = "") {
         guard enabled, runStart > 0 else { return }
@@ -98,17 +89,6 @@ enum PerfLog {
     static func note(_ message: String) {
         guard enabled else { return }
         logger.info("· \(message, privacy: .public)")
-    }
-
-    /// Times a block and notes it, without disturbing the current run's marks.
-    @discardableResult
-    static func measure<T>(_ label: String, _ body: () -> T) -> T {
-        guard enabled else { return body() }
-        let start = CFAbsoluteTimeGetCurrent()
-        let result = body()
-        let ms = (CFAbsoluteTimeGetCurrent() - start) * 1000
-        if ms > 0.5 { note("\(label): \(String(format: "%.2f", ms))ms") }
-        return result
     }
 }
 

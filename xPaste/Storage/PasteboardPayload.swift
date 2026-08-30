@@ -182,17 +182,6 @@ struct PasteboardPayload: Equatable {
         return nil
     }
 
-    /// The formatted representation to render a card and seed the editor from — RTF first, HTML
-    /// second, which is the order `captureRich` used before the payload existed and the order
-    /// `RichTextRenderer` can actually parse.
-    var richRepresentation: (data: Data, type: String)? {
-        for candidate in [NSPasteboard.PasteboardType.rtf.rawValue,
-                          NSPasteboard.PasteboardType.html.rawValue] {
-            if let d = data(forType: candidate), !d.isEmpty { return (d, candidate) }
-        }
-        return nil
-    }
-
     /// The picture as the source app offered it, and the type it offered it under.
     ///
     /// PNG first, then TIFF, then JPEG: the first two are lossless and the third is what is left.

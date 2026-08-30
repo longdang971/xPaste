@@ -324,7 +324,10 @@ struct PreviewPopoverContent: View {
         .padding(.vertical, 7)
     }
 
-    private static func textStats(_ text: String) -> String {
+    /// Pure, and `nonisolated` so the detached task that calls it is not hopping back to the
+    /// main actor to count the characters of a document — which is the whole reason that call is
+    /// detached.
+    nonisolated private static func textStats(_ text: String) -> String {
         let chars = text.count
         let words = text.split { $0 == " " || $0.isNewline }.filter { !$0.isEmpty }.count
         let lines = text.isEmpty ? 0 : text.components(separatedBy: .newlines).count
