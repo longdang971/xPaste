@@ -260,5 +260,50 @@ final class CardFooterLabelTests: XCTestCase {
         XCTAssertEqual(ClipboardItemCard.footerHeight(for: ClipboardItem(type: .image)),
                        PanelLayout.cardFooterHeight)
     }
+
+}
+
+/// Asking for the https version of a link copied as plain http.
+///
+/// macOS refuses a plain-http request from an app with no ATS exception before it reaches the
+/// network — `NSURLErrorDomain -1022`, measured — so a link copied as `http://…` got no preview at
+/// all: no title, no picture, just the plate. Nearly every site with a title worth showing serves
+/// it over https too, so asking for that costs one scheme and needs no exception.
+final class SecureTwinTests: XCTestCase {
+
+    private func twin(_ s: String) -> String {
+        LinkPreviewService.secureTwin(of: URL(string: s)!).absoluteString
+    }
+
+    func test_an_http_url_is_asked_for_over_https() {
+        XCTAssertEqual(twin("http://example.com/"), "https://example.com/")
+    }
+
+    /// The path, query and fragment are what name the page; only the scheme changes.
+    func test_everything_after_the_scheme_is_left_alone() {
+        XCTAssertEqual(twin("http://a.test/one/two?x=1&y=2#frag"), "https://a.test/one/two?x=1&y=2#frag")
+    }
+
+    func test_a_url_that_is_already_secure_is_untouched() {
+        XCTAssertEqual(twin("https://example.com/a"), "https://example.com/a")
+    }
+
+    /// Nothing else is a page to scrape, and rewriting one would be a request the caller never made.
+    func test_other_schemes_are_untouched() {
+        XCTAssertEqual(twin("file:///tmp/x"), "file:///tmp/x")
+        XCTAssertEqual(twin("ftp://files.test/pub"), "ftp://files.test/pub")
+    }
+
+    /// 80 is the http default written out. Over https it names a port nobody serves TLS on, so
+    /// carrying it across turns a working request into a refused one.
+    func test_the_default_http_port_is_dropped_rather_than_carried_across() {
+        XCTAssertEqual(twin("http://example.com:80/a"), "https://example.com/a")
+    }
+
+    /// Any other port is part of the address and stays. If nothing serves TLS there the fetch
+    /// fails and the card falls back to the plate, which is what it did before this existed.
+    func test_a_non_default_port_is_kept() {
+        XCTAssertEqual(twin("http://example.com:8080/a"), "https://example.com:8080/a")
+    }
 }
 

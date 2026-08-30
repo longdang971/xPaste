@@ -99,6 +99,33 @@ actor LinkPreviewService {
         mimeType?.lowercased().hasPrefix("image/") ?? false
     }
 
+    /// The https twin of an http URL, and any other URL unchanged.
+    ///
+    /// macOS refuses a plain-http request from an app with no ATS exception before it ever reaches
+    /// the network — `NSURLErrorDomain -1022`, measured against a bundle with this app's
+    /// `Info.plist` — and `fetchMetadata` swallows that with `try?` like any other failure. So a
+    /// link copied as `http://…` came back with no title, no picture and no favicon: the card fell
+    /// to the placeholder plate every time, for a page that was perfectly alive.
+    ///
+    /// Asking for https instead costs one scheme and needs no ATS exception. Nearly every site
+    /// with a title worth showing serves it over https as well; one that genuinely does not still
+    /// gets the plate, and that is the site ATS is refusing on the user's behalf. The alternative
+    /// was `NSAllowsArbitraryLoads`, which turns ATS off for the whole app to fix the preview of a
+    /// page whose title and `og:image` a network attacker would then be writing.
+    ///
+    /// Only the request is rewritten. What the item holds, what gets pasted, and what the card's
+    /// footer reads are all still the URL the user copied.
+    static func secureTwin(of url: URL) -> URL {
+        guard url.scheme?.lowercased() == "http",
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return url }
+        parts.scheme = "https"
+        // `http://host:80/` is the default spelled out. Carried across it names a port nothing
+        // serves TLS on, turning a request that would have worked into a refused one.
+        if parts.port == 80 { parts.port = nil }
+        return parts.url ?? url
+    }
+
     func fetchMetadata(_ url: URL) async -> LinkPreviewData? {
         if let cached = metaCache[url] {
             return LinkPreviewData(title: cached.title, imageURL: cached.imageURL, image: nil,
@@ -106,7 +133,10 @@ actor LinkPreviewService {
                                    isDirectImage: cached.isDirectImage ?? false)
         }
 
-        var req = URLRequest(url: url, timeoutInterval: 8)
+        // The request goes to the https twin; everything below still files the result under the
+        // URL the caller asked about, which is the one the item holds. See `secureTwin`.
+        let target = Self.secureTwin(of: url)
+        var req = URLRequest(url: target, timeoutInterval: 8)
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200
@@ -122,12 +152,12 @@ actor LinkPreviewService {
            Self.withinCap(resp, data, cap: Self.imageByteCap),
            let image = NSImage(data: data) {
             imageCache.setObject(image, forKey: url as NSURL, cost: image.approximateDecodedBytes)
-            var meta = CachedLinkMeta(url: url, title: nil, imageURL: url, domain: domain)
+            var meta = CachedLinkMeta(url: url, title: nil, imageURL: target, domain: domain)
             meta.isDirectImage = true
             remember(meta)
             persistToDisk(meta)
             evictDiskIfNeeded()
-            return LinkPreviewData(title: nil, imageURL: url, image: nil, domain: domain,
+            return LinkPreviewData(title: nil, imageURL: target, image: nil, domain: domain,
                                    isDirectImage: true)
         }
 
@@ -142,8 +172,8 @@ actor LinkPreviewService {
         let title = ogMeta("og:title", in: html) ?? ogMeta("twitter:title", in: html) ?? pageTitle(in: html)
         let imgStr = ogMeta("og:image", in: html) ?? ogMeta("twitter:image", in: html)
         var ogImageURL: URL?
-        if let s = imgStr { ogImageURL = Self.resolvedURL(s, relativeTo: url) }
-        let favURL = htmlFaviconURL(in: html, relativeTo: url)
+        if let s = imgStr { ogImageURL = Self.resolvedURL(s, relativeTo: target) }
+        let favURL = htmlFaviconURL(in: html, relativeTo: target)
 
         var meta = CachedLinkMeta(url: url, title: title, imageURL: ogImageURL, domain: domain)
         meta.faviconURL = favURL
@@ -161,7 +191,9 @@ actor LinkPreviewService {
     func fetchImage(for url: URL) async -> NSImage? {
         if let cached = imageCache.object(forKey: url as NSURL) { return cached }
         guard let meta = metaCache[url], let imageURL = meta.imageURL else { return nil }
-        var req = URLRequest(url: imageURL, timeoutInterval: 8)
+        // An `og:image` written out as an absolute `http://` URL is refused exactly as the page
+        // would have been.
+        var req = URLRequest(url: Self.secureTwin(of: imageURL), timeoutInterval: 8)
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
         guard let (imgData, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
@@ -187,7 +219,7 @@ actor LinkPreviewService {
 
         for urlStr in candidates {
             guard let favURL = URL(string: urlStr) else { continue }
-            var req = URLRequest(url: favURL, timeoutInterval: 8)
+            var req = URLRequest(url: Self.secureTwin(of: favURL), timeoutInterval: 8)
             req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
             guard let (data, resp) = try? await URLSession.shared.data(for: req),
                   (resp as? HTTPURLResponse)?.statusCode == 200,
