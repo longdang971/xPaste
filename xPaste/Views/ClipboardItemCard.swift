@@ -521,7 +521,7 @@ struct ClipboardItemCard: View {
                             .resizable()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                } else if linkPreviewEnabled, linkPreview != nil, linkImageChecked {
+                } else if drawsLinkBody {
                     noImagePlaceholder
                 } else {
                     richOrTextPreview
@@ -635,6 +635,13 @@ struct ClipboardItemCard: View {
         return true
     }
 
+    /// This card's answer to `ClipboardItemCard.drawsLinkBody`.
+    private var drawsLinkBody: Bool {
+        Self.drawsLinkBody(previewEnabled: linkPreviewEnabled,
+                           hasMetadata: linkPreview != nil,
+                           fetchFinished: linkImageChecked)
+    }
+
     /// The fill this card's preview and footer share, or nil to keep the default colours.
     ///
     /// Tied to `drawsRichPreview`, not merely to the cached entry: a card falling back to plain
@@ -647,12 +654,14 @@ struct ClipboardItemCard: View {
     /// reads as a layout mistake; text running on reads as "there is more of this", which is what
     /// it means, and is how Paste draws the same card.
     ///
-    /// The URL clause matches `drawsRichPreview`'s: once link metadata arrives the footer grows to
-    /// 52pt and shows a title, and nothing should be flowing under that.
+    /// The URL clause is `drawsLinkBody`, which covers both reasons a link card stops flowing:
+    /// once metadata arrives the footer grows to 52pt and shows a title, and nothing should be
+    /// flowing under that; and once the placeholder plate is drawn — including for a URL that
+    /// resolved to nothing — the plate has to stop at the strip rather than run beneath it.
     private var contentFlowsUnderFooter: Bool {
         guard item.type == .text || item.type == .url else { return false }
         guard detectedColor == nil, detectedFilePath == nil else { return false }
-        if item.type == .url, linkPreviewEnabled, linkPreview != nil { return false }
+        if item.type == .url, drawsLinkBody { return false }
         return true
     }
 
@@ -892,10 +901,9 @@ struct ClipboardItemCard: View {
                 // Paste puts the tint on the preview and leaves the footer plain; this used to be
                 // the other way round, which read as an inverted card next to it.
                 mutedBackground
-                Image("no_image")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 120, height: 90)
+                Image(systemName: Self.placeholderSymbolName)
+                    .font(.system(size: 60, weight: .thin))
+                    .foregroundColor(Color(nsColor: .tertiaryLabelColor))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -942,6 +950,30 @@ struct ClipboardItemCard: View {
     }
 
     /// Whether a link's `og:image` is a logo rather than a cover picture.
+    /// The glyph on the placeholder plate: a compass, which is what Paste draws and what the plate
+    /// means — this is a link, and there is nothing of it to show.
+    ///
+    /// It replaced a bundled crossed-out photograph captioned "No Preview", which read as something
+    /// having gone wrong. Most of the time nothing has: the page simply has no `og:image`.
+    static let placeholderSymbolName = "safari"
+
+    /// Whether a URL card's body is a link preview — a picture, a logo plate, or the placeholder
+    /// that stands in for one — rather than the URL drawn as text.
+    ///
+    /// True once the fetch has been and gone, whatever it came back with. `hasMetadata` is taken
+    /// and ignored on purpose: it used to be part of this, and requiring it is what put a dead URL
+    /// on the plain-text card. A link that resolves to nothing is still a link, gets the same
+    /// placeholder plate as a page with no `og:image`, and keeps its text from running on under the
+    /// footer — which is what Paste draws for the same item. Keeping the parameter keeps the
+    /// caller's question honest: it is asking about a card whose metadata may or may not exist.
+    ///
+    /// Not the condition `footer` switches on. That one still wants metadata, because without a
+    /// title there is nothing for the taller footer to show, and the plain strip with the URL in it
+    /// is right — again, what Paste draws.
+    static func drawsLinkBody(previewEnabled: Bool, hasMetadata _: Bool, fetchFinished: Bool) -> Bool {
+        previewEnabled && fetchFinished
+    }
+
     ///
     /// Two tells, either one enough. Small: a Chrome Web Store listing serves the extension's own
     /// 128px icon under `og:image`, and blowing that up to fill the card is the blurred rectangle
@@ -1002,7 +1034,10 @@ struct ClipboardItemCard: View {
                     .font(.system(size: 13, weight: .bold))
                     .lineLimit(1)
                     .foregroundColor(Color(NSColor.labelColor))
-                highlighted(item.text ?? "")
+                // The same shape the plain strip writes a URL in — see `urlFooterLabel`. Two link
+                // cards side by side, one with a title and one without, cannot disagree about
+                // whether a URL has `https://` on the front of it.
+                highlighted(Self.urlFooterLabel(item.text ?? ""))
                     .font(.system(size: 10))
                     .lineLimit(1)
                     .foregroundColor(.secondary)
@@ -1036,26 +1071,54 @@ struct ClipboardItemCard: View {
     }
 
     private var defaultFooter: some View {
+        Group {
+            if Self.footerAlignsLeading(for: item) {
+                // Inline rather than overlaid, unlike the centred case below: a URL fills the
+                // strip and has to truncate before the badge instead of running underneath it.
+                // The re-centring that overlay exists to prevent cannot happen to a label that
+                // starts at the left edge whatever width is left over.
+                HStack(spacing: 8) {
+                    footerText.frame(maxWidth: .infinity, alignment: .leading)
+                    shortcutBadge
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .frame(height: Self.footerHeight(for: item))
+            } else {
+                footerText
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .frame(height: Self.footerHeight(for: item))
+                    // Overlaid rather than placed in an HStack: this label is short and centred, so
+                    // it can never collide with the badge, and laying the badge out inline would
+                    // re-centre the label in the leftover width — nudging "N characters" left on
+                    // every ⌘ press.
+                    .overlay(alignment: .trailing) {
+                        shortcutBadge.padding(.trailing, 12)
+                    }
+            }
+        }
+        // Nothing of its own behind a card whose text flows under it — the gradient below the
+        // label is the background, and an opaque strip here would chop the text off again.
+        // Elsewhere (an image card) the strip is real: Paste runs the fill through it too,
+        // because a black card whose footer stayed grey reads as a bar bolted onto the bottom.
+        .background(contentFlowsUnderFooter
+                    ? Color.clear
+                    : Color(nsColor: richFill ?? .controlBackgroundColor))
+    }
+
+    /// The footer's label, before either layout places it.
+    ///
+    /// Truncated in the middle rather than at the end, because the two ends of a URL are the two
+    /// things worth keeping: the site at the front, and whatever distinguishes this page from the
+    /// rest of it at the back. The other labels are far too short to ever reach this.
+    private var footerText: some View {
         Text(footerLabel)
             .font(.system(size: 12))
             .foregroundColor(Self.footerTextColor(on: richFill))
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .frame(height: PanelLayout.cardFooterHeight)
-            // Overlaid rather than placed in an HStack: this label is short and centred, so it
-            // can never collide with the badge, and laying the badge out inline would re-centre
-            // the label in the leftover width — nudging "N characters" left on every ⌘ press.
-            .overlay(alignment: .trailing) {
-                shortcutBadge.padding(.trailing, 12)
-            }
-            // Nothing of its own behind a card whose text flows under it — the gradient below the
-            // label is the background, and an opaque strip here would chop the text off again.
-            // Elsewhere (an image card) the strip is real: Paste runs the fill through it too,
-            // because a black card whose footer stayed grey reads as a bar bolted onto the bottom.
-            .background(contentFlowsUnderFooter
-                        ? Color.clear
-                        : Color(nsColor: richFill ?? .controlBackgroundColor))
+            .lineLimit(1)
+            .truncationMode(.middle)
     }
 
     private var footerLabel: String { cardText.footer }
@@ -1068,9 +1131,50 @@ struct ClipboardItemCard: View {
         return built
     }
 
-    private func buildFooterLabel() -> String {
+    private func buildFooterLabel() -> String { Self.footerLabel(for: item) }
+
+    /// How tall the strip along the bottom of a card is.
+    ///
+    /// Two points more under a link, because that strip carries a URL rather than a caption: it
+    /// runs the full width and uses the full line height, descenders and slashes included, where
+    /// "12 KB" sits comfortably inside the default. Only the plain strip is affected — the taller
+    /// footer a link with a title gets sets its own 52.
+    static func footerHeight(for item: ClipboardItem) -> CGFloat {
+        PanelLayout.cardFooterHeight + (footerAlignsLeading(for: item) ? 2 : 0)
+    }
+
+    /// Whether the footer label hangs off the left edge instead of sitting under the middle.
+    ///
+    /// A URL does. It is read left to right and truncates on the right, so it has to start where
+    /// reading starts — which is also where Paste puts it. Everything else here is a caption about
+    /// the card rather than content of it ("35 characters", "12 KB") and sits under the middle.
+    static func footerAlignsLeading(for item: ClipboardItem) -> Bool {
+        item.type == .url
+    }
+
+    /// A URL as a footer reads it: without the scheme, and without a slash that ends the whole
+    /// thing.
+    ///
+    /// The scheme is chrome — every link has one and it is the same one — and it costs exactly the
+    /// width the path needs to stay whole. The path is what tells two links to the same site apart,
+    /// so it is never what gets dropped. Anything that is not a URL is left alone: an item can be
+    /// typed `.url` and still hold something this cannot parse.
+    static func urlFooterLabel(_ raw: String) -> String {
+        var text = raw
+        if let separator = text.range(of: "://") { text = String(text[separator.upperBound...]) }
+        if text.hasSuffix("/") { text.removeLast() }
+        return text.isEmpty ? raw : text
+    }
+
+    /// What the strip along the bottom of a card says about its content.
+    static func footerLabel(for item: ClipboardItem) -> String {
         switch item.type {
-        case .text, .url, .color:
+        case .url:
+            // The URL, not a count of it. "35 characters" is true of a link and tells its reader
+            // nothing they came for, and a link card whose preview failed had nothing else on it —
+            // which is what Paste puts here, on every link card, working or not.
+            return urlFooterLabel(item.text ?? "")
+        case .text, .color:
             // `textLength`, not `text.count`: what the card holds is capped at
             // `ItemEntity.previewCharLimit`, so counting it reported the cap instead of the item
             // for anything longer — every long paste read "4096 characters".

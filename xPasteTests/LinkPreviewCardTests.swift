@@ -128,3 +128,137 @@ final class LinkPreviewCardTests: XCTestCase {
                       "an image with no bitmap to measure must not be stretched on a guess")
     }
 }
+
+/// What a URL card draws in its body when there is no picture to draw.
+///
+/// A link that resolves to nothing is still a link. Paste gives it the same placeholder plate it
+/// gives a page with no `og:image`; this used to require metadata to have come back, so a dead URL
+/// fell through to the plain-text branch and the card read as an ordinary text card — no plate, and
+/// its text running on under the footer.
+final class DeadLinkCardTests: XCTestCase {
+
+    func test_a_url_that_resolved_to_nothing_still_gets_the_placeholder_plate() {
+        XCTAssertTrue(ClipboardItemCard.drawsLinkBody(previewEnabled: true,
+                                                      hasMetadata: false,
+                                                      fetchFinished: true),
+                      "a dead link fell through to the plain-text card")
+    }
+
+    func test_a_page_with_metadata_but_no_image_still_gets_the_plate() {
+        XCTAssertTrue(ClipboardItemCard.drawsLinkBody(previewEnabled: true,
+                                                      hasMetadata: true,
+                                                      fetchFinished: true))
+    }
+
+    /// No flash of an empty plate before the fetch has been anywhere. Until it comes back the card
+    /// shows the URL, which is the one thing it does know.
+    func test_nothing_is_drawn_as_a_link_body_while_the_fetch_is_still_out() {
+        XCTAssertFalse(ClipboardItemCard.drawsLinkBody(previewEnabled: true,
+                                                       hasMetadata: false,
+                                                       fetchFinished: false))
+        XCTAssertFalse(ClipboardItemCard.drawsLinkBody(previewEnabled: true,
+                                                       hasMetadata: true,
+                                                       fetchFinished: false))
+    }
+
+    /// Paste draws a compass on the plate and nothing else — see the reference screenshot. The
+    /// bundled `no_image` art is a crossed-out photograph with "No Preview" written under it, which
+    /// reads as something having gone wrong rather than as "this is a link with nothing to show".
+    ///
+    /// The assertion that matters is that the name resolves: a symbol that does not exist on this
+    /// system draws nothing at all, and an empty plate is the one outcome worse than the old art.
+    func test_the_placeholder_glyph_resolves_to_a_symbol() {
+        XCTAssertNotNil(NSImage(systemSymbolName: ClipboardItemCard.placeholderSymbolName,
+                                accessibilityDescription: nil),
+                        "the placeholder glyph does not resolve — the plate would draw empty")
+    }
+
+    func test_link_previews_turned_off_means_no_plate_at_all() {
+        XCTAssertFalse(ClipboardItemCard.drawsLinkBody(previewEnabled: false,
+                                                       hasMetadata: true,
+                                                       fetchFinished: true),
+                       "the setting is off and the card still drew a link body")
+    }
+}
+
+/// What the strip along the bottom of a card says.
+///
+/// "35 characters" is true of a URL and useless about it — Paste puts the URL there instead, and
+/// that is the one thing a link card's reader is looking for. The count stays for text, where the
+/// length is the only thing a truncated preview cannot show.
+final class CardFooterLabelTests: XCTestCase {
+
+    private func url(_ text: String) -> ClipboardItem {
+        ClipboardItem(type: .url, text: text)
+    }
+
+    func test_a_url_card_says_the_url_rather_than_counting_its_characters() {
+        XCTAssertEqual(ClipboardItemCard.footerLabel(for: url("https://example.org/second-link-777")),
+                       "example.org/second-link-777")
+    }
+
+    /// The scheme is chrome, not information, and it costs the width the path needs.
+    func test_the_scheme_is_dropped_whatever_it_is() {
+        XCTAssertEqual(ClipboardItemCard.footerLabel(for: url("http://example.org/a")), "example.org/a")
+        XCTAssertEqual(ClipboardItemCard.footerLabel(for: url("ftp://files.test/pub")), "files.test/pub")
+    }
+
+    /// A bare host reads better without the slash it was copied with.
+    func test_a_trailing_slash_is_dropped() {
+        XCTAssertEqual(ClipboardItemCard.footerLabel(for: url("https://example.org/")), "example.org")
+        XCTAssertEqual(ClipboardItemCard.footerLabel(for: url("https://example.org")), "example.org")
+    }
+
+    /// The path is what distinguishes two links to the same site, so it is never the part that goes.
+    func test_the_path_is_kept_in_full() {
+        XCTAssertEqual(ClipboardItemCard.footerLabel(for: url("https://a.test/one/two?x=1#frag")),
+                       "a.test/one/two?x=1#frag")
+    }
+
+    func test_a_text_card_still_counts_its_characters() {
+        XCTAssertEqual(ClipboardItemCard.footerLabel(for: ClipboardItem(type: .text, text: "hello")),
+                       "5 characters")
+    }
+
+    func test_a_file_card_still_counts_its_files() {
+        let item = ClipboardItem(type: .file,
+                                 fileURLs: [URL(fileURLWithPath: "/tmp/a"),
+                                            URL(fileURLWithPath: "/tmp/b")])
+        XCTAssertEqual(ClipboardItemCard.footerLabel(for: item), "2 files")
+    }
+
+    /// The taller footer a link with metadata gets has the URL on its second line, and it is the
+    /// same URL in the same shape as the plain strip's — two link cards side by side, one with a
+    /// title and one without, must not disagree about how a URL is written.
+    func test_the_url_under_a_title_is_written_the_same_way() {
+        XCTAssertEqual(ClipboardItemCard.urlFooterLabel("https://example.com/"), "example.com")
+    }
+
+    /// Paste hangs the URL off the left edge of the strip; a count it centres. The difference is
+    /// what the text is: "35 characters" is a caption about the card and sits under its middle,
+    /// while a URL is read left to right and truncates on the right, so it has to start where
+    /// reading starts.
+    func test_only_a_url_footer_is_hung_off_the_left_edge() {
+        XCTAssertTrue(ClipboardItemCard.footerAlignsLeading(for: ClipboardItem(type: .url,
+                                                                               text: "https://a.test/b")))
+        XCTAssertFalse(ClipboardItemCard.footerAlignsLeading(for: ClipboardItem(type: .text,
+                                                                                text: "hello")))
+        XCTAssertFalse(ClipboardItemCard.footerAlignsLeading(for: ClipboardItem(type: .image)))
+        XCTAssertFalse(ClipboardItemCard.footerAlignsLeading(for: ClipboardItem(type: .color,
+                                                                                text: "#fff")))
+    }
+
+    /// A link footer carries a URL rather than a caption, and a URL uses the full width and the
+    /// full line height — descenders, slashes and all. Two points of strip is what stops it
+    /// sitting tight against the plate above it.
+    func test_a_link_footer_is_two_points_taller_than_a_caption_strip() {
+        XCTAssertEqual(ClipboardItemCard.footerHeight(for: ClipboardItem(type: .url,
+                                                                         text: "https://a.test/b")),
+                       PanelLayout.cardFooterHeight + 2)
+        XCTAssertEqual(ClipboardItemCard.footerHeight(for: ClipboardItem(type: .text, text: "hi")),
+                       PanelLayout.cardFooterHeight)
+        XCTAssertEqual(ClipboardItemCard.footerHeight(for: ClipboardItem(type: .image)),
+                       PanelLayout.cardFooterHeight)
+    }
+}
+
