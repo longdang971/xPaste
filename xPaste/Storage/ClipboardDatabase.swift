@@ -158,66 +158,6 @@ final class ClipboardDatabase {
         writeContext.performAndWait {}
     }
 
-    // MARK: - Migration
-
-    /// Rewrites dedup keys written before the content was hashed.
-    ///
-    /// Without it the upgrade is silent and wrong in one direction only: every row already in the
-    /// store keeps a key in the old shape, nothing a newly copied item computes can match it, and
-    /// what the user sees is that copying something they already have makes a second card.
-    ///
-    /// Text, colour, url and file keys carry their own content — that was the problem with them —
-    /// so they convert from the key alone, without faulting a single payload. An image key does
-    /// not, but the picture it was taken from is a small JPEG sitting beside the store, so that is
-    /// read instead; a row whose picture has gone is left as it is, since nothing can say what it
-    /// was. Both cost far less than the alternative, which is faulting in every payload in the
-    /// history at launch — the one thing this schema is shaped to avoid.
-    ///
-    /// Keyed off the separator, so running it again does nothing. See `ClipboardItem.digestMark`.
-    @discardableResult
-    func migrateLegacyChecksums(imagesDir: URL?) -> Int {
-        var rewritten = 0
-        writeContext.performAndWait { [writeContext] in
-            let request = NSFetchRequest<ItemEntity>(entityName: "ItemEntity")
-            request.predicate = NSPredicate(format: "checksum CONTAINS %@",
-                                            String(ClipboardItem.legacyMark))
-            guard let rows = try? writeContext.fetch(request), !rows.isEmpty else { return }
-            for row in rows {
-                guard let key = Self.rehashedKey(for: row, imagesDir: imagesDir) else { continue }
-                row.checksum = key.checksum
-                if let hash = key.imageHash { row.imageHash = hash }
-                rewritten += 1
-            }
-            try? writeContext.save()
-        }
-        return rewritten
-    }
-
-    /// The hashed key for a row still carrying a legacy one, or nil when the row needs no change
-    /// or cannot be converted.
-    private static func rehashedKey(for row: ItemEntity,
-                                    imagesDir: URL?) -> (checksum: String, imageHash: String?)? {
-        guard let type = ClipboardContentType(rawValue: row.typeName) else { return nil }
-        let prefix = "\(type.rawValue)\(ClipboardItem.legacyMark)"
-        guard row.checksum.hasPrefix(prefix) else { return nil }
-        let body = String(row.checksum.dropFirst(prefix.count))
-
-        switch type {
-        case .text, .url, .color, .file, .folder:
-            // The legacy key is `"<type>:<content>"` for text and `"<type>:<paths>"` for files,
-            // and both are exactly what the hashed key hashes — so the body is the input.
-            return ("\(type.rawValue)\(ClipboardItem.digestMark)\(ClipboardItem.digest(Data(body.utf8)))",
-                    nil)
-        case .image:
-            guard let imagesDir,
-                  let jpeg = try? Data(contentsOf: imagesDir
-                      .appendingPathComponent(row.id.uuidString + ".jpg"))
-            else { return nil }
-            let hash = ClipboardItem.digest(jpeg)
-            return ("image\(ClipboardItem.digestMark)\(hash)", hash)
-        }
-    }
-
     // MARK: - Housekeeping
 
     /// Deletes payload rows no item points at.

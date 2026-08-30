@@ -126,9 +126,6 @@ final class ClipboardStore: ObservableObject {
             try? FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
         }
         if let storageDir { LegacyJSONImport.run(from: storageDir, into: database) }
-        // Before `load()`, so the checksum index this builds is keyed the same way as anything
-        // copied from here on. After the JSON import, so rows it just wrote are covered too.
-        database.migrateLegacyChecksums(imagesDir: imagesDir)
         load()
         trim()          // enforce the count cap at launch too, not only on the next add()
         pruneExpired()

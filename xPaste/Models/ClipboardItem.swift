@@ -97,13 +97,6 @@ struct ClipboardItem: Identifiable, Codable {
     /// The type prefix stays. A URL and a text that read the same are two different things to
     /// paste, and the prefix is the only thing keeping them apart.
     ///
-    /// The separator says which shape the key is in, and that is deliberate. Keys written before
-    /// the content was hashed read `"text:<the whole text>"`; hashed ones read
-    /// `"text#<sha256 hex>"`. Sniffing the two apart by looking at the body cannot be done — copy a
-    /// sha256 out of a terminal and the old key for it is indistinguishable from a new one — so the
-    /// migration in `ClipboardDatabase` keys off the separator instead, which makes running it
-    /// twice a no-op rather than a silent re-hash of an already hashed key.
-    ///
     /// `id` is used only when the content that would identify the item is not there — an image
     /// with no bytes and no hash, a file item with no paths. Without it every such item hashes to
     /// the same key and they deduplicate onto one another, which is a way to lose one by copying
@@ -340,9 +333,6 @@ struct ClipboardItem: Identifiable, Codable {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Separates the type from a hashed key. See `makeChecksum`.
+    /// Separates the type from the digest. See `makeChecksum`.
     static let digestMark: Character = "#"
-
-    /// Separates the type from a key written before hashing — the content itself.
-    static let legacyMark: Character = ":"
 }
