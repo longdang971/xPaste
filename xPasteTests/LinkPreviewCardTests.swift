@@ -305,5 +305,21 @@ final class SecureTwinTests: XCTestCase {
     func test_a_non_default_port_is_kept() {
         XCTAssertEqual(twin("http://example.com:8080/a"), "https://example.com:8080/a")
     }
+
+}
+
+/// The two lines of the footer a link with a title gets.
+final class LinkFooterTypeTests: XCTestCase {
+
+    func test_the_url_line_is_eleven_point() {
+        XCTAssertEqual(ClipboardItemCard.linkFooterURLFontSize, 11)
+    }
+
+    /// The URL is the second line and has to keep reading as one. Bumping it is fine; bumping it
+    /// past the title would make the card argue with itself about which line is the heading.
+    func test_the_url_line_stays_smaller_than_the_title_above_it() {
+        XCTAssertLessThan(ClipboardItemCard.linkFooterURLFontSize,
+                          ClipboardItemCard.linkFooterTitleFontSize)
+    }
 }
 

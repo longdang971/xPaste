@@ -1031,14 +1031,14 @@ struct ClipboardItemCard: View {
         HStack(alignment: .bottom, spacing: 6) {
             VStack(alignment: .leading, spacing: 2) {
                 highlighted(linkPreview?.title ?? item.text ?? "")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: Self.linkFooterTitleFontSize, weight: .bold))
                     .lineLimit(1)
                     .foregroundColor(Color(NSColor.labelColor))
                 // The same shape the plain strip writes a URL in — see `urlFooterLabel`. Two link
                 // cards side by side, one with a title and one without, cannot disagree about
                 // whether a URL has `https://` on the front of it.
                 highlighted(Self.urlFooterLabel(item.text ?? ""))
-                    .font(.system(size: 10))
+                    .font(.system(size: Self.linkFooterURLFontSize))
                     .lineLimit(1)
                     .foregroundColor(.secondary)
             }
@@ -1132,6 +1132,12 @@ struct ClipboardItemCard: View {
     }
 
     private func buildFooterLabel() -> String { Self.footerLabel(for: item) }
+
+    /// The heading line of the footer a link with a title gets.
+    static let linkFooterTitleFontSize: CGFloat = 13
+
+    /// The URL under it. Secondary to the title and has to stay that way.
+    static let linkFooterURLFontSize: CGFloat = 11
 
     /// How tall the strip along the bottom of a card is.
     ///
