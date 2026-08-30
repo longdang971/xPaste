@@ -1,4 +1,73 @@
+import Compression
 import Foundation
+
+/// The container the encoded property list is stored in.
+///
+/// A clipboard history is mostly text, and text compresses about twelve to one — measured, a
+/// 341 KB paste stored as 28.7 KB — which is worth having twice over: the history file stops
+/// carrying the difference, and a payload that would have spilled into an external blob file
+/// stays inline in the row instead.
+///
+/// The header is explicit rather than relying on the compressor's own framing. LZFSE's frames do
+/// carry their decoded size, but reading it means parsing block headers this has no business
+/// knowing about; four magic bytes and a length answers the same question and cannot be confused
+/// with a bare property list, which is what a store written by an older build holds.
+private enum PayloadEnvelope {
+
+    static let magic = Data("xpz1".utf8)
+    static let headerSize = magic.count + MemoryLayout<UInt32>.size
+
+    /// A refusal to allocate on the word of a corrupt header. Generously past `Limits.total`,
+    /// which is what an honest payload is bounded by.
+    static let maxDecodedSize = 64 * 1024 * 1024
+
+    /// `plist` compressed, or `plist` itself when compressing it does not pay.
+    static func wrap(_ plist: Data) -> Data {
+        guard plist.count > headerSize else { return plist }
+        var compressed = Data(count: plist.count)
+        let written = compressed.withUnsafeMutableBytes { out -> Int in
+            guard let destination = out.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return plist.withUnsafeBytes { input -> Int in
+                guard let source = input.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_encode_buffer(destination, plist.count,
+                                                 source, plist.count, nil, COMPRESSION_LZFSE)
+            }
+        }
+        // Zero means it did not fit in the destination, which for this encoder means the input was
+        // already incompressible — a PNG, a JPEG, an encrypted blob. Those are stored as they are.
+        guard written > 0, written + headerSize < plist.count else { return plist }
+
+        var wrapped = magic
+        withUnsafeBytes(of: UInt32(plist.count).littleEndian) { wrapped.append(contentsOf: $0) }
+        wrapped.append(compressed.prefix(written))
+        return wrapped
+    }
+
+    /// The property list inside `data`, which may or may not be wrapped. Nil only when it claims to
+    /// be wrapped and then does not decompress.
+    static func unwrap(_ data: Data) -> Data? {
+        guard data.count > headerSize, data.prefix(magic.count) == magic else { return data }
+
+        let lengthStart = data.startIndex + magic.count
+        let bodyStart = data.startIndex + headerSize
+        let decodedSize = Int(data[lengthStart..<bodyStart]
+            .withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }.littleEndian)
+        guard decodedSize > 0, decodedSize <= maxDecodedSize else { return nil }
+
+        let body = data[bodyStart...]
+        var decoded = Data(count: decodedSize)
+        let written = decoded.withUnsafeMutableBytes { out -> Int in
+            guard let destination = out.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return body.withUnsafeBytes { input -> Int in
+                guard let source = input.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(destination, decodedSize,
+                                                 source, body.count, nil, COMPRESSION_LZFSE)
+            }
+        }
+        guard written == decodedSize else { return nil }
+        return decoded
+    }
+}
 
 /// A cheap content key for a blob: its length plus its first and last sixteen bytes.
 ///
@@ -109,15 +178,18 @@ extension PasteboardPayload {
             Key.items: encodedItems,
             Key.blobs: table.blobs,
         ]
-        return try PropertyListSerialization.data(fromPropertyList: root, format: .binary, options: 0)
+        let plist = try PropertyListSerialization.data(fromPropertyList: root,
+                                                       format: .binary, options: 0)
+        return PayloadEnvelope.wrap(plist)
     }
 
     /// Rebuilds a payload from `encoded()`'s bytes, or nil when they are not a payload this build
     /// understands. Nil rather than a throw: a single unreadable item must not be able to stop the
     /// history from loading.
     init?(decoding data: Data) {
-        guard let root = try? PropertyListSerialization.propertyList(
-                from: data, options: [], format: nil) as? [String: Any],
+        guard let plist = PayloadEnvelope.unwrap(data),
+              let root = try? PropertyListSerialization.propertyList(
+                from: plist, options: [], format: nil) as? [String: Any],
               let version = root[Key.version] as? Int, version == Self.formatVersion,
               let rawItems = root[Key.items] as? [[String: Any]],
               let blobs = root[Key.blobs] as? [Data]

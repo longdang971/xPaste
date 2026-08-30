@@ -327,11 +327,19 @@ final class ClipboardStorageSplitTests: XCTestCase {
     /// Large representations belong beside the database, not inside it — the same thing Paste gets
     /// from `allowsExternalBinaryDataStorage`, and the reason the attribute lives in an entity of
     /// its own.
+    ///
+    /// The bulk has to be incompressible, and that is the whole fixture. A stored payload is
+    /// compressed when compressing pays (see `PayloadEnvelope`), so two million identical bytes
+    /// leave nothing to spill; what actually reaches this size on disk is a picture, which is
+    /// already compressed, and that is what these bytes stand in for.
     func testALargePayloadIsStoredOutsideTheDatabaseFile() throws {
+        var generator = SystemRandomNumberGenerator()
+        let incompressible = Data((0..<2_000_000).map { _ in UInt8.random(in: 0...255,
+                                                                          using: &generator) })
         var item = ClipboardItem(type: .text, text: "big")
         item.payload = PasteboardPayload(items: [.init(
             types: ["com.acme.bulk"],
-            dataByType: ["com.acme.bulk": Data(repeating: 0x5, count: 2_000_000)])])
+            dataByType: ["com.acme.bulk": incompressible])])
         store.add(item)
         store.flushPendingWrites()
 
@@ -346,6 +354,27 @@ final class ClipboardStorageSplitTests: XCTestCase {
         XCTAssertGreaterThan(size, 1_900_000)
         // And it is still readable through the ordinary path.
         XCTAssertEqual(store.payload(for: item.id)?.data(forType: "com.acme.bulk")?.count, 2_000_000)
+    }
+
+    /// The other half of that: bulk that *does* compress never becomes a file at all.
+    ///
+    /// A pasted log is the case — large, repetitive, and previously a 341 KB blob sitting in its
+    /// own file beside the store. Compressed it stays in the row, which is one file and one write
+    /// fewer for the commonest large thing a clipboard holds.
+    func testALargeButCompressiblePayloadStaysInsideTheDatabaseFile() throws {
+        let log = String(repeating: "2026-08-30 06:50:00 [info] worker=7 status=ok\n", count: 8000)
+        var item = ClipboardItem(type: .text, text: "log")
+        item.payload = .plainText(log)
+        store.add(item)
+        store.flushPendingWrites()
+
+        let external = directory
+            .appendingPathComponent(".ClipboardHistory_SUPPORT")
+            .appendingPathComponent("_EXTERNAL_DATA")
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: external.path)) ?? []
+
+        XCTAssertTrue(files.isEmpty, "a compressible log still spilled into a file of its own")
+        XCTAssertEqual(store.payload(for: item.id)?.string, log)
     }
 
     /// Two images that carry no bytes and no hash are still two images. They shared a dedup key
