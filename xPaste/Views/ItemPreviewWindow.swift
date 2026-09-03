@@ -14,14 +14,28 @@ enum PreviewSpaceKey {
     static let spaceKeyCode: UInt16 = 49
 
     /// `firstResponder` is whatever holds focus at the moment of the press. Editable text is the
-    /// one thing a space still belongs to: the search box, a card being renamed, the editor.
+    /// one thing a space still belongs to — but only once something has been typed into it.
+    ///
+    /// `inPanel` says the press was dispatched to the panel itself. The panel's one editable field
+    /// is the search box: a card being renamed, the item editor and the delete confirmation all
+    /// raise the alert handshake, which the key monitor has already stood down for before it asks
+    /// this. So an empty editable field here is an empty search box, and a space at the front of
+    /// an empty query means nothing to search for.
+    ///
+    /// That case is not a corner: the search box keeps first responder after the filter sheet
+    /// closes over it — AppKit hands the panel's responder back when the popover's window gives up
+    /// key — while the user is looking at cards, not at a query. Measured with the field editor
+    /// logged on every press: every space after that sheet closed went into the search box, and
+    /// the preview stopped answering Space entirely.
     static func togglesPreview(keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
-                               firstResponder: NSResponder?) -> Bool {
+                               firstResponder: NSResponder?, inPanel: Bool) -> Bool {
         guard keyCode == spaceKeyCode else { return false }
         // Caps Lock is not a binding anyone makes, so it is not treated as a modifier here.
         let mods = modifiers.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
         guard mods.isEmpty else { return false }
-        if let text = firstResponder as? NSText, text.isEditable { return false }
+        if let text = firstResponder as? NSText, text.isEditable {
+            return inPanel && text.string.isEmpty
+        }
         return true
     }
 }

@@ -169,3 +169,47 @@ final class PanelFilters: ObservableObject {
         live.performClose(nil)
     }
 }
+
+/// The filters the search query could become, and which of them Return would take.
+///
+/// Out of `ContentView` for the reason `PanelSelection` is — nothing in the panel's `body` reads
+/// it — and out of the search field for a reason of its own: a SwiftUI view is not hit-tested
+/// outside its parent's bounds, so a dropdown hung off the field as an overlay drew perfectly and
+/// took no clicks at all (measured: not even `.onHover` fired over it). The rows are computed
+/// where the query lives, in the field, and drawn by `SuggestionAnchor` at panel level, where the
+/// container is big enough to contain them.
+final class PanelSuggestions: ObservableObject {
+    static let shared = PanelSuggestions()
+
+    @Published private(set) var rows: [FilterSuggestion] = []
+    /// Always a valid index into `rows` while there are any.
+    @Published private(set) var highlighted = 0
+
+    /// Applies a row. Set by the search field, which owns the query the row would replace; not
+    /// published, because only a callback ever reads it.
+    var take: ((FilterSuggestion) -> Void)?
+
+    private init() {}
+
+    func show(_ newRows: [FilterSuggestion]) {
+        guard newRows != rows else { return }
+        rows = newRows
+        // The row that was under the highlight is rarely still in the list, let alone still in
+        // that place, so a new list starts at the top.
+        if highlighted != 0 { highlighted = 0 }
+    }
+
+    func clear() { show([]) }
+
+    func move(by step: Int) {
+        guard !rows.isEmpty else { return }
+        let next = min(max(highlighted + step, 0), rows.count - 1)
+        if next != highlighted { highlighted = next }
+    }
+
+    /// What Return takes, or nil when there is nothing to take.
+    var current: FilterSuggestion? {
+        guard highlighted < rows.count else { return rows.first }
+        return rows[highlighted]
+    }
+}

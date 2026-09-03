@@ -93,7 +93,9 @@ struct ContentView: View {
             .allowsHitTesting(false)
 
             VStack(spacing: 0) {
-                toolbar
+                // Above the list: the search field's suggestion dropdown hangs down over the
+                // first row of cards, and a later sibling would draw straight over it.
+                toolbar.zIndex(1)
                 Divider().opacity(0.12)
                 if displayedItems.isEmpty {
                     if showAccessibilityBanner {
@@ -164,6 +166,11 @@ struct ContentView: View {
                 .frame(width: 0, height: 0)
             }
         }
+        // The search field's filter suggestions, drawn here rather than off the field itself: a
+        // view is not hit-tested outside its parent's bounds, and hung off the field the list took
+        // no clicks at all. `SuggestionAnchor` is the only thing that watches `PanelSuggestions`,
+        // so a query changing under the cursor never rebuilds the panel.
+        .overlay(alignment: .top) { SuggestionAnchor() }
         .clipShape(RoundedRectangle(cornerRadius: PanelLayout.cornerRadius, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: PanelLayout.cornerRadius, style: .continuous)
@@ -1344,10 +1351,33 @@ private struct DebouncedSearchField: View {
     @State private var text = ""
     @State private var debounce: Task<Void, Never>?
     @State private var backspaceMonitor: Any?
-
     private static let debounceNanos: UInt64 = 80_000_000
     /// Backspace/Delete.
     private static let deleteKeyCode: UInt16 = 51
+    private static let returnKeyCode: UInt16 = 36
+    private static let enterKeyCode: UInt16 = 76
+    private static let tabKeyCode: UInt16 = 48
+    private static let upArrowKeyCode: UInt16 = 126
+    private static let downArrowKeyCode: UInt16 = 125
+
+    /// Hands `PanelSuggestions` the filters this query could become.
+    ///
+    /// Computed here rather than in `ContentView`: this view already rebuilds on every keystroke
+    /// and the panel deliberately does not — binding the query straight to the store cost a
+    /// full-panel re-layout per character, which is the whole reason this field exists. Only the
+    /// rows travel up, and only the one small view that draws them reacts.
+    private func publishSuggestions() {
+        guard !text.isEmpty else {
+            PanelSuggestions.shared.clear()
+            return
+        }
+        let resolver = AppNameResolver.shared
+        PanelSuggestions.shared.show(FilterSuggestion.matching(
+            query: text,
+            apps: FilterSuggestion.apps(in: store.items, name: { resolver.name(for: $0) }),
+            active: store.filters
+        ))
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1377,6 +1407,9 @@ private struct DebouncedSearchField: View {
                 .buttonStyle(.plain)
             }
         }
+        .onAppear { PanelSuggestions.shared.take = pick }
+        .onChange(of: text) { _ in publishSuggestions() }
+        .onChange(of: store.filters) { _ in publishSuggestions() }
         .onChange(of: text) { new in
             debounce?.cancel()
             debounce = Task { @MainActor in
@@ -1386,9 +1419,9 @@ private struct DebouncedSearchField: View {
             }
         }
         .onChange(of: focused) { isFocused in
-            // The backspace monitor only exists while this field has the keyboard, so it can
-            // never swallow a Delete meant for a selected card.
-            if isFocused { installBackspaceMonitor() } else { removeBackspaceMonitor() }
+            // The key monitor only exists while this field has the keyboard, so it can never
+            // swallow a Delete meant for a selected card or a Return meant for a paste.
+            if isFocused { installKeyMonitor() } else { removeKeyMonitor() }
 
             // Losing focus with a live query means the user clicked into the results (e.g. to
             // double-click-paste). Keep the search open so the filtered list stays put and the
@@ -1399,34 +1432,73 @@ private struct DebouncedSearchField: View {
         .onReceive(NotificationCenter.default.publisher(for: .panelWillHide)) { _ in
             debounce?.cancel()
             if !text.isEmpty { text = "" }
+            PanelSuggestions.shared.clear()
         }
         .onDisappear {
             debounce?.cancel()
-            removeBackspaceMonitor()
+            removeKeyMonitor()
+            PanelSuggestions.shared.clear()
         }
     }
 
-    /// Backspace on an empty field deletes the last filter token, the way any token field
-    /// behaves. A local monitor rather than a custom `NSTextField`: the field itself is a plain
-    /// SwiftUI `TextField`, and this is the one key it needs to intercept.
-    private func installBackspaceMonitor() {
+    /// The keys the field has to take before anything else does, while it holds the keyboard.
+    ///
+    /// A local monitor rather than a custom `NSTextField`: the field itself is a plain SwiftUI
+    /// `TextField`, and these are the only keys it needs to intercept. Backspace on an empty field
+    /// deletes the last filter token, the way any token field behaves; ↑ / ↓ / Return / Tab drive
+    /// the suggestion list, and only while there is one — with no suggestions up, Return still
+    /// belongs to whatever the panel does with it.
+    private func installKeyMonitor() {
         guard backspaceMonitor == nil else { return }
         backspaceMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == Self.deleteKeyCode,
-                  focused,
-                  text.isEmpty,
-                  !store.filters.isEmpty
-            else { return event }
-            let resolver = AppNameResolver.shared
-            store.filters.removeLastToken(appName: { resolver.name(for: $0) })
-            return nil
+            guard focused else { return event }
+            // The arrow keys arrive carrying `.numericPad` and `.function` — every arrow on a Mac
+            // keyboard does — so those cannot count as modifiers here or ↑ / ↓ never reach the
+            // list. Caps Lock is not a binding anyone makes either.
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                .subtracting([.capsLock, .numericPad, .function])
+            guard mods.isEmpty else { return event }
+
+            if event.keyCode == Self.deleteKeyCode, text.isEmpty, !store.filters.isEmpty {
+                let resolver = AppNameResolver.shared
+                store.filters.removeLastToken(appName: { resolver.name(for: $0) })
+                return nil
+            }
+
+            let list = PanelSuggestions.shared
+            guard !list.rows.isEmpty else { return event }
+            switch event.keyCode {
+            case Self.downArrowKeyCode:
+                list.move(by: 1)
+                return nil
+            case Self.upArrowKeyCode:
+                list.move(by: -1)
+                return nil
+            case Self.returnKeyCode, Self.enterKeyCode, Self.tabKeyCode:
+                if let row = list.current { pick(row) }
+                return nil
+            default:
+                return event
+            }
         }
     }
 
-    private func removeBackspaceMonitor() {
+    private func removeKeyMonitor() {
         guard let monitor = backspaceMonitor else { return }
         NSEvent.removeMonitor(monitor)
         backspaceMonitor = nil
+    }
+
+    /// Turns the query into the filter it was naming: the token appears in the field, the text it
+    /// was typed as goes, and the keyboard stays here so the next filter can be typed straight
+    /// after — the field is where filters live, so leaving it after each one would be backwards.
+    private func pick(_ suggestion: FilterSuggestion) {
+        var next = store.filters
+        suggestion.apply(to: &next)
+        store.filters = next
+        apply("", immediately: true)
+        PanelSuggestions.shared.clear()
+        focused = true
     }
 
     private func apply(_ new: String, immediately: Bool) {

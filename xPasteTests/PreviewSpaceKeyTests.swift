@@ -6,9 +6,10 @@ import AppKit
 /// place. See `PreviewSpaceKey`.
 final class PreviewSpaceKeyTests: XCTestCase {
 
-    private func editableField() -> NSTextView {
+    private func editableField(_ text: String = "") -> NSTextView {
         let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
         view.isEditable = true
+        view.string = text
         return view
     }
 
@@ -20,33 +21,57 @@ final class PreviewSpaceKeyTests: XCTestCase {
     }
 
     func test_space_toggles_the_preview() {
-        XCTAssertTrue(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [], firstResponder: nil))
+        XCTAssertTrue(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [], firstResponder: nil,
+                                                     inPanel: true))
     }
 
     /// The case this was written for: a text preview hands first responder to its text view, which
     /// eats the space itself, so the popover stayed open under the key that should have shut it.
     func test_space_toggles_the_preview_over_its_own_text_view() {
         XCTAssertTrue(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [],
-                                             firstResponder: readOnlyPreviewText()))
+                                                     firstResponder: readOnlyPreviewText(),
+                                                     inPanel: false))
     }
 
-    /// Anything being typed into keeps its spaces: the search box, a card being renamed, the
-    /// editor's text view.
+    /// Anything with something typed into it keeps its spaces: a query being written, a card
+    /// being renamed, the editor's text view.
     func test_space_is_left_alone_while_text_is_being_edited() {
         XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [],
-                                              firstResponder: editableField()))
+                                                      firstResponder: editableField("hello"),
+                                                      inPanel: true))
+    }
+
+    /// The bug this rule exists for: opening the filter sheet and closing it again leaves the
+    /// search box holding first responder, so every space after that was typed into an empty
+    /// query and the preview stopped answering Space at all.
+    func test_space_toggles_the_preview_over_an_empty_search_box() {
+        XCTAssertTrue(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [],
+                                                     firstResponder: editableField(),
+                                                     inPanel: true))
+    }
+
+    /// Only the panel's own field is treated that way. An empty text field in any other window —
+    /// a save panel's name, an editor opened over the panel — is somewhere a space is being typed.
+    func test_space_is_left_alone_in_an_empty_field_outside_the_panel() {
+        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [],
+                                                      firstResponder: editableField(),
+                                                      inPanel: false))
     }
 
     func test_other_keys_do_not_toggle_the_preview() {
-        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 36, modifiers: [], firstResponder: nil))
+        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 36, modifiers: [], firstResponder: nil,
+                                                      inPanel: true))
     }
 
     /// A modified space belongs to whoever bound it, not to the preview. Caps Lock is not a
     /// modifier anyone binds, so it does not count as one.
     func test_modified_space_does_not_toggle_the_preview() {
-        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: .command, firstResponder: nil))
-        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: .option, firstResponder: nil))
-        XCTAssertTrue(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: .capsLock, firstResponder: nil))
+        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: .command,
+                                                      firstResponder: nil, inPanel: true))
+        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: .option,
+                                                      firstResponder: nil, inPanel: true))
+        XCTAssertTrue(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: .capsLock,
+                                                     firstResponder: nil, inPanel: true))
     }
 }
 

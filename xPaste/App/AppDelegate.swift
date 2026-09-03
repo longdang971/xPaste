@@ -996,7 +996,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // one monitor, one flip per press, and no window standing in between.
             if PreviewSpaceKey.togglesPreview(keyCode: event.keyCode,
                                               modifiers: event.modifierFlags,
-                                              firstResponder: event.window?.firstResponder) {
+                                              firstResponder: event.window?.firstResponder,
+                                              inPanel: event.window === self.panel) {
                 NotificationCenter.default.post(name: .togglePreviewSelected, object: nil)
                 return nil
             }
