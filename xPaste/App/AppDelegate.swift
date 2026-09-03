@@ -38,6 +38,15 @@ extension Notification.Name {
     static let saveItemToFile       = Notification.Name("com.user.xPaste.saveItemToFile")
     /// ⌘S. Only the panel knows what is selected, so it turns this into a `saveItemToFile`.
     static let saveSelectedItem     = Notification.Name("com.user.xPaste.saveSelectedItem")
+    /// Space. Same division of labour as ⌘S: the key monitor sees the press, the panel knows
+    /// which card it is about.
+    static let togglePreviewSelected = Notification.Name("com.user.xPaste.togglePreviewSelected")
+    /// ⌘R renames the selected card, ⌘E opens it in the editor, ⌘O opens a link in the browser.
+    /// Each arrives from the key monitor, and the panel decides whether the selected card is the
+    /// kind the action applies to.
+    static let renameSelectedItem   = Notification.Name("com.user.xPaste.renameSelectedItem")
+    static let editSelectedItem     = Notification.Name("com.user.xPaste.editSelectedItem")
+    static let openSelectedItem     = Notification.Name("com.user.xPaste.openSelectedItem")
     static let openSettingsWindow   = Notification.Name("com.user.xPaste.openSettingsWindow")
     /// "Check for Updates…" in the panel's ⋯ menu.
     static let openUpdateWindow     = Notification.Name("com.user.xPaste.openUpdateWindow")
@@ -63,11 +72,16 @@ private class ClipboardPanel: NSPanel {
     /// Where the current press started, while it could still turn into a drag out of the panel.
     private var pressOrigin: NSPoint?
 
+    private func isOverCardList(_ locationInWindow: NSPoint) -> Bool {
+        PanelClickRegion.isOverCardList(locationInWindow,
+                                        barTop: barView?.frame.maxY ?? frame.height)
+    }
+
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
 
         case .leftMouseDown:
-            if event.modifierFlags.contains(.command) {
+            if event.modifierFlags.contains(.command), isOverCardList(event.locationInWindow) {
                 NotificationCenter.default.post(
                     name: .cmdClickInPanel,
                     object: nil,
@@ -75,7 +89,7 @@ private class ClipboardPanel: NSPanel {
                 )
                 return
             }
-            if event.clickCount == 2 {
+            if event.clickCount == 2, isOverCardList(event.locationInWindow) {
                 NotificationCenter.default.post(
                     name: .doubleClickInPanel,
                     object: nil,
@@ -88,10 +102,9 @@ private class ClipboardPanel: NSPanel {
             // have already returned above.
             pressOrigin = event.locationInWindow
             let loc = event.locationInWindow
-            let barTop = barView?.frame.maxY ?? frame.height
             if let hit = contentView?.hitTest(loc),
                !(hit is NSTextView),
-               loc.y < barTop - 75 {
+               isOverCardList(loc) {
                 makeFirstResponder(nil)
             }
 
@@ -968,6 +981,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // flag — the panel's own shortcuts must stay out of the way: ⌘1 belongs to the text
             // field, not to "paste card 1".
             if self.alertIsPresented { return event }
+            // Space opens the selected card's preview and puts it away again — the panel's one
+            // unmodified shortcut, and the one that has to survive being leaned on.
+            //
+            // It used to be three separate things: a hidden `.keyboardShortcut(.space)` Button in
+            // the panel to open, another inside the popover to close, and — because a text
+            // preview's own text view swallows a plain space before either could resolve — a key
+            // monitor living on the popover's content view. Both halves dropped presses. That
+            // monitor swallowed every space for as long as it was installed, and SwiftUI only
+            // tears the content view down once the closing animation has finished, so spaces
+            // arriving during the close were eaten with nothing left to close. Reopening then
+            // needed the panel's key equivalent to resolve while key window and first responder
+            // were still on their way back from the popover, and in that gap it did not. Hence
+            // one monitor, one flip per press, and no window standing in between.
+            if PreviewSpaceKey.togglesPreview(keyCode: event.keyCode,
+                                              modifiers: event.modifierFlags,
+                                              firstResponder: event.window?.firstResponder) {
+                NotificationCenter.default.post(name: .togglePreviewSelected, object: nil)
+                return nil
+            }
             // Exactly the modifiers named, nothing extra: ⌥⌘S and ⌃⌘S belong to whatever the user
             // has bound them to, not to xPaste.
             let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -983,6 +1015,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // panel. Only the panel knows what is selected, so it turns this into a save.
             if mods == .command, event.charactersIgnoringModifiers?.lowercased() == "s" {
                 NotificationCenter.default.post(name: .saveSelectedItem, object: nil)
+                return nil
+            }
+            // ⌘R rename, ⌘E edit, ⌘O open a link — the card commands that had none. Here beside
+            // ⌘S rather than as three more hidden SwiftUI Buttons for the reason given above, and
+            // because two of the three (rename, edit) put a text field on screen: a key equivalent
+            // that only resolves once first responder has settled is exactly the wrong mechanism
+            // for a command whose job is to move first responder somewhere else.
+            if mods == .command,
+               let key = event.charactersIgnoringModifiers?.lowercased(),
+               let command = CardCommandKey.command(for: key) {
+                NotificationCenter.default.post(name: command, object: nil)
                 return nil
             }
             // ⌘1…⌘9 paste the card carrying that number, ⌘⇧1…⌘⇧9 paste it as plain text.
@@ -1374,6 +1417,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// different logical heights. On a tall screen `scale == 1` (the reference
 /// design); on a shorter one (e.g. a 1080-point Full-HD or a default-scaled 4K)
 /// it shrinks so the bar never eats an oversized slice of the screen.
+/// Which clicks in the panel are about a card.
+///
+/// Everything the panel does to a click before its views see it is about cards — ⌘-click selects
+/// one, a double-click pastes one — and each of those *consumes* the event. Over the toolbar there
+/// is no card to act on, so consuming it there does nothing but destroy the press. That is what
+/// made the filter button swallow clicks when it was leaned on: every second press came in with
+/// `clickCount == 2`, went out as `doubleClickInPanel`, matched no card and vanished. Neither the
+/// button nor the sheet's own state could see any of it happen.
+/// The card commands that are a plain ⌘ plus a letter.
+///
+/// `nil` for every other letter, so ⌘F, ⌘W and the rest are left to whoever else wants them —
+/// the monitor swallows only what it can act on.
+enum CardCommandKey {
+    static func command(for key: String) -> Notification.Name? {
+        switch key {
+        case "r": return .renameSelectedItem
+        case "e": return .editSelectedItem
+        case "o": return .openSelectedItem
+        default:  return nil
+        }
+    }
+}
+
+enum PanelClickRegion {
+    /// The strip along the top of the panel the toolbar occupies: the search field, its filter
+    /// button, the tabs and the ⋯ menu. The toolbar is ~58pt tall and always sits at the top of
+    /// the panel, whichever screen edge the panel itself is on; the rest is slack.
+    static let toolbarStrip: CGFloat = 75
+
+    /// `barTop` is the top of the bar view, not of the window: the window is taller than the bar
+    /// while the reveal animation runs.
+    static func isOverCardList(_ locationInWindow: NSPoint, barTop: CGFloat) -> Bool {
+        locationInWindow.y < barTop - toolbarStrip
+    }
+}
+
 enum PanelLayout {
     /// Card design size at scale 1 (matches ClipboardItemCard's base frame).
     /// Measured off Paste's own panel on a 2x display: its cards are 464x464 device

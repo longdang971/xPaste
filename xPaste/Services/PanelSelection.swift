@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 /// Which cards are selected in the panel.
 ///
@@ -84,4 +85,87 @@ final class PanelSelection: ObservableObject {
 
     var count: Int { ids.count }
     func contains(_ id: UUID) -> Bool { ids.contains(id) }
+}
+
+/// Which item's preview popover is on screen.
+///
+/// Outside `ContentView` for the same reason as `PanelSelection`, and it cost more here. As
+/// `@State` there, `previewItemID` was read from `body` — the popover's binding is built inside
+/// the card loop — so Space invalidated the entire panel, toolbar and every card body included,
+/// *before* the popover was so much as created. The preview came up a whole re-layout after the
+/// key press, which is the "it doesn't appear straight away" this object exists to remove. The
+/// NSPopover handle was `@State` too, and assigning it from the `willShow` handler bought a
+/// second full invalidation at the exact moment the popover was animating in.
+///
+/// Only `PreviewAnchor` observes this. `ContentView` reads it from callbacks, where the value is
+/// always current, and never from `body`.
+final class PanelPreview: ObservableObject {
+    static let shared = PanelPreview()
+
+    @Published private(set) var itemID: UUID?
+
+    /// The live NSPopover behind the preview, held for one reason: closing it directly.
+    ///
+    /// Clearing `itemID` asks SwiftUI to dismiss it, and SwiftUI does that on its next pass —
+    /// through a hosting view whose window is in the middle of being ordered out. When that pass
+    /// does not land, the popover stays on screen with its parent gone: not key, no first
+    /// responder, and its own close button running the same state change that already failed. So
+    /// the panel closes it by hand as well.
+    ///
+    /// Not published: nothing reads it from a `body`.
+    var popover: NSPopover?
+
+    private init() {}
+
+    /// Space, and the card menu's Preview entry. One press, one flip — see the key monitor in
+    /// `AppDelegate` for why this is the only thing that decides.
+    func toggle(_ id: UUID) {
+        if itemID == id { close() } else { present(id) }
+    }
+
+    /// Switching straight from one card's preview to another leaves the old popover to the
+    /// `willShow` handler, which closes whichever one is stale as the new one opens.
+    func present(_ id: UUID) {
+        guard itemID != id else { return }
+        itemID = id
+    }
+
+    /// Both halves, in this order: the state change is what SwiftUI needs to agree the popover is
+    /// gone, and the direct close is what guarantees it actually goes.
+    func close() {
+        if itemID != nil { itemID = nil }
+        guard let live = popover else { return }
+        popover = nil
+        live.performClose(nil)
+    }
+}
+
+/// Whether the filter sheet is up, and the NSPopover behind it.
+///
+/// Out of `ContentView` for the reason the preview is — `showFilters` was read from `body`, so
+/// pressing the filter button rebuilt the whole panel before the sheet was created — and for one
+/// more. SwiftUI writes `isPresented` back long after the popover has actually gone, and a click
+/// landing in that gap made `toggle()` flip a still-true flag to false: the click that should have
+/// reopened the sheet did nothing at all. Closing by hand rather than waiting to be told keeps the
+/// flag and the screen in step, so every press of the button lands.
+final class PanelFilters: ObservableObject {
+    static let shared = PanelFilters()
+
+    @Published private(set) var isPresented = false
+
+    /// See `PanelPreview.popover`: held so the sheet can be taken off the screen directly.
+    var popover: NSPopover?
+
+    private init() {}
+
+    func toggle() {
+        if isPresented { close() } else { isPresented = true }
+    }
+
+    func close() {
+        if isPresented { isPresented = false }
+        guard let live = popover else { return }
+        popover = nil
+        live.performClose(nil)
+    }
 }

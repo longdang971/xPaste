@@ -122,3 +122,54 @@ final class PanelSlideGeometryTests: XCTestCase {
         XCTAssertEqual(geometry(bottomBar, "sideways"), geometry(bottomBar, "bottom"))
     }
 }
+
+/// Which clicks the panel is allowed to take away from the view under them.
+///
+/// The panel consumes ⌘-clicks and double-clicks to turn them into card actions. Over the toolbar
+/// that only destroyed the press: spamming the filter button, every second click arrived as a
+/// double-click and was posted off to a card that did not exist.
+final class PanelClickRegionTests: XCTestCase {
+
+    /// A panel whose bar is 800pt tall, so the toolbar owns y = 725…800.
+    private let barTop: CGFloat = 800
+
+    private func isOverList(y: CGFloat) -> Bool {
+        PanelClickRegion.isOverCardList(NSPoint(x: 100, y: y), barTop: barTop)
+    }
+
+    func test_a_click_on_the_toolbar_is_not_a_card_click() {
+        XCTAssertFalse(isOverList(y: 780), "the search field and its filter button")
+        XCTAssertFalse(isOverList(y: 726), "the bottom edge of the toolbar strip")
+    }
+
+    func test_a_click_on_the_cards_still_is() {
+        XCTAssertTrue(isOverList(y: 700))
+        XCTAssertTrue(isOverList(y: 40))
+    }
+
+    /// The window is taller than the bar while the reveal runs, so the rule is measured from the
+    /// bar's top edge rather than the window's.
+    func test_the_strip_follows_the_bar_not_the_window() {
+        XCTAssertTrue(PanelClickRegion.isOverCardList(NSPoint(x: 0, y: 700), barTop: 800))
+        XCTAssertFalse(PanelClickRegion.isOverCardList(NSPoint(x: 0, y: 700), barTop: 760))
+    }
+}
+
+/// Which ⌘-letters the panel claims for the card under the selection.
+final class CardCommandKeyTests: XCTestCase {
+
+    func test_the_three_card_commands() {
+        XCTAssertEqual(CardCommandKey.command(for: "r"), .renameSelectedItem)
+        XCTAssertEqual(CardCommandKey.command(for: "e"), .editSelectedItem)
+        XCTAssertEqual(CardCommandKey.command(for: "o"), .openSelectedItem)
+    }
+
+    /// The monitor swallows whatever this answers, so everything else has to come back nil —
+    /// ⌘S and the ⌘-digits are handled on their own further down, and ⌘F, ⌘W, ⌘Q are nobody's
+    /// business here.
+    func test_every_other_letter_is_left_alone() {
+        for key in ["a", "c", "f", "q", "s", "w", "z", "1"] {
+            XCTAssertNil(CardCommandKey.command(for: key), "⌘\(key.uppercased()) should pass through")
+        }
+    }
+}

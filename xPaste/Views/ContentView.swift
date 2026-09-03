@@ -12,7 +12,6 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("panelPosition") private var panelPosition: String = "bottom"
     @State private var showSearch = false
-    @State private var previewItemID: UUID?
     @State private var scrollTargetID: UUID?
     @State private var pendingReorderID: UUID?
     @State private var activeTab: ClipboardTab = .all
@@ -25,18 +24,11 @@ struct ContentView: View {
     /// card-level ⌘A below needs the same protection: it must stand down whenever any of those is
     /// live, or it claims ⌘A out from under whichever text field actually has focus.
     @State private var alertPresented = false
-    @State private var showFilters = false
-    /// The live NSPopover behind the filter sheet while it is open — see the notification
-    /// handlers on `body` for why it has to be held onto.
-    @State private var filterPopover: NSPopover?
-    /// The live NSPopover behind the item preview, held for one reason: closing it directly.
-    ///
-    /// Clearing `previewItemID` asks SwiftUI to dismiss it, and SwiftUI does that on its next pass
-    /// — through a hosting view whose window is in the middle of being ordered out. When that pass
-    /// does not land, the popover stays on screen with its parent gone: not key, no first
-    /// responder, and its own close button running the same state change that already failed. So
-    /// the panel closes it by hand as well.
-    @State private var previewPopover: NSPopover?
+    /// The filter sheet's state lives in `PanelFilters` for the same reasons the preview's does.
+    private var filterSheet: PanelFilters { .shared }
+    /// Which card's preview is up, and the NSPopover behind it, both live in `PanelPreview` —
+    /// see there for what owning them here cost. Read from callbacks only, never from `body`.
+    private var preview: PanelPreview { .shared }
     @FocusState private var searchFocused: Bool
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     @AppStorage("accessibilityBannerDismissed") private var accessibilityBannerDismissed = false
@@ -166,8 +158,6 @@ struct ContentView: View {
                         .keyboardShortcut(.return, modifiers: .shift)
                     Button("") { if let it = primarySelectedItem { copyItem(it) } }
                         .keyboardShortcut("c", modifiers: .command)
-                    Button("") { if let it = primarySelectedItem { togglePreview(it) } }
-                        .keyboardShortcut(.space, modifiers: [])
                 }
                 .disabled(searchFocused || isRenaming)
                 .opacity(0)
@@ -219,27 +209,22 @@ struct ContentView: View {
                 }
             }
         })
-        // SwiftUI gives `.popover` no handle on the NSPopover it creates, so the filter sheet's
-        // is caught as it opens. Two things measured on the real panel need it:
+        // SwiftUI gives `.popover` no handle on the NSPopover it creates, so both of the panel's
+        // are caught as they open — `PanelPreview` and `PanelFilters` each need theirs to take the
+        // popover off the screen directly rather than wait for SwiftUI to agree it is gone.
         //
-        //  • Its fade runs ~500ms in and ~550ms out. `animates = false` lands too late to shorten
-        //    the opening fade — SwiftUI builds a fresh popover per presentation — but it does make
-        //    the close instant (measured 550ms → 5ms), which is most of what "slow" felt like.
-        //  • `isPresented` is written back long after the popover has actually gone. Clicking the
-        //    button in that gap made `showFilters.toggle()` flip a still-true flag to false, so
-        //    the click that should have reopened the sheet did nothing. Clearing the flag the
-        //    moment AppKit says the popover closed keeps the two in step.
-        //
-        // Matched by identity, so the item-preview popover — which wants its animation — is
-        // untouched.
+        // The filter sheet used to have its `animates` turned off here, for a fade measured at
+        // "~500ms in, ~550ms out" — but that was measured through `didShow` / `didClose`, and
+        // those notifications arrive long after the animation itself. Sampled off the screen the
+        // real one is the ~200ms NSPopover default that Paste uses too, so there was never a slow
+        // animation to switch off: it only cost the sheet its close.
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { note in
             guard let popover = note.object as? NSPopover else { return }
-            if showFilters, filterPopover == nil {
-                popover.animates = false
-                filterPopover = popover
+            if filterSheet.isPresented, filterSheet.popover == nil {
+                filterSheet.popover = popover
                 return
             }
-            guard previewItemID != nil, popover !== previewPopover else { return }
+            guard preview.itemID != nil, popover !== preview.popover else { return }
             // At most one preview on screen, ever.
             //
             // Measured with two editors open at once: a click landed on the older one while the
@@ -247,15 +232,15 @@ struct ContentView: View {
             // was applied to the hidden document — and appeared only when the top one was closed.
             // The older popover had leaked between two openings of the editor, with the panel
             // never hiding in between, so closing on `.panelWillHide` alone never reached it.
-            if let stale = previewPopover { stale.performClose(nil) }
-            previewPopover = popover
+            if let stale = preview.popover { stale.performClose(nil) }
+            preview.popover = popover
         }
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.didCloseNotification)) { note in
             guard let popover = note.object as? NSPopover else { return }
-            if popover === previewPopover { previewPopover = nil }
-            guard popover === filterPopover else { return }
-            filterPopover = nil
-            if showFilters { showFilters = false }
+            if popover === preview.popover { preview.popover = nil }
+            guard popover === filterSheet.popover else { return }
+            filterSheet.popover = nil
+            if filterSheet.isPresented { filterSheet.close() }
         }
         .onChange(of: showSearch) { open in
             // When the search box closes by any path, force the TextField to resign — otherwise it
@@ -266,16 +251,13 @@ struct ContentView: View {
             searchFocused = false
             // The filter button lives in the search field, so its popover has nothing left to
             // hang off once the field folds away.
-            if showFilters { showFilters = false }
+            filterSheet.close()
             rebaseSelection()
         }
         // Each of these swaps the visible row out from under the selection. Handled here rather
         // than by watching `displayedItems` itself: that would mean filtering the whole history on
         // every body pass just to compare, and ContentView deliberately does not re-render on
         // selection changes.
-        // Whatever cleared it — Save, Escape, the close button, the item being deleted — the
-        // window goes with it. Relying on SwiftUI to notice is what left one on screen.
-        .onChange(of: previewItemID) { id in if id == nil { closePreviewPopover() } }
         .onChange(of: activeTab) { _ in rebaseSelection() }
         .onChange(of: store.searchQuery) { _ in rebaseSelection() }
         .onChange(of: store.filters) { _ in rebaseSelection() }
@@ -290,13 +272,10 @@ struct ContentView: View {
             if !store.searchQuery.isEmpty { store.searchQuery = "" }
             // Filters go with the search box: reopening to a silently narrowed history reads
             // as "my clipboard lost everything".
-            if showFilters { showFilters = false }
+            filterSheet.close()
             if !store.filters.isEmpty { store.filters.clear() }
             selection.clear()
-            // Both, in this order: the state change is what SwiftUI needs to agree the popover is
-            // gone, and the direct close is what guarantees it actually goes — see `previewPopover`.
-            if previewItemID != nil { previewItemID = nil }
-            closePreviewPopover()
+            preview.close()
             // Drop a half-finished rename rather than reopening the panel into edit mode.
             if renameItemID != nil { renameItemID = nil }
         }
@@ -307,6 +286,23 @@ struct ContentView: View {
                   let item = displayedItems.first else { return }
             finishDrag(dragPlan(for: item), at: point, operation: [],
                        shiftHeld: note.userInfo?["shift"] as? Bool ?? false, cancelled: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .togglePreviewSelected)) { _ in
+            // Space arrives from AppDelegate's key monitor, which cannot know what is selected.
+            guard let item = primarySelectedItem else { return }
+            preview.toggle(item.id)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .renameSelectedItem)) { _ in
+            guard let item = primarySelectedItem else { return }
+            beginRename(item)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .editSelectedItem)) { _ in
+            guard let item = primarySelectedItem, ItemEdit.canEdit(item.type) else { return }
+            beginEdit(item)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openSelectedItem)) { _ in
+            guard let item = primarySelectedItem, let url = linkURL(of: item) else { return }
+            NSWorkspace.shared.open(url)
         }
         .onReceive(NotificationCenter.default.publisher(for: .saveSelectedItem)) { _ in
             // ⌘S arrives from AppDelegate's key monitor, which cannot know what is selected.
@@ -437,16 +433,10 @@ struct ContentView: View {
             // The same flag the tab buttons use suppresses that for the length of the click.
             searchToggleTapped = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { searchToggleTapped = false }
-            showFilters.toggle()
+            filterSheet.toggle()
         }
-        .popover(isPresented: $showFilters, arrowEdge: previewArrowEdge) {
-            // The sheet resolves the app list itself, when it appears. Computing it here — or in
-            // the tap handler above — leaves the App section missing on the panel's first open:
-            // SwiftUI builds that first presentation from a copy of this view taken before the
-            // tap's state change lands, so it sees an empty list. `store` is a reference, so the
-            // closure reads the live history however stale the copy around it is.
-            FilterPopover(filters: $store.filters) { FilterApp.present(in: store.items) }
-        }
+        .modifier(FilterAnchor(arrowEdge: previewArrowEdge, filters: $store.filters,
+                               appsInHistory: { FilterApp.present(in: store.items) }))
     }
 
     private func tabFull(title: String, icon: String, iconColor: Color? = nil, tab: ClipboardTab) -> some View {
@@ -528,12 +518,7 @@ struct ContentView: View {
                                 }
                             ))
                             .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
-                            .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
-                                PreviewPopoverContent(item: item) {
-                                    previewItemID = nil
-                                    closePreviewPopover()
-                                }
-                            }
+                            .modifier(PreviewAnchor(item: item, arrowEdge: previewArrowEdge))
                         }
                     }
                     .padding(.horizontal, 16)
@@ -585,12 +570,7 @@ struct ContentView: View {
                             })
                         .onTapGesture(count: 1) { selectItem(item) }
                         .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
-                        .popover(isPresented: previewBinding(for: item), arrowEdge: previewArrowEdge) {
-                            PreviewPopoverContent(item: item) {
-                                previewItemID = nil
-                                closePreviewPopover()
-                            }
-                        }
+                        .modifier(PreviewAnchor(item: item, arrowEdge: previewArrowEdge))
                     }
                 }
                 .padding(.horizontal, 10)
@@ -658,13 +638,15 @@ struct ContentView: View {
                                          key: "s", modifiers: .command) { saveToFile(item) })
         }
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: "Rename…",
-                                     symbol: "character.cursor.ibeam") { beginRename(item) })
+        menu.addItem(ClosureMenuItem(title: "Rename…", symbol: "character.cursor.ibeam",
+                                     key: "r", modifiers: .command) { beginRename(item) })
         if ItemEdit.canEdit(item.type) {
-            menu.addItem(ClosureMenuItem(title: "Edit…", symbol: "pencil") { beginEdit(item) })
+            menu.addItem(ClosureMenuItem(title: "Edit…", symbol: "pencil",
+                                         key: "e", modifiers: .command) { beginEdit(item) })
         }
-        if item.type == .url, let text = item.text, let url = URL(string: text) {
-            menu.addItem(ClosureMenuItem(title: "Open URL", symbol: "safari") {
+        if let url = linkURL(of: item) {
+            menu.addItem(ClosureMenuItem(title: "Open URL", symbol: "safari",
+                                         key: "o", modifiers: .command) {
                 NSWorkspace.shared.open(url)
             })
         }
@@ -674,7 +656,7 @@ struct ContentView: View {
         menu.addItem(ClosureMenuItem(title: item.isPinned ? "Unpin" : "Pin",
                                      symbol: item.isPinned ? "pin.slash" : "pin") { store.togglePin(item) })
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(title: "Preview", symbol: "eye", key: " ") { previewItemID = item.id })
+        menu.addItem(ClosureMenuItem(title: "Preview", symbol: "eye", key: " ") { preview.present(item.id) })
         menu.addItem(ClosureMenuItem(title: "Share", symbol: "square.and.arrow.up") { [weak anchor] in
             presentShareMenu(for: item, anchor: anchor)
         })
@@ -824,9 +806,14 @@ struct ContentView: View {
     /// `EditWindowPresenter`.
     private func beginEdit(_ item: ClipboardItem) {
         selection.select(item.id)
-        if previewItemID != nil { previewItemID = nil }
-        closePreviewPopover()
+        preview.close()
         EditWindowPresenter.shared.present(item)
+    }
+
+    /// The link a card opens, if it is a link card at all — what both ⌘O and the menu entry ask.
+    private func linkURL(of item: ClipboardItem) -> URL? {
+        guard item.type == .url, let text = item.text else { return nil }
+        return URL(string: text)
     }
 
     private func beginRename(_ item: ClipboardItem) {
@@ -1044,24 +1031,6 @@ struct ContentView: View {
         }
     }
 
-    private func previewBinding(for item: ClipboardItem) -> Binding<Bool> {
-        Binding(
-            get: { previewItemID == item.id },
-            set: { show in if !show { previewItemID = nil } }
-        )
-    }
-
-    /// Takes the preview popover off the screen itself, whatever SwiftUI does about it.
-    private func closePreviewPopover() {
-        guard let popover = previewPopover else { return }
-        previewPopover = nil
-        popover.performClose(nil)
-    }
-
-    private func togglePreview(_ item: ClipboardItem) {
-        previewItemID = (previewItemID == item.id) ? nil : item.id
-    }
-
     private func selectItem(_ item: ClipboardItem) {
         selection.suppressCardDeselect = true
         selection.select(item.id)
@@ -1226,7 +1195,7 @@ private struct MoreMenu: View {
             Button {
                 NotificationCenter.default.post(name: .openUpdateWindow, object: nil)
             } label: {
-                Label("Check for Updates…", systemImage: "arrow.down.circle")
+                Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
             }
             Button { NSApplication.shared.terminate(nil) } label: {
                 Label("Quit xPaste", systemImage: "power")
@@ -1532,4 +1501,58 @@ private final class CardContextMenuView: NSView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? { build(self) }
+}
+
+/// Carries one card's preview popover, and is the only thing in the panel that watches
+/// `PanelPreview`.
+///
+/// The popover used to be attached with a binding built from `ContentView`'s own `@State`, read
+/// inside the card loop — so opening a preview rebuilt the whole panel before the popover was
+/// created. Anchoring it here keeps that work to one small node per card: the card bodies, the
+/// toolbar and the scroll view are all untouched by a preview opening or closing.
+struct PreviewAnchor: ViewModifier {
+    let item: ClipboardItem
+    let arrowEdge: Edge
+    @ObservedObject private var preview = PanelPreview.shared
+
+    func body(content: Content) -> some View {
+        content.popover(
+            isPresented: Binding(
+                get: { preview.itemID == item.id },
+                // Dismissals AppKit runs on its own — a click outside, or the popover's own close
+                // — arrive here and nowhere else.
+                set: { shown in if !shown { preview.close() } }
+            ),
+            arrowEdge: arrowEdge
+        ) {
+            PreviewPopoverContent(item: item) { preview.close() }
+        }
+    }
+}
+
+/// Carries the filter sheet, and is the only thing in the panel that watches `PanelFilters`.
+///
+/// Same shape, and same reason, as `PreviewAnchor`: bound to `ContentView`'s own state the sheet
+/// could not open without rebuilding the toolbar, the search field and every card first.
+struct FilterAnchor: ViewModifier {
+    let arrowEdge: Edge
+    @Binding var filters: SearchFilters
+    let appsInHistory: () -> [FilterApp]
+    @ObservedObject private var sheet = PanelFilters.shared
+
+    func body(content: Content) -> some View {
+        content.popover(
+            isPresented: Binding(
+                get: { sheet.isPresented },
+                set: { shown in if !shown { sheet.close() } }
+            ),
+            arrowEdge: arrowEdge
+        ) {
+            // The sheet resolves the app list itself, when it appears. Computing it in the tap
+            // handler leaves the App section missing on the panel's first open: SwiftUI builds
+            // that first presentation from a copy of the presenting view taken before the tap's
+            // state change lands, so it sees an empty list.
+            FilterPopover(filters: $filters, appsInHistory: appsInHistory)
+        }
+    }
 }

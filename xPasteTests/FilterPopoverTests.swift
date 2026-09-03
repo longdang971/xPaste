@@ -40,3 +40,56 @@ final class FilterPopoverTests: XCTestCase {
         XCTAssertEqual(sheet.appsInHistory().map(\.bundleID), ["com.google.Chrome"])
     }
 }
+
+/// What each press of the filter button does to the sheet.
+///
+/// The button used to flip `showFilters` directly, and SwiftUI writes that flag back long after
+/// the popover has gone — so a press landing in the gap flipped a still-true flag to false and
+/// opened nothing. Every press has to land.
+final class PanelFiltersTests: XCTestCase {
+
+    private var sheet: PanelFilters { .shared }
+
+    override func setUp() {
+        super.setUp()
+        sheet.close()
+    }
+
+    override func tearDown() {
+        sheet.close()
+        super.tearDown()
+    }
+
+    func test_the_button_opens_the_sheet() {
+        sheet.toggle()
+        XCTAssertTrue(sheet.isPresented)
+    }
+
+    func test_the_button_closes_the_sheet_it_opened() {
+        sheet.toggle()
+        sheet.toggle()
+        XCTAssertFalse(sheet.isPresented)
+    }
+
+    func test_every_press_flips_the_sheet() {
+        for press in 1...9 {
+            sheet.toggle()
+            XCTAssertEqual(sheet.isPresented, !press.isMultiple(of: 2), "press \(press) did not land")
+        }
+    }
+
+    /// AppKit dismissing the sheet — a click outside, the search box folding away, the panel
+    /// hiding — leaves the next press free to open it again.
+    func test_a_press_after_an_outside_dismissal_opens_it_again() {
+        sheet.toggle()
+        sheet.close()
+        sheet.toggle()
+        XCTAssertTrue(sheet.isPresented)
+    }
+
+    func test_closing_a_sheet_that_is_already_shut_is_harmless() {
+        sheet.close()
+        sheet.close()
+        XCTAssertFalse(sheet.isPresented)
+    }
+}
