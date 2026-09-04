@@ -470,6 +470,14 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 38)
+        // The folded-away search layout still holds a real NSTextField, and AppKit's cursor rects
+        // come off the view itself — `.allowsHitTesting(false)` stops its clicks but leaves the
+        // I-beam, right under the magnifier and the "Clipboard" tab (which is why those two showed
+        // it and "Pin", further right, did not). This lays an arrow cursor rect over the whole
+        // toolbar while the field is collapsed. It has to be a cursor rect and not `.disabled`:
+        // disabling the row robs the layout underneath of its hover highlight, and disabling the
+        // field alone leaves the I-beam behind.
+        .overlay { ArrowCursorArea(active: !showSearch).allowsHitTesting(false) }
         .contentShape(Rectangle())
         .onTapGesture {
             guard showSearch else { return }
@@ -1133,6 +1141,37 @@ struct ContentView: View {
         // produces no tap, so leaving it set would swallow the user's next empty-space click.
         selection.select(target)
         scrollTargetID = target
+    }
+}
+
+/// An arrow cursor laid over whatever is beneath it.
+///
+/// Cursor rects are AppKit's, not SwiftUI's: a view registers one and the window hands out that
+/// cursor for the area, with the frontmost registration winning — independently of hit-testing, so
+/// this takes no clicks and no hover away from the buttons underneath. Used by the toolbar to keep
+/// the collapsed search field's I-beam off the magnifier and the tabs.
+private struct ArrowCursorArea: NSViewRepresentable {
+    /// Off while the search field is open, so the field keeps its own I-beam.
+    let active: Bool
+
+    final class CursorView: NSView {
+        var active = true
+
+        override func resetCursorRects() {
+            guard active else { return }
+            addCursorRect(bounds, cursor: .arrow)
+        }
+
+        /// Never in the way of the SwiftUI views below — only the cursor rect matters.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    func makeNSView(context: Context) -> CursorView { CursorView() }
+
+    func updateNSView(_ view: CursorView, context: Context) {
+        view.active = active
+        // Frames move as the toolbar animates; the window caches cursor rects until told otherwise.
+        view.window?.invalidateCursorRects(for: view)
     }
 }
 
