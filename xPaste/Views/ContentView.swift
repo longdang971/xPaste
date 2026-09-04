@@ -276,7 +276,12 @@ struct ContentView: View {
         // animation to switch off: it only cost the sheet its close.
         .onReceive(NotificationCenter.default.publisher(for: NSPopover.willShowNotification)) { note in
             guard let popover = note.object as? NSPopover else { return }
-            if filterSheet.isPresented, filterSheet.popover == nil {
+            if filterSheet.isPresented {
+                // The one still on record can be a popover already on its way out — AppKit
+                // dismisses it as the click that reopens the sheet lands, and its `didClose`
+                // arrives after the replacement is up. Take the new one either way, and make
+                // sure the old one really goes, or it is left on screen with nothing holding it.
+                if let stale = filterSheet.popover, stale !== popover { stale.performClose(nil) }
                 filterSheet.popover = popover
                 return
             }
@@ -1649,7 +1654,18 @@ struct FilterAnchor: ViewModifier {
         content.popover(
             isPresented: Binding(
                 get: { sheet.isPresented },
-                set: { shown in if !shown { sheet.close() } }
+                // SwiftUI reports a popover's dismissal late — late enough that on a fast
+                // double press the report for the popover that just went lands *after* the
+                // press has already opened the next one, and this setter then closed the new
+                // one on the old one's behalf. That is the flicker-and-vanish people see when
+                // they spam the filter button: measured, every second press opened a popover
+                // and had it shut ~10ms later. A dismissal only counts when nothing is on
+                // screen; when a live popover is up, `didCloseNotification` owns the close.
+                set: { shown in
+                    guard !shown else { return }
+                    if let live = sheet.popover, live.isShown { return }
+                    sheet.close()
+                }
             ),
             arrowEdge: arrowEdge
         ) {
