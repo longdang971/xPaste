@@ -32,6 +32,10 @@ struct ContentView: View {
     @FocusState private var searchFocused: Bool
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     @AppStorage("accessibilityBannerDismissed") private var accessibilityBannerDismissed = false
+    /// Whether the app is registered to start at login — the "Run in Background" notice's only
+    /// reason to exist. Read once when the panel opens, and again right after Enable is pressed.
+    @State private var launchesAtLogin = LoginItem.isEnabled
+    @AppStorage("runInBackgroundBannerDismissed") private var runInBackgroundBannerDismissed = false
     /// Polls for the Accessibility grant while the banner could still change.
     ///
     /// Started when the panel opens and stopped when it hides — and stopped for good the moment
@@ -46,18 +50,57 @@ struct ContentView: View {
         !accessibilityTrusted && !accessibilityBannerDismissed
     }
 
-    @ViewBuilder private var accessibilityCard: some View {
-        AccessibilityPanelBanner(
-            onEnable: {
-                AccessibilityPermission.requestSystemPrompt()
-                AccessibilityPermission.openSystemSettings()
-            },
-            onDismiss: {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    accessibilityBannerDismissed = true
+    private var showRunInBackgroundBanner: Bool {
+        !launchesAtLogin && !runInBackgroundBannerDismissed
+    }
+
+    /// True while either notice card is in the row — the empty history still has cards to show.
+    private var showNoticeCards: Bool {
+        showAccessibilityBanner || showRunInBackgroundBanner
+    }
+
+    /// The notice cards, in the order Paste shows them: whatever stops the app working at all
+    /// first, then the one that only makes it more reliable.
+    @ViewBuilder private var noticeCards: some View {
+        if showAccessibilityBanner {
+            PanelNoticeCard(
+                symbol: "accessibility",
+                title: "Enable Accessibility",
+                message: "Allow xPaste to paste into other apps.",
+                actionTitle: "Enable",
+                onAction: {
+                    AccessibilityPermission.requestSystemPrompt()
+                    AccessibilityPermission.openSystemSettings()
+                },
+                onDismiss: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        accessibilityBannerDismissed = true
+                    }
                 }
-            }
-        )
+            )
+        }
+        if showRunInBackgroundBanner {
+            PanelNoticeCard(
+                symbol: "waveform.path.ecg",
+                title: "Run in Background",
+                message: "Ensure xPaste is always running.",
+                actionTitle: "Enable",
+                onAction: {
+                    LoginItem.enable()
+                    // `register()` is synchronous, but the status it reports lags it by a beat.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            launchesAtLogin = LoginItem.isEnabled
+                        }
+                    }
+                },
+                onDismiss: {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        runInBackgroundBannerDismissed = true
+                    }
+                }
+            )
+        }
     }
 
     private var isHorizontal: Bool {
@@ -98,9 +141,15 @@ struct ContentView: View {
                 toolbar.zIndex(1)
                 Divider().opacity(0.12)
                 if displayedItems.isEmpty {
-                    if showAccessibilityBanner {
+                    if showNoticeCards {
                         ScrollView(isHorizontal ? .horizontal : .vertical, showsIndicators: false) {
-                            accessibilityCard.padding(16)
+                            if isHorizontal {
+                                HStack(spacing: PanelLayout.cardSpacing) { noticeCards }
+                                    .padding(16)
+                            } else {
+                                VStack(spacing: PanelLayout.cardSpacing) { noticeCards }
+                                    .padding(16)
+                            }
                         }
                     } else {
                         emptyState
@@ -344,6 +393,10 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 let trusted = AccessibilityPermission.isTrusted
                 if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
+                // Same reasoning as the Accessibility check above: `SMAppService.status` is a
+                // round-trip to launchservicesd, so it stays off the hotkey-to-panel path.
+                let registered = LoginItem.isEnabled
+                if registered != launchesAtLogin { launchesAtLogin = registered }
             }
             // Auto-select the first item on open so the keyboard is live immediately:
             // ⌘A selects all, ←/→ move between cards, ⏎ pastes — no click into the list needed.
@@ -501,9 +554,7 @@ struct ContentView: View {
                 ZStack(alignment: .topLeading) {
                     Color.clear.frame(width: 1, height: 1).id("h-list-start")
                     LazyHStack(spacing: PanelLayout.cardSpacing) {
-                        if showAccessibilityBanner {
-                            accessibilityCard
-                        }
+                        noticeCards
                         ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                             ClipboardItemCard(
                                 item: item, index: index + 1,
@@ -550,9 +601,7 @@ struct ContentView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: PanelLayout.cardSpacing) {
-                    if showAccessibilityBanner {
-                        accessibilityCard
-                    }
+                    noticeCards
                     ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                         ClipboardItemCard(
                             item: item, index: index + 1,
@@ -596,16 +645,21 @@ struct ContentView: View {
         }
     }
 
+    /// What an empty row says, in Paste's own words and Paste's own type: one line of 26pt
+    /// regular system text in the tertiary label colour, centred in the panel, with no icon
+    /// above it. Measured off Paste's panel on a 2x display — "History is empty" inks 356x46
+    /// device pixels, i.e. 178x23pt, and its darkest pixel is 185/255 against a 248 background,
+    /// which is `tertiaryLabelColor` (black at 0.26) to the byte.
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: activeTab == .pinned ? "pin" : "doc.on.clipboard")
-                .font(.system(size: 36))
-                .foregroundColor(.secondary.opacity(0.5))
-            Text(activeTab == .pinned ? "No pinned items" : (store.searchQuery.isEmpty ? "Nothing copied yet" : "No results"))
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Text(emptyStateTitle)
+            .font(.system(size: 26))
+            .foregroundColor(Color(NSColor.tertiaryLabelColor))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyStateTitle: String {
+        if !store.searchQuery.isEmpty || !store.filters.isEmpty { return "No results" }
+        return activeTab == .pinned ? "Pinboard is empty" : "History is empty"
     }
 
     private var targetSuffix: String {
@@ -1079,66 +1133,6 @@ struct ContentView: View {
         // produces no tap, so leaving it set would swallow the user's next empty-space click.
         selection.select(target)
         scrollTargetID = target
-    }
-}
-
-private struct AccessibilityPanelBanner: View {
-    var onEnable: () -> Void
-    var onDismiss: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                Image(systemName: "accessibility")
-                    .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 8)
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(.secondary)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-
-            Spacer(minLength: 14)
-
-            Text("Enable Accessibility")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text("Allow xPaste to paste into other apps.")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 4)
-
-            Spacer(minLength: 14)
-
-            Button(action: onEnable) {
-                Text("Enable")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 9)
-                    .background(Capsule().fill(Color.primary.opacity(0.10)))
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(18)
-        .frame(width: 220, height: PanelLayout.cardBaseHeight, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(.ultraThinMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
     }
 }
 
