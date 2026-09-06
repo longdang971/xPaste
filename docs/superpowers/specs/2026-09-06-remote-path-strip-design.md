@@ -140,7 +140,11 @@ first seven characters had already settled.
 Two guards run before anything is allocated: an exact scheme-prefix check (line one has to be a
 remote URL for any of the block to qualify, so the first non-whitespace characters have to be one
 of the schemes), and a 256KB bound so that even a string which does start with a scheme cannot cost
-unboundedly much. The same 4MB paste now measures **0.0007ms**. `RemotePathPerformanceTests` holds
+unboundedly much. The same 4MB paste now measures **0.0007ms**.
+
+The bound is 256KB because that is what the other side of it costs: a block of nothing but URLs
+right up against the limit is 5576 of them, and parsing them line by line measures **22ms** (Debug)
+— a one-off, on the deliberate act of copying five thousand paths. `RemotePathPerformanceTests` holds
 the assertion, relative rather than absolute in the manner of `HighlightBakePerformanceTests`.
 
 ## Latency
