@@ -180,3 +180,32 @@ extension RemotePathTests {
         XCTAssertEqual(RemotePath.strip("sftp://h/home/report%232.txt"), "/home/report#2.txt")
     }
 }
+
+// MARK: - Encodings that decode into something a path cannot carry
+
+/// Percent-decoding is what makes `%C6%B0` readable, but it will just as happily produce a control
+/// character. The result is one path per line, so a decoded newline would come back as two paths.
+extension RemotePathTests {
+
+    func testAnEncodedNewlineDisownsTheLine() {
+        XCTAssertNil(RemotePath.strip("sftp://h/a%0Ab"))
+        XCTAssertNil(RemotePath.strip("sftp://h/a%0D%0Ab"))
+    }
+
+    /// And it takes the block with it, the way any unusable line does.
+    func testAnEncodedNewlineDisownsTheWholeBlock() {
+        XCTAssertNil(RemotePath.strip("sftp://h/good\nsftp://h/a%0Ab"))
+    }
+
+    /// No POSIX path may contain a NUL, and it would travel into the pasteboard and the store as a
+    /// string nothing downstream expects.
+    func testAnEncodedNulDisownsTheLine() {
+        XCTAssertNil(RemotePath.strip("sftp://h/a%00b"))
+    }
+
+    /// A tab is not a line break and does not break the contract, so it is left to come through —
+    /// this is here to say the rule is about the contract, not about control characters at large.
+    func testAnEncodedTabIsStillAPath() {
+        XCTAssertEqual(RemotePath.strip("sftp://h/a%09b"), "/a\tb")
+    }
+}

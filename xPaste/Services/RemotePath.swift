@@ -107,6 +107,19 @@ enum RemotePath {
         // them. The properly encoded form has neither component, so this does nothing to it.
         if let query = url.query(percentEncoded: false) { path += "?" + query }
         if let fragment = url.fragment(percentEncoded: false) { path += "#" + fragment }
+
+        // Decoding is what makes `%C6%B0` readable, and it will just as happily turn `%0A` into a
+        // real newline — measured, from a URL that otherwise looks ordinary. The result of a strip
+        // is one path per line, so a path carrying a line break would come back as two, and in a
+        // block it would be indistinguishable from the neighbouring entries. NUL goes with it: no
+        // POSIX path may contain one, and it would travel into the pasteboard and the store as a
+        // string nothing downstream expects. A tab breaks neither, and is left alone.
+        //
+        // Scalars, not characters: Swift treats `\r\n` as a single grapheme cluster, so a
+        // `Character` comparison against `"\n"` or `"\r"` matches neither and CRLF walks straight
+        // through. That is exactly how `%0D%0A` got past the first version of this guard.
+        guard !path.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" })
+        else { return nil }
         return path
     }
 }

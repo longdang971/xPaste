@@ -59,6 +59,22 @@ It costs the path a client copied with a literal space in it. That is the right 
 a client encodes such a space as `%20`, and the cost of being wrong the other way is a clipboard
 replaced with something that was never on it.
 
+### What decoding can produce
+
+Percent-decoding is what makes `%C6%B0` readable, and it will just as happily produce a control
+character. `%0A` decodes to a real newline, from a URL that otherwise looks ordinary — and since
+the result of a strip is one path per line, a path carrying a line break comes back as two, which
+inside a block is indistinguishable from its neighbours. NUL goes with it: no POSIX path may
+contain one, and it would travel into the pasteboard and the store as a string nothing downstream
+expects. A line whose decoded path holds either is refused, and takes its block with it.
+
+The check walks unicode scalars rather than characters. Swift treats `\r\n` as a single grapheme
+cluster, so a `Character` comparison against `"\n"` or `"\r"` matches neither and CRLF walks
+straight through — which is how `%0D%0A` got past the first version of this guard.
+
+A tab breaks neither the contract nor the string, so it is left alone. The rule is about what the
+output can represent, not about control characters at large.
+
 ### Filenames that look like URL syntax
 
 `#` and `?` are legal POSIX filename characters. A client copying `report#2.txt` unencoded hands
