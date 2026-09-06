@@ -22,6 +22,14 @@ enum RemotePath {
     /// is "is there anything to do here at all", and a string equal to what went in is a worse way
     /// to answer it than an empty optional.
     static func strip(_ text: String) -> String? {
+        // Both guards before anything is allocated. This runs on the main thread from
+        // `ClipboardMonitor.poll`, for every text copy anyone makes, and the overwhelmingly common
+        // case is text that is not a path at all — so reaching that verdict must not depend on how
+        // much text there is. Measured before this was here: 60ms to reject a 4MB paste (Debug),
+        // all of it spent trimming and splitting a string that the first seven characters had
+        // already ruled out. See `RemotePathPerformanceTests`.
+        guard startsWithRemoteScheme(text), text.utf8.count <= sizeLimit else { return nil }
+
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -43,6 +51,28 @@ enum RemotePath {
             paths.append(path)
         }
         return paths.joined(separator: "\n")
+    }
+
+    /// How much text is worth examining at all.
+    ///
+    /// A block of copied server paths is a handful of lines; a quarter-megabyte of them would be
+    /// some ten thousand. Past this, whatever was copied is something other than a path list, and
+    /// the whole-string work is not worth doing to find that out. The same bound, for the same
+    /// reason, as `TextTransform.jsonProbeLimit`.
+    private static let sizeLimit = 256 * 1024
+
+    /// `"ftps://"` and `"sftp://"`, the longest of the prefixes.
+    private static let schemePrefixLength = 7
+
+    /// Whether the text can be a remote path at all, decided without allocating.
+    ///
+    /// Exact rather than a heuristic, and that is what makes it safe as an early-out: the first
+    /// line has to be a remote URL for any of the block to qualify, so the first non-whitespace
+    /// characters have to be one of the schemes.
+    private static func startsWithRemoteScheme(_ text: String) -> Bool {
+        guard let start = text.firstIndex(where: { !$0.isWhitespace }) else { return false }
+        let head = text[start...].prefix(schemePrefixLength).lowercased()
+        return schemes.contains { head.hasPrefix("\($0)://") }
     }
 
     /// The path of one line, when the whole of that line is a remote URL carrying one.

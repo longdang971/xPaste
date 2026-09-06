@@ -110,3 +110,24 @@ final class RemotePathTests: XCTestCase {
         XCTAssertEqual(RemotePath.strip("sftp://h/a\n\nsftp://h/b"), "/a\n/b")
     }
 }
+
+// MARK: - Bounds
+
+extension RemotePathTests {
+
+    /// Past `sizeLimit`, whatever was copied is something other than a path list.
+    func testAnImplausiblyLargeBlockIsLeftAlone() {
+        let huge = String(repeating: "sftp://10.0.0.5/home/www\n", count: 20_000)
+        XCTAssertGreaterThan(huge.utf8.count, 256 * 1024)
+        XCTAssertNil(RemotePath.strip(huge))
+    }
+
+    /// …but a block big enough to be a real multi-selection still goes through, so the bound is
+    /// not quietly rejecting the case the feature exists for.
+    func testALargeButPlausibleBlockOfPathsIsStillStripped() {
+        let block = (0..<1_000).map { "sftp://10.0.0.5/home/dir\($0)" }.joined(separator: "\n")
+        let stripped = RemotePath.strip(block)
+        XCTAssertEqual(stripped?.components(separatedBy: "\n").count, 1_000)
+        XCTAssertEqual(stripped?.hasPrefix("/home/dir0\n/home/dir1\n"), true)
+    }
+}
