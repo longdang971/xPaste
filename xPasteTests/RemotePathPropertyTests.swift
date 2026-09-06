@@ -60,9 +60,18 @@ final class RemotePathPropertyTests: XCTestCase {
         var rng = Seeded(state: 0x5eed_1234_5678_9abc)
         var stripped = 0
 
+        // Separators and padding are generated too. `strip` splits on `CharacterSet.newlines`, so
+        // CRLF arrives as two separators with an empty line between them, and a lone CR is a
+        // separator in its own right — all three have to leave the line count alone.
+        let separators = ["\n", "\r\n", "\r", "\n\n", "\n \n"]
+        let padding = ["", " ", "\t", "  \n", "\n\t"]
+
         for _ in 0..<20_000 {
-            let count = Int.random(in: 1...3, using: &rng)
-            let input = (0..<count).map { _ in line(&rng) }.joined(separator: "\n")
+            let count = Int.random(in: 1...4, using: &rng)
+            let body = (0..<count)
+                .map { _ in line(&rng) }
+                .joined(separator: separators.randomElement(using: &rng)!)
+            let input = padding.randomElement(using: &rng)! + body + padding.randomElement(using: &rng)!
 
             guard let result = RemotePath.strip(input) else { continue }
             stripped += 1
