@@ -59,6 +59,24 @@ It costs the path a client copied with a literal space in it. That is the right 
 a client encodes such a space as `%20`, and the cost of being wrong the other way is a clipboard
 replaced with something that was never on it.
 
+### The result is an absolute path
+
+A URL without `//` is opaque: `sftp:h/a` has scheme `sftp` and the *relative* path `h/a`. The
+scheme-prefix early-out only examines the first line, so such a line reaches the parser whenever it
+sits in a block behind a well-formed one — and a relative fragment on the clipboard points
+somewhere else entirely from the path that was copied. The parser therefore requires the path to
+begin with `/`, which subsumes the older "not empty" check: `sftp://host` alone yields no path and
+falls out by the same guard.
+
+Found by `RemotePathPropertyTests` rather than by anyone thinking of it, which is why that file
+exists.
+
+The check compares grapheme clusters. A combining mark immediately after the slash forms one
+cluster with it, so `%CC%88` decodes to a path whose first *scalar* is `/` while its first
+*character* is not, and it is refused. That is the safe direction, and it is pinned by a test:
+rewriting the guard as a scalar comparison — which reads like a tidy-up after the CRLF lesson
+below — would let it through instead.
+
 ### What decoding can produce
 
 Percent-decoding is what makes `%C6%B0` readable, and it will just as happily produce a control

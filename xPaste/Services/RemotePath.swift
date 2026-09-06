@@ -96,9 +96,17 @@ enum RemotePath {
         // left is a path, and a path with a Vietnamese folder name in it should read as one.
         var path = url.path(percentEncoded: false)
 
+        // Absolute, which subsumes non-empty. Two ways this fails:
+        //
         // `sftp://host` on its own names no path, so there is nothing to rewrite it to. A bare `/`
         // is not this case: that is the server's root, and a real answer.
-        guard !path.isEmpty else { return nil }
+        //
+        // And a URL without `//` is opaque — `sftp:h/a` has scheme `sftp` and the *relative* path
+        // `h/a`. The scheme-prefix early-out only examines the first line, so such a line reaches
+        // here whenever it sits in a block behind a well-formed one, and a relative fragment on the
+        // clipboard points somewhere else entirely from what was copied. Found by
+        // `RemotePathPropertyTests`, not by anybody thinking of it.
+        guard path.hasPrefix("/") else { return nil }
 
         // `#` and `?` are legal in a POSIX filename, and a client that copies `report#2.txt`
         // unencoded hands over a URL whose "fragment" is really the back half of the name. Taking

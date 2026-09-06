@@ -209,3 +209,43 @@ extension RemotePathTests {
         XCTAssertEqual(RemotePath.strip("sftp://h/a%09b"), "/a\tb")
     }
 }
+
+// MARK: - The result has to be an absolute path
+
+/// A URL without `//` is opaque: `sftp:h/a` has scheme `sftp` and path `h/a`, which is relative.
+/// The scheme-prefix early-out only examines the first line, so such a line reaches the parser
+/// whenever it sits in a block behind a well-formed one — and a relative fragment on the clipboard
+/// points somewhere else entirely from the path that was copied.
+extension RemotePathTests {
+
+    func testAnOpaqueURLIsNotAPath() {
+        XCTAssertNil(RemotePath.strip("sftp:h/a"))
+    }
+
+    func testAnOpaqueURLBehindAWellFormedOneDisownsTheBlock() {
+        XCTAssertNil(RemotePath.strip("sftp://h/home/www\nsftp:h/a"))
+    }
+
+    /// The authority-less absolute form still names an absolute path, and is kept.
+    func testAnAuthoritylessAbsolutePathIsStillAPath() {
+        XCTAssertEqual(RemotePath.strip("sftp:///home/www"), "/home/www")
+    }
+}
+
+/// `hasPrefix("/")` compares grapheme clusters, and a combining mark immediately after the slash
+/// forms one cluster with it. So `%CC%88` decodes to a path whose first *scalar* is `/` while its
+/// first *character* is not, and the guard refuses it.
+///
+/// That is the safe direction — nothing is written, the copy is left as it was — and it is pinned
+/// here deliberately: rewriting the guard as a scalar comparison, which reads like a tidy-up after
+/// the CRLF lesson elsewhere in this file, would quietly let it through instead.
+extension RemotePathTests {
+
+    func testAPathWhoseSlashIsAbsorbedByACombiningMarkIsRefused() {
+        let decoded = URL(string: "sftp://h/%CC%88a")?.path(percentEncoded: false)
+        XCTAssertEqual(decoded?.unicodeScalars.first, "/", "premise: the first scalar really is a slash")
+        XCTAssertNotEqual(decoded?.first, "/", "premise: the first character really is not")
+
+        XCTAssertNil(RemotePath.strip("sftp://h/%CC%88a"))
+    }
+}
