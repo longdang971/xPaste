@@ -123,19 +123,28 @@ would read `/home/www` and paste `sftp://10.0.0.5/home/www`. `clearContents()` o
 pasteboard is the same fix on the other side: it drops the alternative representations rather than
 leaving a plain-text string sitting on top of them.
 
-**Stripping precedes the exclusion filter, which then judges both texts.** Running the rewrite
-first means the host is gone before anything can be written. But a never-store pattern is authored
-against what the user watches themselves copy — `10.0.0.5` is a natural way to say "never keep my
-server paths" — and after the rewrite the item no longer contains it. Matching only the stored text
-would write to disk exactly what an explicit rule forbade. `exclusionCandidates` therefore offers
-both the stored text and the captured one. The reverse direction is real too, if rarer:
-percent-decoding puts `/home/bí mật` in the stored item when only `%62%C3%AD…` was ever copied.
+**Deciding is separated from doing, and the never-store filter runs between them.** A pattern is a
+"hands off this content" instruction, and it has to bind the rewrite as much as the write to disk:
+rewriting the clipboard of something the user forbade storing is still touching it, and the
+original would then be in neither the pasteboard nor the history. So `remotePathRewrite` computes
+the replacement with no side effects at all, the filter runs, and only then does
+`applyingRemotePath` write. Anything the filter catches reaches neither disk nor pasteboard.
 
-**The rewrite is skipped if the pasteboard moved.** `poll` reads the change count and then spends
-real time in `ClipboardItem.from` and `PasteboardPayload.capture`. A copy another app makes inside
-that window would be destroyed by `clearContents`, and — because the write that follows is claimed
-— never captured on the next tick either. Reading is harmless to race with; this rewrite is the one
-place `poll` became destructive, so it checks that the board still holds what was captured.
+The filter is offered both strings, because either can be the one the pattern was written against.
+`10.0.0.5` — a natural way to say "never keep my server paths" — appears only in what was copied.
+Percent-decoding runs the other way: `/home/bí mật` appears only in the rewrite, never in the
+`%62%C3%AD…` that was on the clipboard.
+
+**The pasteboard write is skipped if the board moved, but the item is still stored stripped.**
+`poll` reads the change count and then spends real time in `ClipboardItem.from` and
+`PasteboardPayload.capture`. A copy another app makes inside that window would be destroyed by
+`clearContents`, and — because the write that follows is claimed — never captured on the next tick
+either. Reading is harmless to race with; this write is the one place `poll` became destructive.
+
+Only the write is skipped. Dropping the item, or storing it in its un-stripped form, would both
+break the history's own rule — that what it keeps is the stripped path — and the race has nothing
+to do with that rule. The user still gets `/home/www` in the history; the other application still
+gets to keep the clipboard it just claimed.
 
 ## What is deliberately left alone
 

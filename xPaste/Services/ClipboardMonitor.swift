@@ -67,33 +67,45 @@ final class ClipboardMonitor {
         markNextChangeAsOwn()
     }
 
-    /// A copied server path, reduced to the path alone — on the pasteboard as well as in the item.
+    /// The path a captured item's text reduces to, or nil when there is nothing to strip.
     ///
-    /// Returns the replacement, or nil when there was nothing to strip. Lives here rather than in
-    /// `ClipboardItem.from` because the rewrite has to reach the system pasteboard too, and this is
-    /// the only type that owns the handshake keeping xPaste's own writes out of the history.
+    /// Deciding is kept apart from doing so the never-store filter can run in between. A pattern is
+    /// a "hands off this content" instruction, and rewriting the clipboard of something the user
+    /// forbade storing would still be touching it — so nothing may be written until the filter has
+    /// had its say. This function has no side effects at all.
+    static func remotePathRewrite(for item: ClipboardItem) -> String? {
+        guard item.type == .text, let text = item.text else { return nil }
+        return RemotePath.strip(text)
+    }
+
+    /// Puts `stripped` on the pasteboard, and returns the item to store in place of `item`.
     ///
-    /// Internal rather than private so the rewrite can be exercised against a scratch pasteboard;
-    /// `poll` is the only caller in the app.
-    func strippingRemotePath(_ item: ClipboardItem) -> ClipboardItem? {
-        guard item.type == .text,
-              let text = item.text,
-              let stripped = RemotePath.strip(text)
-        else { return nil }
-
-        // The pasteboard has to still hold what was captured. `poll` reads the change count and
-        // then spends real time in `ClipboardItem.from` and `PasteboardPayload.capture`; a copy
-        // another app makes inside that window would be destroyed by the `clearContents` below —
-        // and, because the write that follows is claimed, never captured on the next tick either.
-        // Reading is harmless to race with; this is the one place `poll` became destructive.
-        guard ownsCurrentChange else { return nil }
-
-        // `clearContents` rather than overwriting the string: the source app offered other
-        // representations of the same URL, and a plain string laid on top of them would leave the
-        // receiving app free to prefer one of the originals.
-        writeOwned { board in
-            board.clearContents()
-            board.setString(stripped, forType: .string)
+    /// Lives here rather than in `ClipboardItem.from` because the rewrite has to reach the system
+    /// pasteboard too, and this is the only type that owns the handshake that keeps xPaste's own
+    /// writes out of the history.
+    ///
+    /// Internal rather than private so it can be exercised against a scratch pasteboard; `poll` is
+    /// the only caller in the app.
+    func applyingRemotePath(_ stripped: String, to item: ClipboardItem) -> ClipboardItem {
+        // The pasteboard write, but only while the board still holds what was captured. `poll`
+        // reads the change count and then spends real time in `ClipboardItem.from` and
+        // `PasteboardPayload.capture`; a copy another app makes inside that window would be
+        // destroyed by `clearContents` and, because the write is claimed, never captured on the
+        // next tick either. Reading is harmless to race with; this is the one place `poll` became
+        // destructive, and this is the whole of the destruction.
+        //
+        // The replacement item is returned either way. Skipping the write is about not clobbering
+        // someone else's copy; the history's own rule — that what it stores is the stripped form —
+        // has nothing to do with that race, and dropping the item or storing the un-stripped form
+        // would both break it for no gain.
+        if ownsCurrentChange {
+            // `clearContents` rather than overwriting the string: the source app offered other
+            // representations of the same URL, and a plain string laid on top of them would leave
+            // the receiving app free to prefer one of the originals.
+            writeOwned { board in
+                board.clearContents()
+                board.setString(stripped, forType: .string)
+            }
         }
 
         // A fresh item rather than a mutated one, for the payload's sake. Pasting from the panel
@@ -106,18 +118,14 @@ final class ClipboardMonitor {
 
     /// The strings a never-store pattern is matched against.
     ///
-    /// Both what will be stored and what was copied, because `strippingRemotePath` can have
-    /// replaced one with the other in between. A pattern is authored against what the user watches
-    /// themselves copy — `10.0.0.5` is a natural way to say "never keep my server paths" — and
-    /// after the rewrite the item no longer contains it. Matching only the stored text would write
-    /// that item to disk against an explicit rule.
-    ///
-    /// The reverse direction is real too, if rarer: percent-decoding means `/home/bí mật` appears
-    /// only in the stripped text, never in the `%62%C3%AD…` that was copied.
-    static func exclusionCandidates(for item: ClipboardItem, captured: String?) -> [String] {
+    /// What was copied and what the rewrite would replace it with, because either can be the one
+    /// the user wrote their pattern against. `10.0.0.5` is a natural way to say "never keep my
+    /// server paths", and it appears only in what was copied; percent-decoding runs the other way,
+    /// putting `/home/bí mật` only in the rewrite and never in the `%62%C3%AD…` that was copied.
+    static func exclusionCandidates(for item: ClipboardItem, rewrittenTo rewrite: String?) -> [String] {
         var candidates = [item.text, item.fileURLs?.map(\.path).joined(separator: "\n")]
             .compactMap { $0 }
-        if let captured, captured != item.text { candidates.append(captured) }
+        if let rewrite, rewrite != item.text { candidates.append(rewrite) }
         return candidates
     }
 
@@ -198,21 +206,23 @@ final class ClipboardMonitor {
 
         guard var item = ClipboardItem.from(pasteboard: pb) else { return }
 
-        // Before the exclusion filter, so the host is already gone by the time anything can reach
-        // disk. What was copied is kept for the filter's sake — see `exclusionCandidates`.
-        let capturedText = item.text
-        if let stripped = strippingRemotePath(item) { item = stripped }
+        // Decided here, applied below: everything between the two is the never-store filter, and a
+        // pattern is a "hands off this content" instruction that the rewrite has to obey as much
+        // as the write to disk does.
+        let rewrite = Self.remotePathRewrite(for: item)
 
         // Never-store patterns (tokens, keys, card numbers). The point is that this content never
-        // reaches disk at all.
+        // reaches disk at all — and, for anything caught here, never reaches the pasteboard either.
         let patterns = ExclusionRules.storedPatterns(defaults)
         if !patterns.isEmpty {
-            if Self.exclusionCandidates(for: item, captured: capturedText).contains(where: {
+            if Self.exclusionCandidates(for: item, rewrittenTo: rewrite).contains(where: {
                 ExclusionRules.shouldExclude($0, patterns: patterns)
             }) {
                 return
             }
         }
+
+        if let rewrite { item = applyingRemotePath(rewrite, to: item) }
 
         item.sourceAppBundleID = sourceBundleID
         DispatchQueue.main.async {

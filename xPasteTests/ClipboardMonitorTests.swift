@@ -73,13 +73,41 @@ extension ClipboardMonitorTests {
         return item
     }
 
-    func testAServerPathIsRewrittenOnThePasteboard() {
+    private var serverPath: String { "sftp://10.0.0.5/home/www" }
+
+    /// Deciding must not touch anything: `poll` runs the never-store filter between the decision
+    /// and the write, and that ordering is only safe because this half has no side effects.
+    func testDecidingTheRewriteTouchesNothing() {
+        let pb = scratchBoard("remote-path-decide")
+        pb.clearContents()
+        pb.setString(serverPath, forType: .string)
+        let before = pb.changeCount
+
+        XCTAssertEqual(ClipboardMonitor.remotePathRewrite(for: textItem(serverPath)), "/home/www")
+
+        XCTAssertEqual(pb.changeCount, before)
+        XCTAssertEqual(pb.string(forType: .string), serverPath)
+    }
+
+    func testTextThatIsNotAServerPathHasNoRewrite() {
+        XCTAssertNil(ClipboardMonitor.remotePathRewrite(for: textItem("just some text")))
+    }
+
+    /// Only text items. A Link card, a colour, an image, a file or a folder is passed through — and
+    /// a `.url` item in particular can only be `http`/`https`, which `RemotePath` refuses anyway.
+    func testOnlyTextItemsAreConsidered() {
+        var link = textItem(serverPath)
+        link.type = .url
+        XCTAssertNil(ClipboardMonitor.remotePathRewrite(for: link))
+    }
+
+    func testApplyingARewritePutsThePathOnThePasteboard() {
         let pb = scratchBoard("remote-path")
         let monitor = ClipboardMonitor(pasteboard: pb)
 
-        let stripped = monitor.strippingRemotePath(textItem("sftp://10.0.0.5/home/www"))
+        let stored = monitor.applyingRemotePath("/home/www", to: textItem(serverPath))
 
-        XCTAssertEqual(stripped?.text, "/home/www")
+        XCTAssertEqual(stored.text, "/home/www")
         XCTAssertEqual(pb.string(forType: .string), "/home/www")
     }
 
@@ -91,11 +119,16 @@ extension ClipboardMonitorTests {
         // The copy the SFTP client made, and then `poll` noting the count it is working from —
         // which is the state the rewrite actually runs in.
         pb.clearContents()
-        pb.setString("sftp://10.0.0.5/home/www", forType: .string)
+        pb.setString(serverPath, forType: .string)
         monitor.markNextChangeAsOwn()
+        let before = pb.changeCount
 
-        _ = monitor.strippingRemotePath(textItem("sftp://10.0.0.5/home/www"))
+        _ = monitor.applyingRemotePath("/home/www", to: textItem(serverPath))
 
+        // Both halves. Ownership alone would hold just as well if the write had never happened —
+        // the count would simply not have moved — so the write is asserted too.
+        XCTAssertGreaterThan(pb.changeCount, before)
+        XCTAssertEqual(pb.string(forType: .string), "/home/www")
         XCTAssertTrue(monitor.ownsCurrentChange)
     }
 
@@ -105,10 +138,10 @@ extension ClipboardMonitorTests {
         let pb = scratchBoard("remote-path-payload")
         let monitor = ClipboardMonitor(pasteboard: pb)
 
-        let stripped = monitor.strippingRemotePath(textItem("sftp://10.0.0.5/home/www"))
+        let stored = monitor.applyingRemotePath("/home/www", to: textItem(serverPath))
 
-        XCTAssertEqual(stripped?.payload, PasteboardPayload.plainText("/home/www"))
-        XCTAssertNil(stripped?.payload?.items.first?.data(forType: "public.rtf"))
+        XCTAssertEqual(stored.payload, PasteboardPayload.plainText("/home/www"))
+        XCTAssertNil(stored.payload?.items.first?.data(forType: "public.rtf"))
     }
 
     /// The same on the pasteboard side: `clearContents` drops the representations the source app
@@ -116,43 +149,16 @@ extension ClipboardMonitorTests {
     func testNoRepresentationOfTheOriginalSurvivesOnThePasteboard() {
         let pb = scratchBoard("remote-path-types")
         pb.clearContents()
-        pb.setString("sftp://10.0.0.5/home/www", forType: .string)
+        pb.setString(serverPath, forType: .string)
         pb.setData(Data("{\\rtf1 x}".utf8), forType: .rtf)
         let monitor = ClipboardMonitor(pasteboard: pb)
 
-        _ = monitor.strippingRemotePath(textItem("sftp://10.0.0.5/home/www"))
+        _ = monitor.applyingRemotePath("/home/www", to: textItem(serverPath))
 
         XCTAssertNil(pb.data(forType: .rtf))
         XCTAssertEqual(pb.string(forType: .string), "/home/www")
     }
-
-    func testTextThatIsNotAServerPathIsLeftAlone() {
-        let pb = scratchBoard("remote-path-none")
-        pb.clearContents()
-        pb.setString("just some text", forType: .string)
-        let monitor = ClipboardMonitor(pasteboard: pb)
-
-        let before = pb.changeCount
-        XCTAssertNil(monitor.strippingRemotePath(textItem("just some text")))
-        XCTAssertEqual(pb.changeCount, before)
-        XCTAssertEqual(pb.string(forType: .string), "just some text")
-    }
-
-    /// Only text items. A Link card, a colour, an image, a file or a folder is passed through — and
-    /// a `.url` item in particular can only be `http`/`https`, which `RemotePath` refuses anyway.
-    func testOnlyTextItemsAreConsidered() {
-        let pb = scratchBoard("remote-path-type")
-        let monitor = ClipboardMonitor(pasteboard: pb)
-
-        var link = textItem("sftp://10.0.0.5/home/www")
-        link.type = .url
-
-        let before = pb.changeCount
-        XCTAssertNil(monitor.strippingRemotePath(link))
-        XCTAssertEqual(pb.changeCount, before)
-    }
 }
-
 
 // MARK: - Racing with another app's copy
 
@@ -165,17 +171,22 @@ extension ClipboardMonitorTests {
         let pb = scratchBoard("remote-path-race")
         let monitor = ClipboardMonitor(pasteboard: pb)
         pb.clearContents()
-        pb.setString("sftp://10.0.0.5/home/www", forType: .string)
+        pb.setString(serverPath, forType: .string)
         monitor.markNextChangeAsOwn()
 
         // Someone else copies while the capture is still in flight.
         pb.clearContents()
         pb.setString("something else entirely", forType: .string)
 
-        XCTAssertNil(monitor.strippingRemotePath(textItem("sftp://10.0.0.5/home/www")))
+        let stored = monitor.applyingRemotePath("/home/www", to: textItem(serverPath))
+
         XCTAssertEqual(pb.string(forType: .string), "something else entirely")
-        // And it is left unclaimed, so the next poll still captures it.
+        // And left unclaimed, so the next poll still captures it.
         XCTAssertFalse(monitor.ownsCurrentChange)
+        // The item is still stored stripped: the race is about not clobbering someone else's copy,
+        // and has nothing to do with the history's rule about what it keeps.
+        XCTAssertEqual(stored.text, "/home/www")
+        XCTAssertEqual(stored.payload, PasteboardPayload.plainText("/home/www"))
     }
 }
 
@@ -185,29 +196,32 @@ extension ClipboardMonitorTests {
 
     /// A rule naming the server has to keep working after the host has been stripped out of the
     /// item, or the rewrite would quietly write to disk what an explicit rule forbade.
-    func testAPatternMatchingWhatWasCopiedStillApplies() {
-        let stored = ClipboardItem(type: .text, text: "/home/www")
-        let candidates = ClipboardMonitor.exclusionCandidates(
-            for: stored, captured: "sftp://10.0.0.5/home/www")
+    func testAPatternNamingTheServerStillCatchesTheItem() {
+        let captured = ClipboardItem(type: .text, text: "sftp://10.0.0.5/home/www")
+        let candidates = ClipboardMonitor.exclusionCandidates(for: captured, rewrittenTo: "/home/www")
 
-        XCTAssertTrue(candidates.contains("sftp://10.0.0.5/home/www"))
-        XCTAssertTrue(ExclusionRules.shouldExclude(
-            candidates.first(where: { $0.contains("10.0.0.5") }) ?? "", patterns: ["10.0.0.5"]))
+        XCTAssertTrue(candidates.contains(where: {
+            ExclusionRules.shouldExclude($0, patterns: ["10.0.0.5"])
+        }))
     }
 
-    /// The other direction: percent-decoding puts text in the stored item that was never in the
-    /// copy, so the stored text has to be matched too.
-    func testThePatternIsAlsoMatchedAgainstTheStoredText() {
-        let stored = ClipboardItem(type: .text, text: "/home/bí mật")
-        let candidates = ClipboardMonitor.exclusionCandidates(
-            for: stored, captured: "sftp://h/home/b%C3%AD%20m%E1%BA%ADt")
+    /// The other direction: percent-decoding puts text in the rewrite that was never in the copy,
+    /// so a pattern written against the readable form has to be caught too.
+    func testAPatternMatchingOnlyTheDecodedFormIsCaught() {
+        let captured = ClipboardItem(type: .text, text: "sftp://h/home/b%C3%AD%20m%E1%BA%ADt")
+        let candidates = ClipboardMonitor.exclusionCandidates(for: captured, rewrittenTo: "/home/bí mật")
 
-        XCTAssertTrue(candidates.contains("/home/bí mật"))
+        // Neither string alone would do: the pattern is absent from what was copied, and the
+        // server is absent from the rewrite.
+        XCTAssertFalse(ExclusionRules.shouldExclude(captured.text!, patterns: ["bí mật"]))
+        XCTAssertTrue(candidates.contains(where: {
+            ExclusionRules.shouldExclude($0, patterns: ["bí mật"])
+        }))
     }
 
-    /// An untouched item lists its text once, not twice.
+    /// An item with no rewrite lists its text once, not twice.
     func testAnItemThatWasNotRewrittenIsListedOnce() {
         let item = ClipboardItem(type: .text, text: "hello")
-        XCTAssertEqual(ClipboardMonitor.exclusionCandidates(for: item, captured: "hello"), ["hello"])
+        XCTAssertEqual(ClipboardMonitor.exclusionCandidates(for: item, rewrittenTo: nil), ["hello"])
     }
 }
