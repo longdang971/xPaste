@@ -88,11 +88,11 @@ extension ClipboardMonitorTests {
     func testTheRewriteIsClaimedSoItIsNotCapturedAgain() {
         let pb = scratchBoard("remote-path-owned")
         let monitor = ClipboardMonitor(pasteboard: pb)
-        // The copy the SFTP client made: a change the monitor does not own, which is the state
-        // `poll` runs in.
+        // The copy the SFTP client made, and then `poll` noting the count it is working from —
+        // which is the state the rewrite actually runs in.
         pb.clearContents()
         pb.setString("sftp://10.0.0.5/home/www", forType: .string)
-        XCTAssertFalse(monitor.ownsCurrentChange)
+        monitor.markNextChangeAsOwn()
 
         _ = monitor.strippingRemotePath(textItem("sftp://10.0.0.5/home/www"))
 
@@ -150,5 +150,64 @@ extension ClipboardMonitorTests {
         let before = pb.changeCount
         XCTAssertNil(monitor.strippingRemotePath(link))
         XCTAssertEqual(pb.changeCount, before)
+    }
+}
+
+
+// MARK: - Racing with another app's copy
+
+extension ClipboardMonitorTests {
+
+    /// `poll` reads the change count, then spends real time capturing the payload. A copy landing
+    /// in that window must not be wiped by the rewrite — before this feature `poll` only read, and
+    /// a racing copy was simply captured on the next tick.
+    func testACopyLandingDuringCaptureIsNotDestroyed() {
+        let pb = scratchBoard("remote-path-race")
+        let monitor = ClipboardMonitor(pasteboard: pb)
+        pb.clearContents()
+        pb.setString("sftp://10.0.0.5/home/www", forType: .string)
+        monitor.markNextChangeAsOwn()
+
+        // Someone else copies while the capture is still in flight.
+        pb.clearContents()
+        pb.setString("something else entirely", forType: .string)
+
+        XCTAssertNil(monitor.strippingRemotePath(textItem("sftp://10.0.0.5/home/www")))
+        XCTAssertEqual(pb.string(forType: .string), "something else entirely")
+        // And it is left unclaimed, so the next poll still captures it.
+        XCTAssertFalse(monitor.ownsCurrentChange)
+    }
+}
+
+// MARK: - What a never-store pattern is matched against
+
+extension ClipboardMonitorTests {
+
+    /// A rule naming the server has to keep working after the host has been stripped out of the
+    /// item, or the rewrite would quietly write to disk what an explicit rule forbade.
+    func testAPatternMatchingWhatWasCopiedStillApplies() {
+        let stored = ClipboardItem(type: .text, text: "/home/www")
+        let candidates = ClipboardMonitor.exclusionCandidates(
+            for: stored, captured: "sftp://10.0.0.5/home/www")
+
+        XCTAssertTrue(candidates.contains("sftp://10.0.0.5/home/www"))
+        XCTAssertTrue(ExclusionRules.shouldExclude(
+            candidates.first(where: { $0.contains("10.0.0.5") }) ?? "", patterns: ["10.0.0.5"]))
+    }
+
+    /// The other direction: percent-decoding puts text in the stored item that was never in the
+    /// copy, so the stored text has to be matched too.
+    func testThePatternIsAlsoMatchedAgainstTheStoredText() {
+        let stored = ClipboardItem(type: .text, text: "/home/bí mật")
+        let candidates = ClipboardMonitor.exclusionCandidates(
+            for: stored, captured: "sftp://h/home/b%C3%AD%20m%E1%BA%ADt")
+
+        XCTAssertTrue(candidates.contains("/home/bí mật"))
+    }
+
+    /// An untouched item lists its text once, not twice.
+    func testAnItemThatWasNotRewrittenIsListedOnce() {
+        let item = ClipboardItem(type: .text, text: "hello")
+        XCTAssertEqual(ClipboardMonitor.exclusionCandidates(for: item, captured: "hello"), ["hello"])
     }
 }

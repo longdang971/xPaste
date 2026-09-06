@@ -77,20 +77,36 @@ enum RemotePath {
 
     /// The path of one line, when the whole of that line is a remote URL carrying one.
     ///
-    /// The whole line, because `URL(string:)` refuses a string with spaces in it — which is what
-    /// keeps a sentence that merely mentions a URL from being rewritten into a fragment of itself.
+    /// Rejecting a line with whitespace in it is the whole of "the whole of that line".
+    /// `URL(string:)` accepts unescaped spaces — measured, not assumed — so
+    /// `sftp://10.0.0.5/home/www is the folder` parses as one URL whose path is
+    /// `/home/www is the folder`, and the sentence would be rewritten into a fragment of itself.
+    ///
+    /// It costs the path a client copied with a literal space in it, which is the right side of
+    /// the trade: a client encodes that as `%20`, and the cost of being wrong the other way is a
+    /// clipboard silently replaced with something that was never on it.
     private static func path(of line: String) -> String? {
-        guard let url = URL(string: line),
+        guard !line.contains(where: { $0.isWhitespace }),
+              let url = URL(string: line),
               let scheme = url.scheme,
               schemes.contains(scheme.lowercased())
         else { return nil }
 
         // Decoded: `%C6%B0` belonged to the URL, and the URL is what is being thrown away. What is
         // left is a path, and a path with a Vietnamese folder name in it should read as one.
-        let path = url.path(percentEncoded: false)
+        var path = url.path(percentEncoded: false)
 
         // `sftp://host` on its own names no path, so there is nothing to rewrite it to. A bare `/`
         // is not this case: that is the server's root, and a real answer.
-        return path.isEmpty ? nil : path
+        guard !path.isEmpty else { return nil }
+
+        // `#` and `?` are legal in a POSIX filename, and a client that copies `report#2.txt`
+        // unencoded hands over a URL whose "fragment" is really the back half of the name. Taking
+        // the path alone would truncate it to `/home/report` — and since the caller then replaces
+        // the pasteboard, the rest would be unrecoverable. Put them back in the order a URL writes
+        // them. The properly encoded form has neither component, so this does nothing to it.
+        if let query = url.query(percentEncoded: false) { path += "?" + query }
+        if let fragment = url.fragment(percentEncoded: false) { path += "#" + fragment }
+        return path
     }
 }

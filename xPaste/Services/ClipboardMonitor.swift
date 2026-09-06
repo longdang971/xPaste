@@ -81,6 +81,13 @@ final class ClipboardMonitor {
               let stripped = RemotePath.strip(text)
         else { return nil }
 
+        // The pasteboard has to still hold what was captured. `poll` reads the change count and
+        // then spends real time in `ClipboardItem.from` and `PasteboardPayload.capture`; a copy
+        // another app makes inside that window would be destroyed by the `clearContents` below —
+        // and, because the write that follows is claimed, never captured on the next tick either.
+        // Reading is harmless to race with; this is the one place `poll` became destructive.
+        guard ownsCurrentChange else { return nil }
+
         // `clearContents` rather than overwriting the string: the source app offered other
         // representations of the same URL, and a plain string laid on top of them would leave the
         // receiving app free to prefer one of the originals.
@@ -95,6 +102,23 @@ final class ClipboardMonitor {
         var replacement = ClipboardItem(type: .text, text: stripped)
         replacement.payload = PasteboardPayload.plainText(stripped)
         return replacement
+    }
+
+    /// The strings a never-store pattern is matched against.
+    ///
+    /// Both what will be stored and what was copied, because `strippingRemotePath` can have
+    /// replaced one with the other in between. A pattern is authored against what the user watches
+    /// themselves copy — `10.0.0.5` is a natural way to say "never keep my server paths" — and
+    /// after the rewrite the item no longer contains it. Matching only the stored text would write
+    /// that item to disk against an explicit rule.
+    ///
+    /// The reverse direction is real too, if rarer: percent-decoding means `/home/bí mật` appears
+    /// only in the stripped text, never in the `%62%C3%AD…` that was copied.
+    static func exclusionCandidates(for item: ClipboardItem, captured: String?) -> [String] {
+        var candidates = [item.text, item.fileURLs?.map(\.path).joined(separator: "\n")]
+            .compactMap { $0 }
+        if let captured, captured != item.text { candidates.append(captured) }
+        return candidates
     }
 
     // De-facto standard pasteboard hints (nspasteboard.com) set by password managers and
@@ -174,16 +198,16 @@ final class ClipboardMonitor {
 
         guard var item = ClipboardItem.from(pasteboard: pb) else { return }
 
-        // Before the exclusion filter, so what the filter judges is what will actually be stored —
-        // and so the host is already gone by the time anything can reach disk.
+        // Before the exclusion filter, so the host is already gone by the time anything can reach
+        // disk. What was copied is kept for the filter's sake — see `exclusionCandidates`.
+        let capturedText = item.text
         if let stripped = strippingRemotePath(item) { item = stripped }
 
-        // Never-store patterns (tokens, keys, card numbers). Checked against the text and, for
-        // file items, the paths — the point is that this content never reaches disk at all.
+        // Never-store patterns (tokens, keys, card numbers). The point is that this content never
+        // reaches disk at all.
         let patterns = ExclusionRules.storedPatterns(defaults)
         if !patterns.isEmpty {
-            let candidates = [item.text, item.fileURLs?.map(\.path).joined(separator: "\n")]
-            if candidates.compactMap({ $0 }).contains(where: {
+            if Self.exclusionCandidates(for: item, captured: capturedText).contains(where: {
                 ExclusionRules.shouldExclude($0, patterns: patterns)
             }) {
                 return

@@ -131,3 +131,52 @@ extension RemotePathTests {
         XCTAssertEqual(stripped?.hasPrefix("/home/dir0\n/home/dir1\n"), true)
     }
 }
+
+// MARK: - Prose that begins with a URL
+
+extension RemotePathTests {
+
+    /// `URL(string:)` accepts unescaped spaces, so a sentence whose *first* word happens to be a
+    /// remote URL parses as one URL with a very long path — and the whole sentence would be
+    /// rewritten into a fragment of itself. A copied URL has no bare spaces in it; `%20` is what a
+    /// real one carries.
+    func testASentenceBeginningWithARemoteURLIsNotStripped() {
+        XCTAssertNil(RemotePath.strip("sftp://10.0.0.5/home/www is the folder"))
+        XCTAssertNil(RemotePath.strip("sftp://h/a and then some more words"))
+    }
+
+    /// The same rule inside a block: one line carrying prose disowns all of it.
+    func testALineOfProseBeginningWithAURLDisownsTheBlock() {
+        XCTAssertNil(RemotePath.strip("sftp://h/a\nsftp://h/b is the one"))
+    }
+
+    /// And the encoded form still works, which is what a client actually copies.
+    func testAnEncodedSpaceIsStillAPath() {
+        XCTAssertEqual(RemotePath.strip("sftp://h/My%20Documents"), "/My Documents")
+    }
+}
+
+// MARK: - Filenames that look like URL syntax
+
+/// `#` and `?` are legal in a POSIX filename, and a client that copies one unencoded hands over a
+/// URL whose "fragment" and "query" are really part of the path.
+extension RemotePathTests {
+
+    func testAHashInAFilenameSurvives() {
+        XCTAssertEqual(RemotePath.strip("sftp://h/home/report#2.txt"), "/home/report#2.txt")
+    }
+
+    func testAQuestionMarkInAFilenameSurvives() {
+        XCTAssertEqual(RemotePath.strip("sftp://h/notes/what?.txt"), "/notes/what?.txt")
+    }
+
+    /// Reassembled in the order a URL puts them, so the path comes back as it was written.
+    func testAQuestionMarkAndAHashTogetherKeepTheirOrder() {
+        XCTAssertEqual(RemotePath.strip("sftp://h/a?q=1#f"), "/a?q=1#f")
+    }
+
+    /// The properly encoded form was never broken, and must not become double-handled.
+    func testAnEncodedHashIsUnaffected() {
+        XCTAssertEqual(RemotePath.strip("sftp://h/home/report%232.txt"), "/home/report#2.txt")
+    }
+}
