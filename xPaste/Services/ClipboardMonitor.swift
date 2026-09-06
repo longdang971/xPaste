@@ -67,6 +67,36 @@ final class ClipboardMonitor {
         markNextChangeAsOwn()
     }
 
+    /// A copied server path, reduced to the path alone — on the pasteboard as well as in the item.
+    ///
+    /// Returns the replacement, or nil when there was nothing to strip. Lives here rather than in
+    /// `ClipboardItem.from` because the rewrite has to reach the system pasteboard too, and this is
+    /// the only type that owns the handshake keeping xPaste's own writes out of the history.
+    ///
+    /// Internal rather than private so the rewrite can be exercised against a scratch pasteboard;
+    /// `poll` is the only caller in the app.
+    func strippingRemotePath(_ item: ClipboardItem) -> ClipboardItem? {
+        guard item.type == .text,
+              let text = item.text,
+              let stripped = RemotePath.strip(text)
+        else { return nil }
+
+        // `clearContents` rather than overwriting the string: the source app offered other
+        // representations of the same URL, and a plain string laid on top of them would leave the
+        // receiving app free to prefer one of the originals.
+        writeOwned { board in
+            board.clearContents()
+            board.setString(stripped, forType: .string)
+        }
+
+        // A fresh item rather than a mutated one, for the payload's sake. Pasting from the panel
+        // reads the payload, not `text`; keeping the captured one would leave a card that reads
+        // `/home/www` and pastes `sftp://10.0.0.5/home/www`.
+        var replacement = ClipboardItem(type: .text, text: stripped)
+        replacement.payload = PasteboardPayload.plainText(stripped)
+        return replacement
+    }
+
     // De-facto standard pasteboard hints (nspasteboard.com) set by password managers and
     // apps that generate throwaway content.
     private static let concealedType = "org.nspasteboard.ConcealedType"
@@ -143,6 +173,10 @@ final class ClipboardMonitor {
         }
 
         guard var item = ClipboardItem.from(pasteboard: pb) else { return }
+
+        // Before the exclusion filter, so what the filter judges is what will actually be stored —
+        // and so the host is already gone by the time anything can reach disk.
+        if let stripped = strippingRemotePath(item) { item = stripped }
 
         // Never-store patterns (tokens, keys, card numbers). Checked against the text and, for
         // file items, the paths — the point is that this content never reaches disk at all.
