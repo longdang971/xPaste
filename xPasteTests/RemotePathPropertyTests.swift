@@ -94,7 +94,14 @@ final class RemotePathPropertyTests: XCTestCase {
                               "not absolute: \(out.debugDescription) from \(input.debugDescription)")
             }
 
-            // 2. Nothing a path cannot carry. A CR would split a line downstream just as an LF
+            // 2. Exactly one root slash. `//` is how a client writes "absolute from the server's
+            //    root", and it belongs to the URL rather than to the path.
+            for out in outLines {
+                XCTAssertFalse(out.hasPrefix("//"),
+                               "doubled root: \(out.debugDescription) from \(input.debugDescription)")
+            }
+
+            // 3. Nothing a path cannot carry. A CR would split a line downstream just as an LF
             //    does; a NUL would travel into the pasteboard and the store.
             var forbidden = CharacterSet.newlines
             forbidden.remove("\n")   // the separator between paths is legitimate
@@ -102,12 +109,12 @@ final class RemotePathPropertyTests: XCTestCase {
             XCTAssertFalse(result.unicodeScalars.contains(where: { forbidden.contains($0) }),
                            "control character in \(result.debugDescription) from \(input.debugDescription)")
 
-            // 3. One path in, one path out. This is what makes a multi-selection paste back as the
+            // 4. One path in, one path out. This is what makes a multi-selection paste back as the
             //    same number of entries it was copied as.
             XCTAssertEqual(outLines.count, significantLines(of: input).count,
                            "line count changed: \(input.debugDescription) -> \(result.debugDescription)")
 
-            // 4. The result is a path, not a URL: running it through again finds nothing to do.
+            // 5. The result is a path, not a URL: running it through again finds nothing to do.
             XCTAssertNil(RemotePath.strip(result),
                          "result was itself strippable: \(result.debugDescription)")
         }

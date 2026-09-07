@@ -34,6 +34,7 @@ nothing else, which is the whole reason it can be rewritten without a preference
 | Input | Output |
 | --- | --- |
 | `sftp://10.0.0.5/home/www` | `/home/www` |
+| `sftp://10.0.0.5//home/www` | `/home/www` |
 | `sftp://user@10.0.0.5:2222/home/www` | `/home/www` |
 | `SFTP://Host/Path` | `/Path` |
 | `sftp://h/th%C6%B0%20m%E1%BB%A5c` | `/thư mục` |
@@ -69,6 +70,20 @@ sentence beginning with a server path was silently replaced by a fragment of its
 It costs the path a client copied with a literal space in it. That is the right side of the trade:
 a client encodes such a space as `%20`, and the cost of being wrong the other way is a clipboard
 replaced with something that was never on it.
+
+### One root slash
+
+A client writes the server's own root as a second slash — the real string this feature was built
+for is `sftp://158.255.208.185//home/streamno1.xyz/public_html` — where the first slash ends the
+authority and the second begins the path. `url.path` returns both, so the leading run is collapsed
+to one.
+
+Collapsing rather than deleting the `scheme://host/` prefix, which reaches the same answer for a
+`//` string: deleting takes the root slash with it whenever the client wrote only one, so
+`sftp://host/home/www` would come back as the relative `home/www`.
+
+Only the leading run. A repeated separator further along is the client's own business; this is not
+a path normaliser, which is also why `/a/../b` is left as it was written.
 
 ### The result is an absolute path
 

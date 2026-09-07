@@ -316,3 +316,42 @@ extension RemotePathTests {
         XCTAssertNil(RemotePath.strip("sftp://h/home/www\nftp://h/pub"))
     }
 }
+
+// MARK: - The double slash a client uses for "absolute from root"
+
+/// A client writes the server's own root as a second slash: `sftp://host//home/x` for `/home/x`.
+/// The first slash ends the authority, the second begins the path — so the path arrives with both
+/// and has to come back with one.
+///
+/// Collapsing rather than deleting the `scheme://host/` prefix: deleting it takes the root slash
+/// with it whenever the client wrote only one, leaving a relative path.
+extension RemotePathTests {
+
+    /// The real string, from the SFTP client this feature exists for.
+    func testTheDoubleSlashFormCollapsesToOneRoot() {
+        XCTAssertEqual(RemotePath.strip("sftp://158.255.208.185//home/streamno1.xyz/public_html"),
+                       "/home/streamno1.xyz/public_html")
+    }
+
+    /// The single-slash form is untouched by the collapse, which is the whole reason for collapsing
+    /// instead of deleting a prefix.
+    func testTheSingleSlashFormIsUnaffected() {
+        XCTAssertEqual(RemotePath.strip("sftp://158.255.208.185/home/www"), "/home/www")
+    }
+
+    /// Any run of them, not only two — nothing else in a path means a repeated separator either.
+    func testALongerRunOfSlashesCollapsesToo() {
+        XCTAssertEqual(RemotePath.strip("sftp://h///a"), "/a")
+    }
+
+    /// Only the leading run. A separator inside the path is the client's own business, and this is
+    /// not a path normaliser.
+    func testSlashesInsideThePathAreLeftAlone() {
+        XCTAssertEqual(RemotePath.strip("sftp://h//home//a//b"), "/home//a//b")
+    }
+
+    /// The root itself survives as a single slash rather than collapsing to nothing.
+    func testRootStaysRoot() {
+        XCTAssertEqual(RemotePath.strip("sftp://h//"), "/")
+    }
+}

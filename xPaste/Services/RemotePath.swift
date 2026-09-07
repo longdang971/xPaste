@@ -154,6 +154,24 @@ enum RemotePath {
         // `RemotePathPropertyTests`, not by anybody thinking of it.
         guard path.hasPrefix("/") else { return nil }
 
+        // A client writes the server's own root as a second slash: `sftp://host//home/x` is
+        // `/home/x`, the first slash ending the authority and the second beginning the path. The
+        // leading run comes back as one.
+        //
+        // Collapsing rather than deleting the `scheme://host/` prefix, which is the other way to
+        // get the same answer for a `//` string: deleting takes the root slash with it whenever the
+        // client wrote only one, and `sftp://host/home/x` would come back as the relative
+        // `home/x`.
+        //
+        // Only the leading run. A repeated separator further along is the client's own business —
+        // this is not a path normaliser, and `/a/../b` is left alone for the same reason.
+        //
+        // `drop(while:)` once rather than `removeFirst()` in a loop: the latter is O(n) per call,
+        // and a path of nothing but slashes is inside the size bound.
+        if path.hasPrefix("//") {
+            path = "/" + path.drop(while: { $0 == "/" })
+        }
+
         // `#` and `?` are legal in a POSIX filename, and a client that copies `report#2.txt`
         // unencoded hands over a URL whose "fragment" is really the back half of the name. Taking
         // the path alone would truncate it to `/home/report` — and since the caller then replaces
