@@ -474,9 +474,7 @@ struct ContentView: View {
                 }
 
                 tabFull(title: "Clipboard", icon: "clock.arrow.circlepath", tab: .all)
-                // A coloured dot, which is how Paste marks a pinboard. The compact row keeps the
-                // pin: it appears only while searching and has no label to explain a bare dot.
-                tabFull(title: "Pinboard", icon: "circle.fill", iconColor: .red, tab: .pinned)
+                tabFull(title: "Pinboard", icon: "pin.fill", iconColor: .red, tab: .pinned)
 
                 Spacer(minLength: 0)
             }
@@ -1243,9 +1241,9 @@ private struct SearchIconButton: View {
 
     var body: some View {
         Image(systemName: "magnifyingglass")
-            // 16, not 20. Measured against Paste's, whose glyph is 16.5pt tall — this one stood a
-            // head above the tabs beside it.
-            .font(.system(size: 16, weight: .medium))
+            // 17 regular. Measured against Paste's side by side: 16.0 x 16.5pt with a 2-3px stroke,
+            // against this one's 15.5 x 15.5pt with a flat 3px — a shade small and a shade heavy.
+            .font(.system(size: 17, weight: .regular))
             .foregroundColor(Color(NSColor.labelColor))
             .padding(7)
             .background(Capsule().fill(ToolbarTint.fill(selected: false, hovered: hovered)))
@@ -1298,8 +1296,16 @@ private struct MoreMenu: View {
 /// toolbar used to lay `controlColor` over the glass and so lightened instead. `Color.primary`
 /// rather than black keeps that relationship the right way round in dark mode.
 enum ToolbarTint {
-    static let selected = Color.primary.opacity(0.08)
-    static let hovered = Color.primary.opacity(0.04)
+    // Tuned by measuring, not by arithmetic. `Color.primary` is `labelColor` — black at 85% alpha
+    // rather than black — and composited through the panel's material it lands at roughly 0.64 of
+    // what is asked for, which no amount of reasoning about alpha was going to predict exactly.
+    //
+    // The target is the ratio, which is what survives the glass: Paste's pill measures 8.42% darker
+    // than the bar it sits on (#B9BCC1 on #CACCD2). 0.08 gave 5.6% and 0.10 gave 6.4%; 0.13 lands
+    // on it. The ratio is the right thing to match because a multiplicative darkening is the same
+    // proportion whatever the wallpaper behind the panel happens to be.
+    static let selected = Color.primary.opacity(0.13)
+    static let hovered = Color.primary.opacity(0.065)
 
     static func fill(selected: Bool, hovered: Bool) -> Color {
         selected ? Self.selected : (hovered ? Self.hovered : .clear)
@@ -1316,12 +1322,24 @@ private struct FullTabButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            // 6, not 5: the gap between Paste's clock and its label measures 8pt against the 7pt
+            // this was leaving.
+            HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundColor(iconColor ?? Color(NSColor.labelColor))
                 Text(title)
-                    .font(.system(size: 14, weight: .medium))
+                    // One weight, whichever tab is selected. A measurement said otherwise — Paste's
+                    // selected label came out at 3px stems against its unselected 2px — but that
+                    // was the measurement lying: it thresholded on absolute luminance, and the
+                    // selected label sits on a pill that is darker than the bar, so more of its
+                    // antialiased edge fell below the line. The pill is the whole of the selection.
+                    //
+                    // 13, not 14. The same word in both bars: "Clipboard" sets 56.5pt wide in
+                    // Paste and was setting 60.5pt here, and the clock beside it was out by the
+                    // same 7%. The stems that measured a pixel heavier were that size difference,
+                    // not a heavier weight.
+                    .font(.system(size: 13, weight: .regular))
                     // Full label colour whether or not this tab is the selected one. Measured: the
                     // unselected label is `#262629` against the selected one's `#222325`, so the
                     // pill is the only thing marking the selection. Dimming the text as well, which
