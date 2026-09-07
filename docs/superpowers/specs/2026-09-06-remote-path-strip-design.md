@@ -13,24 +13,35 @@ a switch nobody turns off.
 
 ## What counts as a remote path
 
-Three schemes: `sftp`, `ftp`, `ftps`. Compared case-insensitively.
+One scheme: `sftp`. Compared case-insensitively.
 
-`ssh` and `scp` are deliberately out. They are shell targets rather than things a file browser
-copies, and the narrower list cannot surprise anyone.
+`ssh` and `scp` are out. They are shell targets rather than things a file browser copies, and the
+narrower list cannot surprise anyone.
 
 `http`/`https` are out for a stronger reason: they are the two schemes `ClipboardItem.contentType`
 promotes to a `.url` item, and stripping one would turn a Link card into a meaningless path.
+
+`ftp` and `ftps` were in this list and were taken out. The reasoning that admitted them — "file
+transfer schemes, and they do not overlap with the web" — was simply wrong. They are ordinary
+resource locators that appear on download pages and in documentation, and `contentType` does *not*
+promote them, so `ftp://ftp.gnu.org/gnu/emacs/emacs-29.1.tar.gz` arrived as plain text and was
+rewritten to `/gnu/emacs/emacs-29.1.tar.gz`. Unrecoverably: the rewrite replaces the pasteboard and
+the history keeps only the stripped form.
+
+`sftp://` carries no such traffic. It is what a file browser puts on the clipboard and essentially
+nothing else, which is the whole reason it can be rewritten without a preference to turn off.
 
 | Input | Output |
 | --- | --- |
 | `sftp://10.0.0.5/home/www` | `/home/www` |
 | `sftp://user@10.0.0.5:2222/home/www` | `/home/www` |
 | `SFTP://Host/Path` | `/Path` |
-| `ftp://h/a`, `ftps://h/a` | `/a` |
 | `sftp://h/th%C6%B0%20m%E1%BB%A5c` | `/thư mục` |
 | `sftp://10.0.0.5/` | `/` |
 | `sftp://10.0.0.5` | *unchanged* |
 | `ssh://h/a`, `http://h/a` | *unchanged* |
+| `ftp://h/a`, `ftps://h/a` | *unchanged* |
+| `sftp:h/a` (opaque, relative) | *unchanged* |
 | `Xem sftp://h/a nhé` | *unchanged* |
 | `/home/www` | *unchanged* |
 

@@ -23,7 +23,11 @@ final class RemotePathPropertyTests: XCTestCase {
         }
     }
 
-    private let schemes = ["sftp", "ftp", "ftps", "SFTP", "FtP", "ssh", "scp", "http", "https", "file", ""]
+    /// Weighted towards `sftp` and its casings, because that is the only scheme that strips and the
+    /// invariants below are only exercised by inputs that do. The rest are here as the negatives:
+    /// `ftp`/`ftps` in particular must come back untouched.
+    private let schemes = ["sftp", "SFTP", "sFtP", "Sftp", "sftP",
+                           "ftp", "ftps", "FtP", "ssh", "scp", "http", "https", "file", ""]
     private let userinfos = ["", "user@", "user:pass@", "@", "u%40b@"]
     private let hosts = ["h", "10.0.0.5", "[::1]", "", "xn--80ak6aa92e", "H.Example.COM"]
     private let ports = ["", ":22", ":0", ":65535"]

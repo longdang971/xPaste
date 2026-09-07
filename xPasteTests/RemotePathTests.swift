@@ -23,10 +23,8 @@ final class RemotePathTests: XCTestCase {
         XCTAssertEqual(RemotePath.strip("SFTP://Host/Path"), "/Path")
     }
 
-    func testPlainAndSecureFTPAreStrippedToo() {
-        XCTAssertEqual(RemotePath.strip("ftp://h/a"), "/a")
-        XCTAssertEqual(RemotePath.strip("ftps://h/a"), "/a")
-    }
+    /// `ftp` and `ftps` are *not* stripped, and that is deliberate — see
+    /// `testPlainAndSecureFTPAreLeftAlone`.
 
     /// The encoding belonged to the URL, and the URL is what is being thrown away. A Vietnamese
     /// folder name comes back readable rather than as `%C6%B0`.
@@ -85,7 +83,7 @@ final class RemotePathTests: XCTestCase {
         let copied = """
         sftp://10.0.0.5/home/www
         sftp://10.0.0.5/var/log
-        ftp://10.0.0.5/tmp
+        sftp://10.0.0.5/tmp
         """
         XCTAssertEqual(RemotePath.strip(copied), "/home/www\n/var/log\n/tmp")
     }
@@ -286,5 +284,35 @@ extension RemotePathTests {
     func testAPathBehindMoreWhitespaceThanThatIsRefused() {
         let padded = String(repeating: " ", count: 40) + "sftp://h/a"
         XCTAssertNil(RemotePath.strip(padded))
+    }
+}
+
+
+// MARK: - Why the set is only `sftp`
+
+/// `ftp` and `ftps` are not only file-browser "copy path" schemes; they are ordinary resource
+/// locators that appear on web pages and in documentation. `ClipboardItem.contentType` promotes
+/// only `http`/`https` to a Link, so an `ftp://` download URL arrives as plain text and would be
+/// rewritten to its path — and since the rewrite replaces the pasteboard and the history keeps only
+/// the stripped form, the URL would be unrecoverable.
+///
+/// `sftp://` carries no such traffic: it is what a file browser puts on the clipboard, and
+/// essentially nothing else.
+extension RemotePathTests {
+
+    func testPlainAndSecureFTPAreLeftAlone() {
+        XCTAssertNil(RemotePath.strip("ftp://h/a"))
+        XCTAssertNil(RemotePath.strip("ftps://h/a"))
+    }
+
+    /// The case this is really about: a download URL copied off a web page survives intact.
+    func testAnFTPDownloadURLSurvivesIntact() {
+        XCTAssertNil(RemotePath.strip("ftp://ftp.gnu.org/gnu/emacs/emacs-29.1.tar.gz"))
+    }
+
+    /// And one sitting in a block behind a well-formed `sftp://` line disowns the block rather than
+    /// being stripped along with it.
+    func testAnFTPLineDisownsTheBlock() {
+        XCTAssertNil(RemotePath.strip("sftp://h/home/www\nftp://h/pub"))
     }
 }

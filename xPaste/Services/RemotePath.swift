@@ -8,13 +8,23 @@ import Foundation
 /// Pure string→string, the way `TextTransform` is, so the whole rule table is testable without a
 /// pasteboard or a running app. `ClipboardMonitor` is what applies it.
 enum RemotePath {
-    /// The schemes a copied server path arrives under.
+    /// The scheme a copied server path arrives under.
     ///
-    /// `ssh` and `scp` are deliberately absent: they are shell targets rather than things a file
-    /// browser copies. `http`/`https` are absent for a harder reason — they are the two schemes
+    /// Only one. It stays a set because that is the shape both callers ask their question in, and
+    /// narrowing it to a constant would buy nothing.
+    ///
+    /// `ssh` and `scp` are absent: they are shell targets rather than things a file browser copies.
+    /// `http`/`https` are absent for a harder reason — they are the two schemes
     /// `ClipboardItem.contentType` promotes to a `.url` item, and stripping one would leave a Link
     /// card showing a meaningless fragment.
-    static let schemes: Set<String> = ["sftp", "ftp", "ftps"]
+    ///
+    /// `ftp` and `ftps` were here and were taken out. They are not only file-browser "copy path"
+    /// schemes; they are ordinary resource locators that appear on download pages and in
+    /// documentation — and `contentType` does *not* promote them, so an `ftp://` URL arrived as
+    /// plain text and was rewritten to its path. Unrecoverably: the rewrite replaces the pasteboard
+    /// and the history keeps only the stripped form. `sftp://` carries no such traffic; it is what
+    /// a file browser puts on the clipboard and essentially nothing else.
+    static let schemes: Set<String> = ["sftp"]
 
     /// The path `text` reduces to, or nil when there is nothing to strip.
     ///
@@ -61,7 +71,7 @@ enum RemotePath {
     /// reason, as `TextTransform.jsonProbeLimit`.
     private static let sizeLimit = 256 * 1024
 
-    /// `"ftps://"` and `"sftp://"`, the longest of the prefixes.
+    /// The length of `"sftp://"`.
     private static let schemePrefixLength = 7
 
     /// How much leading whitespace the scheme is allowed to sit behind.
