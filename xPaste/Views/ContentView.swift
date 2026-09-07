@@ -12,7 +12,9 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("panelPosition") private var panelPosition: String = "bottom"
     @State private var showSearch = false
-    @State private var scrollTargetID: UUID?
+    /// What the list was last asked to scroll to. See `PanelScrollRequest` for why it is not
+    /// simply the card's id.
+    @State private var scrollRequest: PanelScrollRequest?
     @State private var pendingReorderID: UUID?
     @State private var activeTab: ClipboardTab = .all
     @State private var searchToggleTapped = false
@@ -181,22 +183,10 @@ struct ContentView: View {
                 .opacity(0)
                 .frame(width: 0, height: 0)
 
-                // Arrow-key navigation between cards. Left/Up move to the previous item,
-                // Right/Down to the next — so it feels natural whether the panel lays the
-                // cards out horizontally (bottom/top) or vertically (left/right).
-                Group {
-                    Button("") { moveSelection(by: -1) }
-                        .keyboardShortcut(.leftArrow, modifiers: [])
-                    Button("") { moveSelection(by: 1) }
-                        .keyboardShortcut(.rightArrow, modifiers: [])
-                    Button("") { moveSelection(by: -1) }
-                        .keyboardShortcut(.upArrow, modifiers: [])
-                    Button("") { moveSelection(by: 1) }
-                        .keyboardShortcut(.downArrow, modifiers: [])
-                }
-                .disabled(searchFocused || isRenaming)
-                .opacity(0)
-                .frame(width: 0, height: 0)
+                // Arrow-key navigation between cards lives in `AppDelegate`'s key monitor, not
+                // here — see `PanelArrowKey` for the two ways four hidden key equivalents guarded
+                // by `.disabled(searchFocused …)` went silently dead. It arrives as
+                // `.moveSelectionBy` below.
 
                 Group {
                     // ⏎ pastes what is selected — all of it. Pasting only the first of three
@@ -336,6 +326,10 @@ struct ContentView: View {
             filterSheet.close()
             if !store.filters.isEmpty { store.filters.clear() }
             selection.clear()
+            // The next open starts from a clean row — the list is rewound on `.panelDidHide` —
+            // so a request left pointing at the card the user walked to would be answered
+            // against a list that has already scrolled back to the front.
+            scrollRequest = nil
             preview.close()
             // Drop a half-finished rename rather than reopening the panel into edit mode.
             if renameItemID != nil { renameItemID = nil }
@@ -347,6 +341,10 @@ struct ContentView: View {
                   let item = displayedItems.first else { return }
             finishDrag(dragPlan(for: item), at: point, operation: [],
                        shiftHeld: note.userInfo?["shift"] as? Bool ?? false, cancelled: false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .moveSelectionBy)) { note in
+            guard let delta = note.userInfo?["delta"] as? Int else { return }
+            moveSelection(by: delta)
         }
         .onReceive(NotificationCenter.default.publisher(for: .togglePreviewSelected)) { _ in
             // Space arrives from AppDelegate's key monitor, which cannot know what is selected.
@@ -403,6 +401,10 @@ struct ContentView: View {
                 let registered = LoginItem.isEnabled
                 if registered != launchesAtLogin { launchesAtLogin = registered }
             }
+            // Focus cannot be on a search box that is not on screen. Guarded so the common open
+            // costs nothing: writing to a `@FocusState` moves first responder, and the open path
+            // has already put it where it wants it.
+            if !showSearch, searchFocused { searchFocused = false }
             // Auto-select the first item on open so the keyboard is live immediately:
             // ⌘A selects all, ←/→ move between cards, ⏎ pastes — no click into the list needed.
             if let first = displayedItems.first {
@@ -470,7 +472,16 @@ struct ContentView: View {
                     searchToggleTapped = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { searchToggleTapped = false }
                     withAnimation(toolbarSpring) { showSearch = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { searchFocused = true }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        // The box can have folded away again inside those 50ms: Escape closes the
+                        // panel, and `.panelWillHide` closes the search with it. Taking focus then
+                        // leaves `searchFocused` true with no search box on screen — an invisible
+                        // NSTextField holding the keyboard (both toolbar layouts stay in the
+                        // hierarchy, one at opacity 0) and every shortcut guarded by that flag
+                        // stood down, for the rest of the panel's life and the next one's.
+                        guard showSearch else { return }
+                        searchFocused = true
+                    }
                 }
 
                 tabFull(title: "Clipboard", icon: "clock.arrow.circlepath", tab: .all)
@@ -639,9 +650,9 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .panelDidHide)) { _ in
                 proxy.scrollTo("h-list-start", anchor: .leading)
             }
-            .onChange(of: scrollTargetID) { id in
-                guard let id else { return }
-                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
+            .onChange(of: scrollRequest) { request in
+                guard let request else { return }
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(request.id, anchor: .center) }
             }
         }
     }
@@ -687,9 +698,9 @@ struct ContentView: View {
                     proxy.scrollTo(first.id, anchor: .top)
                 }
             }
-            .onChange(of: scrollTargetID) { id in
-                guard let id else { return }
-                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id, anchor: .center) }
+            .onChange(of: scrollRequest) { request in
+                guard let request else { return }
+                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(request.id, anchor: .center) }
             }
         }
     }
@@ -1146,9 +1157,6 @@ struct ContentView: View {
         selection.select(item.id)
     }
 
-    /// Moves the single-item selection by `delta` in display order (clamped to the ends) and
-    /// asks the list to scroll the newly selected card into view. With nothing selected yet,
-    /// the first arrow press lands on an end so navigation can start from a clean state.
     /// See `permissionPoll`. Never started once the answer is settled.
     private func startPermissionPoll() {
         guard permissionPoll == nil, !accessibilityTrusted else { return }
@@ -1167,21 +1175,20 @@ struct ContentView: View {
         permissionPoll = nil
     }
 
+    /// Moves the selection one card along in display order and asks the list to scroll it into
+    /// view. The press itself is read in `AppDelegate`'s key monitor — see `PanelArrowKey`.
     private func moveSelection(by delta: Int) {
-        let ids = displayedItems.map(\.id)
-        guard !ids.isEmpty else { return }
-        let newIndex: Int
-        if let current = ids.firstIndex(where: { selection.contains($0) }) {
-            newIndex = min(max(current + delta, 0), ids.count - 1)
-        } else {
-            newIndex = delta > 0 ? 0 : ids.count - 1
-        }
-        let target = ids[newIndex]
+        guard let target = PanelSelection.moved(in: displayedItems.map(\.id),
+                                                selected: selection.ids, by: delta)
+        else { return }
         // No `suppressCardDeselect` here: that flag only exists to stop the ancestor tap
         // handler from clearing a selection made by a card *click*. Arrow-key navigation
         // produces no tap, so leaving it set would swallow the user's next empty-space click.
         selection.select(target)
-        scrollTargetID = target
+        // A fresh request every press, even onto the card the list was last asked about: the
+        // selection can have reached it by a click or a rebase in between, leaving the row
+        // scrolled somewhere else entirely.
+        scrollRequest = PanelScrollRequest(id: target, after: scrollRequest)
     }
 }
 

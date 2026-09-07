@@ -41,6 +41,10 @@ extension Notification.Name {
     /// Space. Same division of labour as ⌘S: the key monitor sees the press, the panel knows
     /// which card it is about.
     static let togglePreviewSelected = Notification.Name("com.user.xPaste.togglePreviewSelected")
+    /// ←/→/↑/↓. Carries `delta`: -1 towards the front of the row, +1 towards the back. Decided in
+    /// the key monitor rather than by a hidden key equivalent — see `PanelArrowKey` for the two
+    /// ways the shortcut version went silently dead.
+    static let moveSelectionBy      = Notification.Name("com.user.xPaste.moveSelectionBy")
     /// ⌘R renames the selected card, ⌘E opens it in the editor, ⌘O opens a link in the browser.
     /// Each arrives from the key monitor, and the panel decides whether the selected card is the
     /// kind the action applies to.
@@ -999,6 +1003,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                                               firstResponder: event.window?.firstResponder,
                                               inPanel: event.window === self.panel) {
                 NotificationCenter.default.post(name: .togglePreviewSelected, object: nil)
+                return nil
+            }
+            // ←/→/↑/↓ walk the row of cards. Here rather than as four hidden key equivalents in
+            // the panel for the reasons in `PanelArrowKey`: both of the ways those went dead
+            // needed to know where first responder actually was, which is what a monitor sees and
+            // a `.disabled(…)` guard does not.
+            if let delta = PanelArrowKey.step(keyCode: event.keyCode,
+                                              modifiers: event.modifierFlags,
+                                              firstResponder: event.window?.firstResponder,
+                                              inPanel: event.window === self.panel,
+                                              suggestionsOpen: !PanelSuggestions.shared.rows.isEmpty) {
+                NotificationCenter.default.post(name: .moveSelectionBy, object: nil,
+                                                userInfo: ["delta": delta])
                 return nil
             }
             // Exactly the modifiers named, nothing extra: ⌥⌘S and ⌃⌘S belong to whatever the user

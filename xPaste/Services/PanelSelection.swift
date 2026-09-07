@@ -83,8 +83,47 @@ final class PanelSelection: ObservableObject {
         return items[..<firstGap].last(where: { !deleted.contains($0) })
     }
 
+    /// Where an arrow press leaves the selection: one card along in display order, clamped to the
+    /// ends of the row.
+    ///
+    /// Clamped rather than wrapped — walking off the newest card onto the oldest is never what the
+    /// press meant. With nothing selected (or with a selection the row no longer holds, which is
+    /// the same thing from here) the first press lands on the end it is walking away from, so the
+    /// second press moves one card into the row and not two.
+    static func moved(in items: [UUID], selected: Set<UUID>, by delta: Int) -> UUID? {
+        guard !items.isEmpty else { return nil }
+        guard let current = items.firstIndex(where: { selected.contains($0) }) else {
+            return delta > 0 ? items.first : items.last
+        }
+        return items[min(max(current + delta, 0), items.count - 1)]
+    }
+
     var count: Int { ids.count }
     func contains(_ id: UUID) -> Bool { ids.contains(id) }
+}
+
+/// A request to bring one card into view.
+///
+/// Carries a serial because two presses that land on the same card are still two presses. The list
+/// scrolls off a `.onChange` of this value, and `.onChange` only fires when the value changes — so
+/// with the card id alone as the request, the second ask to scroll to a card the list had already
+/// been asked about was dropped. The selection moved onto a card that stayed off screen, and the
+/// arrow read as having done nothing at all.
+///
+/// It happens whenever the selection reaches a card by some other route in between: a click, a tab
+/// switch rebasing the row, the auto-select on open — or simply the panel being closed and
+/// reopened, since the request lives in `ContentView`'s state and the view is built once for the
+/// life of the app.
+struct PanelScrollRequest: Equatable {
+    let id: UUID
+    let serial: Int
+
+    init(id: UUID, after previous: PanelScrollRequest?) {
+        self.id = id
+        // Wrapping, so a long-lived panel cannot trap on an overflow. Two requests colliding would
+        // need 2^63 presses between them.
+        self.serial = (previous?.serial ?? 0) &+ 1
+    }
 }
 
 /// Which item's preview popover is on screen.
