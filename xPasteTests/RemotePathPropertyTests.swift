@@ -31,6 +31,8 @@ final class RemotePathPropertyTests: XCTestCase {
         "", "/", "//", "/home/www", "/home/www/", "//home/www", "/a/../b", "/a/./b",
         "/th%C6%B0%20m%E1%BB%A5c", "/My%20Documents", "/report#2.txt", "/what?.txt",
         "/a%0Ab", "/a%0D%0Ab", "/a%00b", "/a%09b", "/a%2Fb", "/a%23b", "/a%3Fb",
+        // Everything else `CharacterSet.newlines` treats as a separator: VT, FF, NEL, LS, PS.
+        "/a%0Bb", "/a%0Cb", "/a%C2%85b", "/a%E2%80%A8b", "/a%E2%80%A9b",
         "/a b", "/a\tb", "/~/www", "/%2e%2e/etc", "/naïve", "/e̊", "/🙂",
         "/a?q=1", "/a#f", "/a?q=1#f", "/a?", "/a#", "/" + String(repeating: "x", count: 300),
     ]
@@ -76,7 +78,10 @@ final class RemotePathPropertyTests: XCTestCase {
             guard let result = RemotePath.strip(input) else { continue }
             stripped += 1
 
-            let outLines = result.components(separatedBy: "\n")
+            // Split the way `strip` splits its own input, not by LF. `CharacterSet.newlines` is a
+            // strictly larger set — VT, FF, NEL, LS, PS — and checking the narrower one is how
+            // this invariant used to pass over a path carrying one of them.
+            let outLines = result.components(separatedBy: .newlines)
 
             // 1. Absolute. Everything downstream — the card, the paste, a shell — reads these as
             //    paths, and a relative fragment would point somewhere else entirely.
@@ -87,7 +92,10 @@ final class RemotePathPropertyTests: XCTestCase {
 
             // 2. Nothing a path cannot carry. A CR would split a line downstream just as an LF
             //    does; a NUL would travel into the pasteboard and the store.
-            XCTAssertFalse(result.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\0" }),
+            var forbidden = CharacterSet.newlines
+            forbidden.remove("\n")   // the separator between paths is legitimate
+            forbidden.insert("\0")
+            XCTAssertFalse(result.unicodeScalars.contains(where: { forbidden.contains($0) }),
                            "control character in \(result.debugDescription) from \(input.debugDescription)")
 
             // 3. One path in, one path out. This is what makes a multi-selection paste back as the

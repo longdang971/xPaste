@@ -64,16 +64,52 @@ enum RemotePath {
     /// `"ftps://"` and `"sftp://"`, the longest of the prefixes.
     private static let schemePrefixLength = 7
 
-    /// Whether the text can be a remote path at all, decided without allocating.
+    /// How much leading whitespace the scheme is allowed to sit behind.
+    ///
+    /// The search for the first non-whitespace character is otherwise proportional to the whole
+    /// text, and it runs *before* the size bound has had a chance to reject anything — so the
+    /// bound cannot protect it. A 4MB whitespace-headed paste measured at 180ms on the main
+    /// thread, inside a 100ms poll. A region of empty spreadsheet cells is exactly that shape:
+    /// tabs and newlines all the way down.
+    ///
+    /// A copied path sits behind a newline or a couple of spaces at most. Past this the text is
+    /// not one, and it is refused — the safe direction, since nothing is then written.
+    private static let leadingWhitespaceAllowance = 32
+
+    /// Whether the text can be a remote path at all, decided without allocating and in bounded
+    /// time.
     ///
     /// Exact rather than a heuristic, and that is what makes it safe as an early-out: the first
     /// line has to be a remote URL for any of the block to qualify, so the first non-whitespace
     /// characters have to be one of the schemes.
     private static func startsWithRemoteScheme(_ text: String) -> Bool {
-        guard let start = text.firstIndex(where: { !$0.isWhitespace }) else { return false }
-        let head = text[start...].prefix(schemePrefixLength).lowercased()
-        return schemes.contains { head.hasPrefix("\($0)://") }
+        // Long enough to hold the allowance and a whole scheme behind it, so a scheme that starts
+        // anywhere within the allowance is still seen in full.
+        let head = text.prefix(leadingWhitespaceAllowance + schemePrefixLength)
+        guard let start = head.firstIndex(where: { !$0.isWhitespace }) else { return false }
+        let candidate = head[start...].prefix(schemePrefixLength).lowercased()
+        return schemes.contains { candidate.hasPrefix("\($0)://") }
     }
+
+    /// Everything a decoded path may not contain.
+    ///
+    /// Derived from `CharacterSet.newlines` rather than listed by hand, and that is the point:
+    /// it is the set `strip` splits its own input with, so anything in it that reached a path
+    /// would come back as two lines from that same splitter. The hand-written version listed LF,
+    /// CR and NUL, and so missed VT, FF, NEL, LS and PS — every one of them reachable from an
+    /// ordinary-looking `%0B`, `%0C`, `%C2%85`, `%E2%80%A8` or `%E2%80%A9`. Deriving it is what
+    /// keeps the guard and the splitter from drifting apart again.
+    ///
+    /// NUL is added on its own account: no POSIX path may contain one, and it would travel into
+    /// the pasteboard and the store as a string nothing downstream expects.
+    ///
+    /// A tab is in neither set, and is left alone. The rule is about what the output can
+    /// represent, not about control characters at large.
+    private static let forbiddenInPath: CharacterSet = {
+        var set = CharacterSet.newlines
+        set.insert("\0")
+        return set
+    }()
 
     /// The path of one line, when the whole of that line is a remote URL carrying one.
     ///
@@ -118,16 +154,15 @@ enum RemotePath {
 
         // Decoding is what makes `%C6%B0` readable, and it will just as happily turn `%0A` into a
         // real newline — measured, from a URL that otherwise looks ordinary. The result of a strip
-        // is one path per line, so a path carrying a line break would come back as two, and in a
-        // block it would be indistinguishable from the neighbouring entries. NUL goes with it: no
-        // POSIX path may contain one, and it would travel into the pasteboard and the store as a
-        // string nothing downstream expects. A tab breaks neither, and is left alone.
+        // is one path per line, so a path carrying a line break comes back as two, and in a block
+        // it is indistinguishable from the neighbouring entries.
         //
         // Scalars, not characters: Swift treats `\r\n` as a single grapheme cluster, so a
         // `Character` comparison against `"\n"` or `"\r"` matches neither and CRLF walks straight
         // through. That is exactly how `%0D%0A` got past the first version of this guard.
-        guard !path.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" })
-        else { return nil }
+        guard !path.unicodeScalars.contains(where: { forbiddenInPath.contains($0) }) else {
+            return nil
+        }
         return path
     }
 }

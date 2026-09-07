@@ -92,7 +92,12 @@ final class ClipboardMonitor {
         // `PasteboardPayload.capture`; a copy another app makes inside that window would be
         // destroyed by `clearContents` and, because the write is claimed, never captured on the
         // next tick either. Reading is harmless to race with; this is the one place `poll` became
-        // destructive, and this is the whole of the destruction.
+        // destructive.
+        //
+        // It narrows that window rather than closing it: `NSPasteboard` offers no compare-and-set,
+        // so a copy landing between this check and the `clearContents` below is still lost. What
+        // remains is microseconds against the milliseconds of capture the guard was written for,
+        // and there is no API that would close it.
         //
         // The replacement item is returned either way. Skipping the write is about not clobbering
         // someone else's copy; the history's own rule — that what it stores is the stripped form —

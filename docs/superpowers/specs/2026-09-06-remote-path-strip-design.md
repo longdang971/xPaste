@@ -82,9 +82,16 @@ below — would let it through instead.
 Percent-decoding is what makes `%C6%B0` readable, and it will just as happily produce a control
 character. `%0A` decodes to a real newline, from a URL that otherwise looks ordinary — and since
 the result of a strip is one path per line, a path carrying a line break comes back as two, which
-inside a block is indistinguishable from its neighbours. NUL goes with it: no POSIX path may
-contain one, and it would travel into the pasteboard and the store as a string nothing downstream
-expects. A line whose decoded path holds either is refused, and takes its block with it.
+inside a block is indistinguishable from its neighbours. A line whose decoded path holds one is
+refused, and takes its block with it.
+
+The forbidden set is **derived from `CharacterSet.newlines`**, not listed by hand, because that is
+the set `strip` splits its own input with — the two cannot be allowed to drift. The hand-written
+version listed LF, CR and NUL, and so missed VT, FF, NEL, LS and PS, every one of them reachable
+from an ordinary-looking `%0B`, `%0C`, `%C2%85`, `%E2%80%A8` or `%E2%80%A9`. NUL is added on its own
+account: no POSIX path may contain one, and it would travel into the pasteboard and the store as a
+string nothing downstream expects. A tab is in neither set and is left alone — the rule is about
+what the output can represent, not about control characters at large.
 
 The check walks unicode scalars rather than characters. Swift treats `\r\n` as a single grapheme
 cluster, so a `Character` comparison against `"\n"` or `"\r"` matches neither and CRLF walks
@@ -164,6 +171,10 @@ break the history's own rule — that what it keeps is the stripped path — and
 to do with that rule. The user still gets `/home/www` in the history; the other application still
 gets to keep the clipboard it just claimed.
 
+The check narrows the window rather than closing it. `NSPasteboard` offers no compare-and-set, so a
+copy landing between the check and the `clearContents` is still lost. What remains is microseconds
+against the milliseconds of capture the guard was written for, and no API would close it.
+
 ## What is deliberately left alone
 
 An app on the `ignoredAppBundleIDs` list still gets no attention at all. `poll()` returns before
@@ -184,6 +195,13 @@ Two guards run before anything is allocated: an exact scheme-prefix check (line 
 remote URL for any of the block to qualify, so the first non-whitespace characters have to be one
 of the schemes), and a 256KB bound so that even a string which does start with a scheme cannot cost
 unboundedly much. The same 4MB paste now measures **0.0007ms**.
+
+The prefix check is itself bounded. Its search for the first non-whitespace character runs before
+the size bound, so the bound cannot protect it, and an unbounded search walks the whole string:
+4MB of leading whitespace measured at **180ms** on the main thread, inside a 100ms poll. A region
+of empty spreadsheet cells is exactly that shape. The scheme may therefore sit behind at most 32
+characters of whitespace; past that the text is refused, which is the safe direction since nothing
+is then written. The same input now measures **0.0021ms**.
 
 The bound is 256KB because that is what the other side of it costs: a block of nothing but URLs
 right up against the limit is 5576 of them, and parsing them line by line measures **22ms** (Debug)

@@ -249,3 +249,42 @@ extension RemotePathTests {
         XCTAssertNil(RemotePath.strip("sftp://h/%CC%88a"))
     }
 }
+
+// MARK: - Every character the splitter treats as a line break
+
+/// `strip` splits its input with `components(separatedBy: .newlines)`, which is a strictly larger
+/// set than LF and CR: it also contains VT, FF, NEL, LS and PS. A decoded path carrying any of them
+/// comes back as two lines from the same splitter, which is the exact failure the guard exists to
+/// prevent — so the guard has to be derived from that set rather than list members by hand.
+extension RemotePathTests {
+
+    func testEveryEncodedNewlineTheSplitterKnowsDisownsTheLine() {
+        for encoded in ["%0A", "%0D", "%0B", "%0C", "%C2%85", "%E2%80%A8", "%E2%80%A9"] {
+            XCTAssertNil(RemotePath.strip("sftp://h/a\(encoded)b"),
+                         "\(encoded) decoded into something the splitter treats as a line break")
+        }
+    }
+
+    func testOneOfThemInABlockDisownsTheWholeBlock() {
+        XCTAssertNil(RemotePath.strip("sftp://h/good\nsftp://h/a%E2%80%A8b"))
+    }
+}
+
+// MARK: - How far the scheme may sit behind whitespace
+
+/// The search for the first non-whitespace character runs before the size bound, so it is bounded
+/// itself. These pin where the boundary falls.
+extension RemotePathTests {
+
+    func testAPathBehindTheFullAllowanceOfWhitespaceIsStillStripped() {
+        let padded = String(repeating: " ", count: 32) + "sftp://h/a"
+        XCTAssertEqual(RemotePath.strip(padded), "/a")
+    }
+
+    /// Past it, refused — the safe direction, since nothing is written. No copied path arrives
+    /// behind thirty-odd spaces.
+    func testAPathBehindMoreWhitespaceThanThatIsRefused() {
+        let padded = String(repeating: " ", count: 40) + "sftp://h/a"
+        XCTAssertNil(RemotePath.strip(padded))
+    }
+}

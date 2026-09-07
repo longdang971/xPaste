@@ -27,6 +27,27 @@ final class RemotePathPerformanceTests: XCTestCase {
         return (ms, sink)
     }
 
+    /// The same, for a large input whose *head* is whitespace.
+    ///
+    /// `startsWithRemoteScheme` looks for the first non-whitespace character, and it runs before
+    /// the size bound has had a chance to reject anything — so an unbounded scan here walks the
+    /// whole string. A region of empty spreadsheet cells is exactly this shape: tabs and newlines
+    /// all the way down.
+    func testRejectingLargeWhitespaceHeadedTextIsAlsoCheap() {
+        let small = String(repeating: " \t", count: 100) + "not a path"
+        let large = String(repeating: " \t", count: 2_000_000) + "not a path"
+
+        let smallRun = milliseconds(iterations: 50) { RemotePath.strip(small) }
+        let largeRun = milliseconds(iterations: 50) { RemotePath.strip(large) }
+
+        XCTAssertEqual(smallRun.sink, 50)
+        XCTAssertEqual(largeRun.sink, 50)
+
+        print("RemotePath.strip — 200B of whitespace: \(smallRun.ms)ms, 4MB of whitespace: \(largeRun.ms)ms")
+
+        XCTAssertLessThan(largeRun.ms, max(smallRun.ms, 0.001) * 20)
+    }
+
     /// Neither string can be a server path — the first characters settle it — so the big one must
     /// not cost meaningfully more than the small one. Splitting either into lines before reaching
     /// that verdict is what this exists to catch.
