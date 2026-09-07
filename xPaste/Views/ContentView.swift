@@ -474,7 +474,9 @@ struct ContentView: View {
                 }
 
                 tabFull(title: "Clipboard", icon: "clock.arrow.circlepath", tab: .all)
-                tabFull(title: "Pin", icon: "pin.fill", iconColor: .red, tab: .pinned)
+                // A coloured dot, which is how Paste marks a pinboard. The compact row keeps the
+                // pin: it appears only while searching and has no label to explain a bare dot.
+                tabFull(title: "Pinboard", icon: "circle.fill", iconColor: .red, tab: .pinned)
 
                 Spacer(minLength: 0)
             }
@@ -1241,10 +1243,12 @@ private struct SearchIconButton: View {
 
     var body: some View {
         Image(systemName: "magnifyingglass")
-            .font(.system(size: 20, weight: .medium))
-            .foregroundColor(.secondary)
+            // 16, not 20. Measured against Paste's, whose glyph is 16.5pt tall — this one stood a
+            // head above the tabs beside it.
+            .font(.system(size: 16, weight: .medium))
+            .foregroundColor(Color(NSColor.labelColor))
             .padding(7)
-            .background(Capsule().fill(hovered ? Color(NSColor.controlColor) : .clear))
+            .background(Capsule().fill(ToolbarTint.fill(selected: false, hovered: hovered)))
             .onHover { hovered = $0 }
             .onTapGesture { onTap() }
     }
@@ -1287,6 +1291,21 @@ private struct MoreMenu: View {
     }
 }
 
+/// The toolbar's selection tint.
+///
+/// Every number here was measured off a screenshot of Paste's toolbar rather than guessed. Its
+/// selected pill reads `#B9BCC1` against a `#C9CCD2` bar — a *darkening* of about 8%, where this
+/// toolbar used to lay `controlColor` over the glass and so lightened instead. `Color.primary`
+/// rather than black keeps that relationship the right way round in dark mode.
+enum ToolbarTint {
+    static let selected = Color.primary.opacity(0.08)
+    static let hovered = Color.primary.opacity(0.04)
+
+    static func fill(selected: Bool, hovered: Bool) -> Color {
+        selected ? Self.selected : (hovered ? Self.hovered : .clear)
+    }
+}
+
 private struct FullTabButton: View {
     let title: String
     let icon: String
@@ -1299,19 +1318,21 @@ private struct FullTabButton: View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(iconColor ?? (isSelected ? Color(NSColor.labelColor) : .secondary))
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(iconColor ?? Color(NSColor.labelColor))
                 Text(title)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(isSelected ? Color(NSColor.labelColor) : .secondary)
+                    // Full label colour whether or not this tab is the selected one. Measured: the
+                    // unselected label is `#262629` against the selected one's `#222325`, so the
+                    // pill is the only thing marking the selection. Dimming the text as well, which
+                    // is what this did, made an unselected tab read as disabled.
+                    .foregroundColor(Color(NSColor.labelColor))
                     .fixedSize()
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Capsule().fill(
-                isSelected ? Color(NSColor.controlColor) :
-                hovered ? Color(NSColor.controlColor).opacity(0.6) : .clear
-            ))
+            // 10/7 rather than 14/8: the measured pill is 99×27pt around 78.5pt of content.
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(ToolbarTint.fill(selected: isSelected, hovered: hovered)))
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
@@ -1329,14 +1350,11 @@ private struct CompactTabButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundColor(iconColor.map { $0.opacity(isSelected ? 1 : 0.45) }
-                                 ?? (isSelected ? Color(NSColor.labelColor) : .secondary))
+                // Undimmed, like the full tab: the pill carries the selection on its own.
+                .foregroundColor(iconColor ?? Color(NSColor.labelColor))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .background(Capsule().fill(
-                    isSelected ? Color(NSColor.controlColor) :
-                    hovered ? Color(NSColor.controlColor).opacity(0.6) : .clear
-                ))
+                .background(Capsule().fill(ToolbarTint.fill(selected: isSelected, hovered: hovered)))
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
