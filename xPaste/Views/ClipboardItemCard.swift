@@ -381,7 +381,10 @@ struct ClipboardItemCard: View {
                     nameField(onAccent: onAccent, accent: accent)
                 } else {
                     Text(headerTitle)
-                        .font(.system(size: 15, weight: .bold))
+                        // Semibold, one step down from bold. Kept in step with `nameField` below:
+                        // renaming is meant to read as typing over the title, which it stops doing
+                        // the moment the two weights differ.
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(onAccent)
                         .lineLimit(1)
                 }
@@ -408,7 +411,8 @@ struct ClipboardItemCard: View {
     private func nameField(onAccent: Color, accent: Color) -> some View {
         TextField("", text: $draftName)
             .textFieldStyle(.plain)
-            .font(.system(size: 15, weight: .bold))
+            // In step with the title it replaces — see the note there.
+            .font(.system(size: 15, weight: .semibold))
             .foregroundColor(onAccent)
             // The caret rides the title's colour, not the system accent: a blue accent on a blue
             // header (Chrome) leaves nothing to see.
@@ -760,7 +764,14 @@ struct ClipboardItemCard: View {
 
     private var textPreview: some View {
         highlighted(cardText.preview)
-            .font(.system(size: 14))
+            // 13, a point down from 14. Only unformatted text goes through here — anything
+            // carrying styling is drawn from the baked bitmap in `richOrTextPreview` — so this
+            // moves the plain cards alone.
+            //
+            // `lineLimit(10)` is unaffected: the text block is 130pt tall and ten lines at 13pt
+            // still come to 155, so the last of them go on landing under the fade rather than
+            // stopping short of it.
+            .font(.system(size: 13))
             .foregroundColor(Color(NSColor.labelColor))
             // Ten fills the block now that it reaches the bottom of the card; the last couple of
             // lines land under the fade, which is the point — the text trails off rather than stops.
