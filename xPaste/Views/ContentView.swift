@@ -411,6 +411,14 @@ struct ContentView: View {
             startPermissionPoll()
         }
 
+        // Opening the "…" menu pulls focus off the search field, and the panel's own tap gesture
+        // reads that as a click into empty space — collapsing the search and wiping what was typed.
+        // The menu is a `Menu`, so there is no action closure to hang the usual flag on; AppKit's
+        // own tracking notification is the hook that does not depend on winning a gesture race.
+        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
+            searchToggleTapped = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { searchToggleTapped = false }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .clipboardAlertShown)) { _ in
             alertPresented = true
         }
@@ -438,6 +446,21 @@ struct ContentView: View {
 
     private let toolbarSpring = Animation.spring(response: 0.3, dampingFraction: 0.9)
 
+    /// How wide the search row may grow once it opens.
+    ///
+    /// A measured step up from the 540 it was, not a stretch across the bar: the bar spans nearly
+    /// the whole screen, and a field that wide would read as a different piece of furniture. The
+    /// row gains 11%, and the text field inside it — which is the row less the two compact tabs —
+    /// gains about 14%.
+    private let expandedSearchMaxWidth: CGFloat = 600
+
+    /// Trailing space the search row leaves clear for the "…" menu, which now stays put instead of
+    /// fading away with the rest of the collapsed layout.
+    ///
+    /// It matters on a vertical panel, where the bar is only one card wide: there the row fills
+    /// what it is given, and without this it would run straight under the button.
+    private let moreMenuReserve: CGFloat = 36
+
     private var toolbar: some View {
         ZStack {
             HStack(spacing: 6) {
@@ -457,18 +480,14 @@ struct ContentView: View {
             }
             .opacity(showSearch ? 0 : 1)
             .allowsHitTesting(!showSearch)
-            .overlay(alignment: .trailing) {
-                MoreMenu { confirmClearHistory() }
-                    .opacity(showSearch ? 0 : 1)
-                    .allowsHitTesting(!showSearch)
-            }
 
             HStack(spacing: 8) {
                 expandedSearchBar
                 tabCompact(icon: "clock.arrow.circlepath", tab: .all)
                 tabCompact(icon: "pin.fill", iconColor: .red, tab: .pinned)
             }
-            .frame(maxWidth: 540)
+            .frame(maxWidth: expandedSearchMaxWidth)
+            .padding(.trailing, moreMenuReserve)
             .opacity(showSearch ? 1 : 0)
             .scaleEffect(x: showSearch ? 1 : 0.5, anchor: .center)
             .allowsHitTesting(showSearch)
@@ -486,6 +505,9 @@ struct ContentView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard showSearch else { return }
+            // A toolbar control was what got clicked, not the strip behind it — the same 0.3s flag
+            // the panel-level gesture honours.
+            guard !searchToggleTapped else { return }
             // Closing the search box explicitly drops its filter tokens too — leaving invisible
             // filters applied would look like items had gone missing.
             withAnimation(toolbarSpring) {
@@ -493,6 +515,12 @@ struct ContentView: View {
                 store.searchQuery = ""
                 if !store.filters.isEmpty { store.filters.clear() }
             }
+        }
+        // Outside both layers, so it survives the crossfade — the search box opening is not a
+        // reason to take the menu away. And added *after* the tap gesture above, so a click on it
+        // is hit-tested here first rather than reaching the gesture that would close the search.
+        .overlay(alignment: .trailing) {
+            MoreMenu { confirmClearHistory() }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
