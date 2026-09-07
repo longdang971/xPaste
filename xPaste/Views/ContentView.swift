@@ -1757,16 +1757,28 @@ struct FilterAnchor: ViewModifier {
         content.popover(
             isPresented: Binding(
                 get: { sheet.isPresented },
-                // SwiftUI reports a popover's dismissal late — late enough that on a fast
-                // double press the report for the popover that just went lands *after* the
-                // press has already opened the next one, and this setter then closed the new
-                // one on the old one's behalf. That is the flicker-and-vanish people see when
-                // they spam the filter button: measured, every second press opened a popover
-                // and had it shut ~10ms later. A dismissal only counts when nothing is on
-                // screen; when a live popover is up, `didCloseNotification` owns the close.
+                // Every dismissal SwiftUI reports is taken, including the ones that arrive while
+                // the popover is still on screen — it animates out over ~200ms, so that is most
+                // of them.
+                //
+                // This setter used to ignore those, on the grounds that a late report for the
+                // popover that just went would otherwise close the one a fast second press had
+                // already opened. Refusing the report does not make SwiftUI forget it, though:
+                // its bridge still holds the sheet as presented, sees `get` agree, and puts the
+                // popover back. Measured with the pointer logged on both notifications, every
+                // close of the sheet was answered by a `willShow` for the very same NSPopover.
+                //
+                // Usually something knocks that bounce down again and it is only a flicker. When
+                // the sheet was closed because the search box folded away, nothing does: this
+                // side is already finished, so the popover stayed up over the panel with its
+                // arrow pointing at a filter button that had gone with the search box.
+                //
+                // Taking the report also fixed what the guard was there for. Four presses at
+                // 100ms apart, read off the screen once settled: with the guard the third press
+                // left the sheet shut and the fourth left it open, and without it every press
+                // lands.
                 set: { shown in
                     guard !shown else { return }
-                    if let live = sheet.popover, live.isShown { return }
                     sheet.close()
                 }
             ),
