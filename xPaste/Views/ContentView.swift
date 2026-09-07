@@ -1285,14 +1285,24 @@ private struct MoreMenu: View {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 18, weight: .regular))
                 .foregroundColor(.secondary)
-                .padding(7)
-                .background(Capsule().fill(hovered ? Color(NSColor.controlColor) : .clear))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
+        // Outside the `Menu`, not inside its label, and that is the whole fix. This style hands the
+        // label to its own AppKit control, which re-renders it: a `.background` written in there is
+        // simply dropped, which is why the hover has never appeared. Measured alongside, the font
+        // is ignored the same way — the glyph came out 12.0 x 2.5pt whether it was told 15 semibold
+        // or 18 regular.
+        //
+        // The tint was `controlColor` besides, which lightens, in a bar where every other hover and
+        // every selected pill now darkens. Shape and height come from the tabs, so this is the same
+        // highlight they get.
+        .padding(.horizontal, 10)
+        .frame(height: ToolbarMetrics.rowHeight)
+        .background(Capsule().fill(ToolbarTint.fill(selected: false, hovered: hovered)))
         .onHover { hovered = $0 }
     }
 }
