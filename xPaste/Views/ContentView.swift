@@ -555,9 +555,14 @@ struct ContentView: View {
     }
 
     private var expandedSearchBar: some View {
-        HStack(spacing: 8) {
+        // Everything here is on the same scale as the collapsed toolbar: 13pt regular type, 6pt
+        // between elements, and a capsule the same height as a tab's pill, so opening the search
+        // changes what the row contains and not how big anything in it is.
+        HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 13, weight: .regular))
+                // Secondary, unlike the toolbar's magnifier, and deliberately: that one is a button
+                // you press, this one is a label on the box you are typing into.
                 .foregroundColor(.secondary)
 
             // Guarded rather than left to draw nothing: both toolbar layouts stay in the
@@ -577,15 +582,18 @@ struct ContentView: View {
 
             filterButton
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity)
+        // 10 leading, so the magnifier sits under the same margin a tab's label does.
+        .padding(.leading, 10)
+        .padding(.trailing, 5)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, minHeight: ToolbarMetrics.rowHeight)
         .fixedSize(horizontal: false, vertical: true)
         .background(
             Capsule()
                 .fill(Color(nsColor: .textBackgroundColor).opacity(0.55))
-                .overlay(Capsule().stroke(Color.accentColor, lineWidth: 2))
+                // 1.5, not 2: the ring was drawn for 15pt type and reads as a heavy border around
+                // 13pt.
+                .overlay(Capsule().stroke(Color.accentColor, lineWidth: 1.5))
         )
     }
 
@@ -1217,10 +1225,10 @@ private struct FilterIconButton: View {
 
     var body: some View {
         Image(systemName: "line.3.horizontal.decrease")
-            .font(.system(size: 14, weight: .medium))
+            .font(.system(size: 13, weight: .regular))
             .foregroundColor(isActive ? Color.accentColor : .secondary)
-            .padding(6)
-            .background(Circle().fill(hovered ? Color(NSColor.controlColor) : .clear))
+            .padding(5)
+            .background(Circle().fill(hovered ? ToolbarTint.hovered : .clear))
             .overlay(alignment: .topTrailing) {
                 if isActive {
                     Circle()
@@ -1295,6 +1303,19 @@ private struct MoreMenu: View {
 /// selected pill reads `#B9BCC1` against a `#C9CCD2` bar — a *darkening* of about 8%, where this
 /// toolbar used to lay `controlColor` over the glass and so lightened instead. `Color.primary`
 /// rather than black keeps that relationship the right way round in dark mode.
+/// The height every control in the toolbar shares.
+///
+/// 29.5pt, which is what Paste's selected pill measures and what this bar's full tab arrives at on
+/// its own. The search capsule and the compact tabs are given it explicitly rather than left to
+/// reach it through padding: they hold different things — a text field, a lone glyph — and each was
+/// landing somewhere slightly different, which is visible the moment they sit in a row together.
+///
+/// The search capsule takes it as a *minimum*, not a fixed height: filter tokens live inside that
+/// field and have to be able to make it taller.
+enum ToolbarMetrics {
+    static let rowHeight: CGFloat = 29.5
+}
+
 enum ToolbarTint {
     // Tuned by measuring, not by arithmetic. `Color.primary` is `labelColor` — black at 85% alpha
     // rather than black — and composited through the panel's material it lands at roughly 0.64 of
@@ -1347,9 +1368,8 @@ private struct FullTabButton: View {
                     .foregroundColor(Color(NSColor.labelColor))
                     .fixedSize()
             }
-            // 10/7 rather than 14/8: the measured pill is 99×27pt around 78.5pt of content.
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .frame(height: ToolbarMetrics.rowHeight)
             .background(Capsule().fill(ToolbarTint.fill(selected: isSelected, hovered: hovered)))
         }
         .buttonStyle(.plain)
@@ -1367,11 +1387,13 @@ private struct CompactTabButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .medium))
+                // Bigger than the full tab's 13, and on purpose: with no label beside it this glyph
+                // is the whole button. Regular weight, like everything else in the bar.
+                .font(.system(size: 15, weight: .regular))
                 // Undimmed, like the full tab: the pill carries the selection on its own.
                 .foregroundColor(iconColor ?? Color(NSColor.labelColor))
                 .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+                .frame(height: ToolbarMetrics.rowHeight)
                 .background(Capsule().fill(ToolbarTint.fill(selected: isSelected, hovered: hovered)))
         }
         .buttonStyle(.plain)
@@ -1482,10 +1504,10 @@ private struct DebouncedSearchField: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             TextField("", text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 15))
+                .font(.system(size: 13))
                 .focused($focused)
                 .frame(maxWidth: .infinity)
                 .overlay(alignment: .leading) {
@@ -1494,7 +1516,7 @@ private struct DebouncedSearchField: View {
                     // the only thing telling you what the empty box was for.
                     if text.isEmpty {
                         Text("Search...")
-                            .font(.system(size: 15))
+                            .font(.system(size: 13))
                             .foregroundColor(Color(NSColor.placeholderTextColor))
                             .allowsHitTesting(false)
                     }
