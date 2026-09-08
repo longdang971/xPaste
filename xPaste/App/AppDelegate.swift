@@ -1433,8 +1433,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 /// Keeps the panel (and its cards) at a pleasant proportion across screens of
 /// different logical heights. On a tall screen `scale == 1` (the reference
-/// design); on a shorter one (e.g. a 1080-point Full-HD or a default-scaled 4K)
-/// it shrinks so the bar never eats an oversized slice of the screen.
+/// design); on a shorter one it shrinks so the bar never eats an oversized
+/// slice of the screen.
+///
+/// The scale is a *layout* scale, not a transform: every view that reads it
+/// multiplies its own fonts, paddings and frames by it, and the rich preview
+/// bitmap is rasterised at the scaled size. It used to be applied with
+/// `scaleEffect` on the finished card, which is what made every display other
+/// than a scale-1 one draw soft text — SwiftUI rasterises the subtree at its
+/// unscaled size and resamples the bitmap, so the glyphs were never laid out
+/// for the pixels they ended up on.
 /// Which clicks in the panel are about a card.
 ///
 /// Everything the panel does to a click before its views see it is about cards — ⌘-click selects
@@ -1495,8 +1503,17 @@ enum PanelLayout {
     /// Fixed chrome around the vertical card column (horizontal list padding + slack).
     static let verticalChrome: CGFloat = 70
     /// Screen height (points) at/above which the full-size design is used.
-    static let referenceScreenHeight: CGFloat = 1360
-    static let minScale: CGFloat = 0.8
+    ///
+    /// 1100, not the 1360 this started at: every current MacBook runs at a logical height between
+    /// 956 and 1169, so a 1360 reference put *all* of them on a shrunken card while an external
+    /// display (1440 on a 5K, 1080 on a 4K at 2x) got the full-size one. The laptop the app is
+    /// used on most was the one screen never drawing the design as it was drawn. At 1100 a 16"
+    /// (1117) matches the external display exactly and the smaller notebooks land within a tenth
+    /// of it, which is the difference between "smaller" and "shrunk".
+    static let referenceScreenHeight: CGFloat = 1100
+    /// The floor, for the genuinely short screens (a 1280x800 panel, a projector) where the bar
+    /// would otherwise eat half the height.
+    static let minScale: CGFloat = 0.75
     /// Gap between the panel and the edges of the screen's visible frame.
     static let screenInset: CGFloat = 8
     /// Corner radius of the floating panel (window mask and SwiftUI clip must agree).

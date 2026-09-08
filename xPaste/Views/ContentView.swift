@@ -146,10 +146,10 @@ struct ContentView: View {
                     if showNoticeCards {
                         ScrollView(isHorizontal ? .horizontal : .vertical, showsIndicators: false) {
                             if isHorizontal {
-                                HStack(spacing: PanelLayout.cardSpacing) { noticeCards }
+                                HStack(spacing: PanelLayout.cardSpacing * panelScale) { noticeCards }
                                     .padding(16)
                             } else {
-                                VStack(spacing: PanelLayout.cardSpacing) { noticeCards }
+                                VStack(spacing: PanelLayout.cardSpacing * panelScale) { noticeCards }
                                     .padding(16)
                             }
                         }
@@ -613,7 +613,7 @@ struct ContentView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 ZStack(alignment: .topLeading) {
                     Color.clear.frame(width: 1, height: 1).id("h-list-start")
-                    LazyHStack(spacing: PanelLayout.cardSpacing) {
+                    LazyHStack(spacing: PanelLayout.cardSpacing * panelScale) {
                         noticeCards
                         ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                             ClipboardItemCard(
@@ -660,7 +660,7 @@ struct ContentView: View {
     private var verticalList: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: PanelLayout.cardSpacing) {
+                LazyVStack(spacing: PanelLayout.cardSpacing * panelScale) {
                     noticeCards
                     ForEach(Array(displayedItems.enumerated()), id: \.element.id) { index, item in
                         ClipboardItemCard(
