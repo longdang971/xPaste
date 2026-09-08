@@ -45,7 +45,19 @@ Three detail levels, because the full drawing does not survive being shrunk:
 
 At 16 the rounded square is about 13 pixels across, which leaves the clip under two pixels wide and the **x** roughly one pixel thick. The minimal layout trades those details for a silhouette that still resolves.
 
+## Menu bar icon
+
+`Tools/GenerateMenuBarIcon.swift` draws the 18 and 36 pixel status-bar glyph: the same two cards, without the rounded square around them.
+
+It is a template image, so only alpha survives — macOS paints it black or white to suit the menu bar. That rules out telling the two cards apart by colour, so the front card is separated from the board by a cleared ring, and the **x** is knocked out of the card rather than drawn on it. That is the same relationship the full-colour icon has, where the **x** is the amber field showing through white.
+
+The proportions are not the app icon's. Dropping the outer square costs the **x** about half its width, because it now has to fit inside the front card instead of the whole frame, and at 18 points the **x** is the only part anyone reads. So the front card grows to fill nearly the whole square and the board is reduced to a sliver behind it — enough to say "there are more of these", not enough to compete.
+
+Two variants were tried and dropped:
+
+- **outline** — both cards as strokes. At 18 points the **x** collides with the card's own outline and the whole thing turns to noise.
+- **clipped** — the solid layout plus the clipboard's clip. The clip is under two pixels wide there and reads as a lump on the board's shoulder, not as a clip.
+
 ## Notes for later
 
-- The menu bar icon is untouched. It is a monochrome template image, so the colour work does not apply to it, and a plain **x** still reads correctly at 18 points.
-- macOS 26 wants layered `.icon` bundles authored in Icon Composer, which get the system's own shape, shadow and dark/clear/tinted variants. This redesign stays on `appiconset` PNGs, which macOS still renders as-is. Moving to `.icon` is a separate piece of work and needs a GUI tool.
+macOS 26 wants layered `.icon` bundles authored in Icon Composer, which get the system's own shape, shadow and dark/clear/tinted variants. This redesign stays on `appiconset` PNGs, which macOS still renders as-is. Moving to `.icon` is a separate piece of work and needs a GUI tool.
