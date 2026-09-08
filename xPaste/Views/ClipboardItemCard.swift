@@ -33,6 +33,11 @@ struct CardTaskKey: Equatable {
     /// of those; only re-running the task can.
     // periphery:ignore
     var contentRevision: Int = 0
+    /// The panel scale the work was done for. The rich preview is baked at the scale it will be
+    /// drawn at, so moving the panel to a differently-sized display is new work — exactly like a
+    /// light/dark flip or a new search term.
+    // periphery:ignore
+    var panelScale: CGFloat = 1
 }
 
 struct ClipboardItemCard: View {
@@ -75,6 +80,16 @@ struct ClipboardItemCard: View {
     /// The card's corner. Shared because the drag image masks itself with the same number — a
     /// mismatch there shows up as the panel's background peeking out of the card's corners.
     static let cornerRadius: CGFloat = 14
+
+    /// Every hard-coded dimension on this card goes through here.
+    ///
+    /// The card is *laid out* at the panel's scale rather than drawn at full size and shrunk with
+    /// `scaleEffect`, which is what it used to do. A `scaleEffect` is a transform on the finished
+    /// layer: SwiftUI renders the text at the unscaled size and resamples the result, so every
+    /// display that did not happen to land on scale 1 drew soft glyphs. Multiplying the metrics
+    /// instead means TextKit lays each string out for the size it is actually drawn at, and the
+    /// card is as sharp on a laptop as it is on a 5K.
+    private func s(_ value: CGFloat) -> CGFloat { value * panelScale }
 
     private static var colorCache: [String: Color] = [:]
     private static var iconCache: [String: NSImage] = [:]
@@ -176,17 +191,18 @@ struct ClipboardItemCard: View {
                 footer
             }
         }
-        .frame(width: PanelLayout.cardBaseWidth, height: PanelLayout.cardBaseHeight)
-        .clipShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+        .frame(width: s(PanelLayout.cardBaseWidth), height: s(PanelLayout.cardBaseHeight))
+        .clipShape(RoundedRectangle(cornerRadius: s(Self.cornerRadius), style: .continuous))
         .overlay(CardSelectionBorder(itemID: item.id, isHovered: isHovered))
-        .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.22), radius: s(8), x: 0, y: s(4))
         .onHover { isHovered = $0 }
         // Keyed on the appearance as well as the item: `.task(id:)` takes one Equatable value, so
         // the two are combined. A light/dark flip re-runs this and rebuilds the rich preview for
         // the appearance now on screen.
         .task(id: CardTaskKey(itemID: item.id, isLightAppearance: isLightAppearance,
                               highlightTerm: highlightTerm,
-                              contentRevision: item.contentRevision)) {
+                              contentRevision: item.contentRevision,
+                              panelScale: panelScale)) {
             if item.type == .image {
                 if let data = item.imageData, let img = NSImage(data: data) {
                     loadedImage = img
@@ -284,13 +300,14 @@ struct ClipboardItemCard: View {
                 let light = isLightAppearance
                 if let cached = Self.richPreviewCache.object(forKey: item.id as NSUUID),
                    cached.isUsable(underLightAppearance: light, term: highlightTerm,
-                                   revision: item.contentRevision) {
+                                   revision: item.contentRevision, scale: panelScale) {
                     if richPreview !== cached { richPreview = cached }
                 } else {
                     // The default fill is resolved for the appearance on screen, so both the
                     // bitmap's background and the legibility verdict belong to it.
                     let built = await RichTextRenderer.cardPreview(
                         for: item, size: RichTextRenderer.cardPreviewSize,
+                        scale: panelScale,
                         forLightAppearance: light,
                         defaultFill: RichTextRenderer.defaultFill(forLightAppearance: light),
                         highlightTerm: highlightTerm,
@@ -339,12 +356,6 @@ struct ClipboardItemCard: View {
                 favicon = await LinkPreviewService.shared.fetchFavicon(for: url)
             }
         }
-        // Shrink the whole card uniformly on shorter screens so it stays proportional to the
-        // adaptively-sized panel. The trailing frame reserves the scaled footprint so layout,
-        // hit-testing and the overlays added in ContentView all line up with what's drawn.
-        .scaleEffect(panelScale, anchor: .center)
-        .frame(width: PanelLayout.cardBaseWidth * panelScale,
-               height: PanelLayout.cardBaseHeight * panelScale)
     }
 
     /// What the header shows when the item has no name of its own.
@@ -376,7 +387,7 @@ struct ClipboardItemCard: View {
         // pale bar that white text would vanish on. Flip the title to dark for those.
         let onAccent: Color = isPaleColor(accent) ? .black.opacity(0.78) : .white
         return HStack(alignment: .center, spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: s(2)) {
                 if isRenaming {
                     nameField(onAccent: onAccent, accent: accent)
                 } else {
@@ -384,20 +395,20 @@ struct ClipboardItemCard: View {
                         // Semibold, one step down from bold. Kept in step with `nameField` below:
                         // renaming is meant to read as typing over the title, which it stops doing
                         // the moment the two weights differ.
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: s(15), weight: .semibold))
                         .foregroundColor(onAccent)
                         .lineLimit(1)
                 }
                 Text(item.timestamp.relativeString)
-                    .font(.system(size: 10))
+                    .font(.system(size: s(10)))
                     .foregroundColor(onAccent.opacity(0.75))
                     .lineLimit(1)
             }
-            .padding(.leading, 12)
+            .padding(.leading, s(12))
             Spacer()
             headerIcon
         }
-        .frame(height: PanelLayout.cardHeaderHeight)
+        .frame(height: s(PanelLayout.cardHeaderHeight))
         .background(accent)
     }
 
@@ -412,14 +423,14 @@ struct ClipboardItemCard: View {
         TextField("", text: $draftName)
             .textFieldStyle(.plain)
             // In step with the title it replaces — see the note there.
-            .font(.system(size: 15, weight: .semibold))
+            .font(.system(size: s(15), weight: .semibold))
             .foregroundColor(onAccent)
             // The caret rides the title's colour, not the system accent: a blue accent on a blue
             // header (Chrome) leaves nothing to see.
             .tint(onAccent)
             .focused($nameFieldFocused)
             .lineLimit(1)
-            .frame(width: PanelLayout.cardBaseWidth - 108, alignment: .leading)
+            .frame(width: s(PanelLayout.cardBaseWidth - 108), alignment: .leading)
             .onSubmit { finishRename(with: draftName) }
             .onExitCommand { finishRename(with: nil) }
             .onChange(of: nameFieldFocused) { focused in
@@ -474,8 +485,8 @@ struct ClipboardItemCard: View {
         Image(nsImage: sourceAppIcon ?? Self.fallbackAppIcon)
             .resizable()
             .scaledToFit()
-            .frame(width: 77, height: 77)
-            .offset(x: 14)
+            .frame(width: s(77), height: s(77))
+            .offset(x: s(14))
             .help(sourceAppName)
     }
 
@@ -506,7 +517,12 @@ struct ClipboardItemCard: View {
             return nil
         }
         let icon = NSWorkspace.shared.icon(forFile: url.path).copy() as! NSImage
-        icon.size = NSSize(width: 64, height: 64)
+        // 128, not 64: `NSImage.size` is what SwiftUI resolves a representation against, and the
+        // header draws this icon at 77pt — 154 device pixels on a 2x display. Capping it at 64
+        // handed the drawing 128 pixels to stretch over them, which is the one soft edge left on
+        // an otherwise crisp card. The reps are already in the image either way; this only says
+        // which of them is the right one to pick.
+        icon.size = NSSize(width: 128, height: 128)
         Self.iconCache[bundleID] = icon
         return icon
     }
@@ -547,7 +563,7 @@ struct ClipboardItemCard: View {
                         Image(nsImage: fileIcon(pathURL.path))
                             .resizable()
                             .scaledToFit()
-                            .frame(width: 120, height: 120)
+                            .frame(width: s(120), height: s(120))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else if let color = detectedColor {
@@ -583,7 +599,7 @@ struct ClipboardItemCard: View {
                     Image(nsImage: fileIcon(url.path))
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 120, height: 120)
+                        .frame(width: s(120), height: s(120))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if item.type == .folder {
                     placeholder("folder.fill", color: .blue)
@@ -599,12 +615,12 @@ struct ClipboardItemCard: View {
             // the pinned state, so keeping the static indicator too would just be two pins.
             if let actions, isHovered {
                 CardHoverActions(actions: actions, fill: richFill)
-                    .padding(6)
+                    .padding(s(6))
             } else if item.isPinned {
                 Image(systemName: "pin.fill")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: s(10), weight: .semibold))
                     .foregroundColor(.red)
-                    .padding(6)
+                    .padding(s(6))
             }
         }
     }
@@ -623,7 +639,7 @@ struct ClipboardItemCard: View {
         let entry = richPreview ?? Self.richPreviewCache.object(forKey: item.id as NSUUID)
         guard let entry,
               entry.isUsable(underLightAppearance: isLightAppearance, term: highlightTerm,
-                             revision: item.contentRevision)
+                             revision: item.contentRevision, scale: panelScale)
         else { return nil }
         return entry
     }
@@ -685,7 +701,7 @@ struct ClipboardItemCard: View {
                      Color(nsColor: richFill ?? .textBackgroundColor)],
             startPoint: .top, endPoint: .bottom
         )
-        .frame(height: PanelLayout.cardFooterHeight + 40)
+        .frame(height: s(PanelLayout.cardFooterHeight + 40))
         .allowsHitTesting(false)
     }
 
@@ -710,11 +726,11 @@ struct ClipboardItemCard: View {
     /// does — this card's footer is the file's path, which is not something to read text through.
     private func fileTextPreview(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11, design: .monospaced))
+            .font(.system(size: s(11), design: .monospaced))
             .foregroundColor(Color(NSColor.labelColor))
             .lineLimit(12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(12)
+            .padding(s(12))
     }
 
     /// This item's file text, from `@State` or straight from the cache.
@@ -771,13 +787,13 @@ struct ClipboardItemCard: View {
             // `lineLimit(10)` is unaffected: the text block is 130pt tall and ten lines at 13pt
             // still come to 155, so the last of them go on landing under the fade rather than
             // stopping short of it.
-            .font(.system(size: 13))
+            .font(.system(size: s(13)))
             .foregroundColor(Color(NSColor.labelColor))
             // Ten fills the block now that it reaches the bottom of the card; the last couple of
             // lines land under the fade, which is the point — the text trails off rather than stops.
             .lineLimit(10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(12)
+            .padding(s(12))
     }
 
     private func colorPreview(_ color: Color) -> some View {
@@ -787,7 +803,7 @@ struct ClipboardItemCard: View {
             // Upper-cased for the card only — see `ColorParser.displayLiteral`. Pasting still
             // gives back exactly what was copied.
             Text(ColorParser.displayLiteral(item.text ?? ""))
-                .font(.system(size: 18, weight: .medium, design: .monospaced))
+                .font(.system(size: s(18), weight: .medium, design: .monospaced))
                 .foregroundColor(tint)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -795,8 +811,8 @@ struct ClipboardItemCard: View {
         // to live in. Same seat it occupies on every other card: bottom-right, 12pt in.
         .overlay(alignment: .bottomTrailing) {
             ShortcutBadge(index: index, tint: tint)
-                .padding(.trailing, 12)
-                .padding(.bottom, 9)
+                .padding(.trailing, s(12))
+                .padding(.bottom, s(9))
         }
     }
 
@@ -833,7 +849,7 @@ struct ClipboardItemCard: View {
                         // and a Vietnamese one turns 3200 into "3.200". Pixel counts are not that
                         // kind of number — nobody groups the digits of an image's width.
                         Text(verbatim: "\(px.width) × \(px.height)")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: s(12), weight: .medium))
                             .foregroundColor(.secondary)
                     }
                 }
@@ -845,19 +861,19 @@ struct ClipboardItemCard: View {
                     ShortcutBadge(index: index, tint: .secondary, floating: true)
                         // The pill's own inset comes off the margin: it is the digits that have
                         // to line up with the other cards, not the pill drawn around them.
-                        .padding(.trailing, 12 - Self.pillHorizontalInset)
+                        .padding(.trailing, s(12 - Self.pillHorizontalInset))
                 }
             }
-            .frame(height: PanelLayout.cardFooterHeight)
+            .frame(height: s(PanelLayout.cardFooterHeight))
         }
     }
 
     /// A label that sits on top of a card's own content rather than on a strip of chrome.
     private func floatingPill<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
-            .padding(.horizontal, Self.pillHorizontalInset)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: Self.pillCornerRadius, style: .continuous)
+            .padding(.horizontal, s(Self.pillHorizontalInset))
+            .padding(.vertical, s(4))
+            .background(RoundedRectangle(cornerRadius: s(Self.pillCornerRadius), style: .continuous)
                 .fill(.ultraThinMaterial))
     }
 
@@ -903,7 +919,7 @@ struct ClipboardItemCard: View {
 
     private func placeholder(_ name: String, color: Color) -> some View {
         Image(systemName: name)
-            .font(.system(size: 28))
+            .font(.system(size: s(28)))
             .foregroundColor(color.opacity(0.4))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -918,7 +934,7 @@ struct ClipboardItemCard: View {
                 // the other way round, which read as an inverted card next to it.
                 mutedBackground
                 Image(systemName: Self.placeholderSymbolName)
-                    .font(.system(size: 60, weight: .thin))
+                    .font(.system(size: s(60), weight: .thin))
                     .foregroundColor(Color(nsColor: .tertiaryLabelColor))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -934,9 +950,9 @@ struct ClipboardItemCard: View {
             Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 72, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: .black.opacity(0.10), radius: 6, x: 0, y: 3)
+                .frame(width: s(72), height: s(72))
+                .clipShape(RoundedRectangle(cornerRadius: s(14), style: .continuous))
+                .shadow(color: .black.opacity(0.10), radius: s(6), x: 0, y: s(3))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1044,17 +1060,17 @@ struct ClipboardItemCard: View {
     }
 
     private var urlPreviewFooter: some View {
-        HStack(alignment: .bottom, spacing: 6) {
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .bottom, spacing: s(6)) {
+            VStack(alignment: .leading, spacing: s(2)) {
                 highlighted(linkPreview?.title ?? item.text ?? "")
-                    .font(.system(size: Self.linkFooterTitleFontSize, weight: .bold))
+                    .font(.system(size: s(Self.linkFooterTitleFontSize), weight: .bold))
                     .lineLimit(1)
                     .foregroundColor(Color(NSColor.labelColor))
                 // The same shape the plain strip writes a URL in — see `urlFooterLabel`. Two link
                 // cards side by side, one with a title and one without, cannot disagree about
                 // whether a URL has `https://` on the front of it.
                 highlighted(Self.urlFooterLabel(item.text ?? ""))
-                    .font(.system(size: Self.linkFooterURLFontSize))
+                    .font(.system(size: s(Self.linkFooterURLFontSize)))
                     .lineLimit(1)
                     .foregroundColor(.secondary)
             }
@@ -1062,10 +1078,10 @@ struct ClipboardItemCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             shortcutBadge
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, s(12))
+        .padding(.vertical, s(10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 52)
+        .frame(height: s(52))
         .background(Color(NSColor.textBackgroundColor))
     }
 
@@ -1073,16 +1089,16 @@ struct ClipboardItemCard: View {
         let path = item.fileURLs?.first?.path ?? item.text ?? ""
         return HStack(spacing: 0) {
             highlighted(path)
-                .font(.system(size: 12))
+                .font(.system(size: s(12)))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
             shortcutBadge
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .frame(height: PanelLayout.cardFooterHeight)
+        .padding(.horizontal, s(12))
+        .padding(.vertical, s(7))
+        .frame(height: s(PanelLayout.cardFooterHeight))
         .background(Color(NSColor.controlBackgroundColor))
     }
 
@@ -1093,25 +1109,25 @@ struct ClipboardItemCard: View {
                 // strip and has to truncate before the badge instead of running underneath it.
                 // The re-centring that overlay exists to prevent cannot happen to a label that
                 // starts at the left edge whatever width is left over.
-                HStack(spacing: 8) {
+                HStack(spacing: s(8)) {
                     footerText.frame(maxWidth: .infinity, alignment: .leading)
                     shortcutBadge
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .frame(height: Self.footerHeight(for: item))
+                .padding(.horizontal, s(12))
+                .padding(.vertical, s(7))
+                .frame(height: s(Self.footerHeight(for: item)))
             } else {
                 footerText
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .frame(height: Self.footerHeight(for: item))
+                    .padding(.horizontal, s(12))
+                    .padding(.vertical, s(7))
+                    .frame(height: s(Self.footerHeight(for: item)))
                     // Overlaid rather than placed in an HStack: this label is short and centred, so
                     // it can never collide with the badge, and laying the badge out inline would
                     // re-centre the label in the leftover width — nudging "N characters" left on
                     // every ⌘ press.
                     .overlay(alignment: .trailing) {
-                        shortcutBadge.padding(.trailing, 12)
+                        shortcutBadge.padding(.trailing, s(12))
                     }
             }
         }
@@ -1131,7 +1147,7 @@ struct ClipboardItemCard: View {
     /// rest of it at the back. The other labels are far too short to ever reach this.
     private var footerText: some View {
         Text(footerLabel)
-            .font(.system(size: 12))
+            .font(.system(size: s(12)))
             .foregroundColor(Self.footerTextColor(on: richFill))
             .lineLimit(1)
             .truncationMode(.middle)
@@ -1411,11 +1427,13 @@ private struct CardHoverActions: View {
     /// The card's rich fill, or nil when it kept the default background. The icons are tinted
     /// against it so they stay visible on a black card.
     let fill: NSColor?
+    @Environment(\.panelScale) private var panelScale
 
     private var iconTint: Color { ClipboardItemCard.hoverIconColor(on: fill) }
+    private func s(_ value: CGFloat) -> CGFloat { value * panelScale }
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: s(2)) {
             // The pin stays red while unpinned — that colour is what marks the state, and red
             // reads on both a light and a dark fill.
             HoverActionButton(symbol: actions.isPinned ? "pin.slash.fill" : "pin.fill",
@@ -1425,11 +1443,11 @@ private struct CardHoverActions: View {
             HoverActionButton(symbol: "trash", tint: iconTint,
                               help: "Delete", action: actions.delete)
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 3)
+        .padding(.horizontal, s(4))
+        .padding(.vertical, s(3))
         .background(Capsule().fill(.ultraThinMaterial))
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 2)
+        .shadow(color: .black.opacity(0.18), radius: s(4), x: 0, y: s(2))
     }
 }
 
@@ -1439,13 +1457,16 @@ private struct HoverActionButton: View {
     let help: String
     let action: () -> Void
     @State private var hovered = false
+    @Environment(\.panelScale) private var panelScale
+
+    private func s(_ value: CGFloat) -> CGFloat { value * panelScale }
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: s(11), weight: .semibold))
                 .foregroundColor(tint)
-                .frame(width: 22, height: 20)
+                .frame(width: s(22), height: s(20))
                 .background(Circle().fill(hovered ? Color.primary.opacity(0.12) : .clear))
                 .contentShape(Rectangle())
         }
@@ -1469,29 +1490,32 @@ private struct ShortcutBadge: View {
     /// it on and float it over the picture instead.
     var floating = false
     @ObservedObject private var watcher = ModifierWatcher.shared
+    @Environment(\.panelScale) private var panelScale
+
+    private func s(_ value: CGFloat) -> CGFloat { value * panelScale }
 
     var body: some View {
         if watcher.flags.contains(.command), index <= 9 {
-            let label = HStack(spacing: 4) {
+            let label = HStack(spacing: s(4)) {
                 if watcher.flags.contains(.shift) {
                     Image(systemName: "text.alignleft")
-                        .font(.system(size: 11))
+                        .font(.system(size: s(11)))
                 }
                 Text("\(index)")
-                    .font(.system(size: 11))
+                    .font(.system(size: s(11)))
             }
             .foregroundColor(tint)
             .fixedSize()
 
             if floating {
                 label
-                    .padding(.horizontal, ClipboardItemCard.pillHorizontalInset)
-                    .padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: ClipboardItemCard.pillCornerRadius,
+                    .padding(.horizontal, s(ClipboardItemCard.pillHorizontalInset))
+                    .padding(.vertical, s(4))
+                    .background(RoundedRectangle(cornerRadius: s(ClipboardItemCard.pillCornerRadius),
                                                  style: .continuous)
                         .fill(.ultraThinMaterial))
             } else {
-                label.padding(.leading, 6)
+                label.padding(.leading, s(6))
             }
         }
     }
@@ -1511,10 +1535,12 @@ private struct CardSelectionBorder: View {
     let itemID: UUID
     let isHovered: Bool
     @ObservedObject private var selection = PanelSelection.shared
+    @Environment(\.panelScale) private var panelScale
 
     var body: some View {
-        RoundedRectangle(cornerRadius: ClipboardItemCard.cornerRadius, style: .continuous)
+        RoundedRectangle(cornerRadius: ClipboardItemCard.cornerRadius * panelScale,
+                         style: .continuous)
             .stroke((isHovered || selection.contains(itemID)) ? Color.accentColor : .clear,
-                    lineWidth: 3)
+                    lineWidth: 3 * panelScale)
     }
 }

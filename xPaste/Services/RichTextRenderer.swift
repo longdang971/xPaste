@@ -290,6 +290,7 @@ enum RichTextRenderer {
     @MainActor
     static func cardPreview(for item: ClipboardItem,
                             size: CGSize,
+                            scale: CGFloat = 1,
                             forLightAppearance: Bool = true,
                             defaultFill: NSColor = .textBackgroundColor,
                             highlightTerm: String = "",
@@ -307,14 +308,14 @@ enum RichTextRenderer {
         }
         guard let parsed else {
             return .plain(forLightAppearance: forLightAppearance, term: highlightTerm,
-                          revision: revision)
+                          revision: revision, scale: scale)
         }
 
         let fill = resolveFill(documentBackground: parsed.documentBackground)
         let effective = fill ?? defaultFill
         guard fill != nil || isLegible(parsed.text, on: effective) else {
             return .plain(forLightAppearance: forLightAppearance, term: highlightTerm,
-                          revision: revision)
+                          revision: revision, scale: scale)
         }
 
         let truncated = parsed.text.length > cardCharLimit
@@ -326,14 +327,15 @@ enum RichTextRenderer {
             ? truncated
             : SearchHighlight.marked(truncated, term: highlightTerm,
                                      forLightAppearance: forLightAppearance)
-        guard let image = rasterise(body, fill: effective, size: size) else {
+        guard let image = rasterise(body, fill: effective, size: size, scale: scale) else {
             return .plain(forLightAppearance: forLightAppearance, term: highlightTerm,
-                          revision: revision)
+                          revision: revision, scale: scale)
         }
         return RichCardPreview(image: image, fill: fill,
                                builtForLightAppearance: forLightAppearance,
                                builtForTerm: highlightTerm,
-                               builtForRevision: revision)
+                               builtForRevision: revision,
+                               builtForScale: scale)
     }
 
     /// The popover's counterpart to `cardPreview`: the whole string, untruncated, because a
@@ -355,13 +357,22 @@ enum RichTextRenderer {
     /// `lockFocusFlipped(true)` gives retina backing from the display and flipped coordinates, so
     /// the text flows downward from the top of the rect. A drawing-handler `NSImage` would re-run
     /// TextKit on every draw, which is the entire cost this is meant to avoid.
+    ///
+    /// `scale` shrinks the bitmap for a smaller panel by scaling the *context*, not the finished
+    /// pixels: the layout is still done in `size`'s coordinates — so the card shows the same text
+    /// it shows at full size — while the glyphs are rasterised through the transform and land on
+    /// the pixel grid they are actually drawn on. Baking at `size` and resampling afterwards is
+    /// what soft text on a shorter screen looked like.
     @MainActor
     private static func rasterise(_ text: NSAttributedString,
                                   fill: NSColor,
-                                  size: CGSize) -> NSImage? {
-        guard size.width > 2 * cardPadding, size.height > 2 * cardPadding else { return nil }
-        let image = NSImage(size: size)
+                                  size: CGSize,
+                                  scale: CGFloat = 1) -> NSImage? {
+        guard size.width > 2 * cardPadding, size.height > 2 * cardPadding, scale > 0 else { return nil }
+        let image = NSImage(size: CGSize(width: (size.width * scale).rounded(),
+                                         height: (size.height * scale).rounded()))
         image.lockFocusFlipped(true)
+        if scale != 1 { NSGraphicsContext.current?.cgContext.scaleBy(x: scale, y: scale) }
         fill.setFill()
         NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
         // No `.truncatesLastVisibleLine`: the card fades its own bottom out, and an ellipsis
@@ -403,14 +414,22 @@ final class RichCardPreview {
     /// An edit does not change the item's id, so an entry still keyed to it is no longer of it.
     /// Treated as a miss for the same reason as the two above.
     let builtForRevision: Int
+    /// The panel scale these pixels were baked at.
+    ///
+    /// A bitmap is drawn at exactly its own size — `richOrTextPreview` deliberately does not make
+    /// it resizable — so an entry baked for another scale is the wrong number of pixels for the
+    /// rect it would land in. Moving the panel to a differently-sized display is therefore a miss,
+    /// the same way a light/dark flip is.
+    let builtForScale: CGFloat
 
     init(image: NSImage?, fill: NSColor?, builtForLightAppearance: Bool = true,
-         builtForTerm: String = "", builtForRevision: Int = 0) {
+         builtForTerm: String = "", builtForRevision: Int = 0, builtForScale: CGFloat = 1) {
         self.image = image
         self.fill = image == nil ? nil : fill
         self.builtForLightAppearance = builtForLightAppearance
         self.builtForTerm = builtForTerm
         self.builtForRevision = builtForRevision
+        self.builtForScale = builtForScale
     }
 
     /// Whether this entry can still be shown under `lightAppearance` for `term` at `revision`.
@@ -418,16 +437,17 @@ final class RichCardPreview {
     /// Entries carrying a real run background do not actually depend on the appearance, but a
     /// flip is rare and rebuilding them too is far simpler than tracking which ones do.
     func isUsable(underLightAppearance lightAppearance: Bool, term: String = "",
-                  revision: Int = 0) -> Bool {
+                  revision: Int = 0, scale: CGFloat = 1) -> Bool {
         builtForLightAppearance == lightAppearance
             && builtForTerm == term
             && builtForRevision == revision
+            && builtForScale == scale
     }
 
     static func plain(forLightAppearance light: Bool, term: String = "",
-                      revision: Int = 0) -> RichCardPreview {
+                      revision: Int = 0, scale: CGFloat = 1) -> RichCardPreview {
         RichCardPreview(image: nil, fill: nil, builtForLightAppearance: light,
-                        builtForTerm: term, builtForRevision: revision)
+                        builtForTerm: term, builtForRevision: revision, builtForScale: scale)
     }
 }
 
