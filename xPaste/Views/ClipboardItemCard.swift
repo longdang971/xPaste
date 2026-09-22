@@ -559,16 +559,14 @@ struct ClipboardItemCard: View {
             case .text:
                 if let pathURL = detectedFilePath {
                     if let img = pathImage ?? Self.pathImageCache.object(forKey: item.id as NSUUID) {
-                        Image(nsImage: img)
-                            .resizable()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        filePhotoPreview(img)
                     } else if let text = resolvedFileText {
                         fileTextPreview(text)
                     } else {
                         Image(nsImage: fileIcon(pathURL.path))
                             .resizable()
                             .scaledToFit()
-                            .frame(width: s(120), height: s(120))
+                            .frame(width: s(Self.filePreviewSide), height: s(Self.filePreviewSide))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else if let color = detectedColor {
@@ -597,16 +595,14 @@ struct ClipboardItemCard: View {
                 if Self.showsMultipleFiles(for: item) {
                     stackedFilesPreview
                 } else if let img = pathImage ?? Self.pathImageCache.object(forKey: item.id as NSUUID) {
-                    Image(nsImage: img)
-                        .resizable()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    filePhotoPreview(img)
                 } else if let text = resolvedFileText {
                     fileTextPreview(text)
                 } else if let url = item.fileURLs?.first {
                     Image(nsImage: fileIcon(url.path))
                         .resizable()
                         .scaledToFit()
-                        .frame(width: s(120), height: s(120))
+                        .frame(width: s(Self.filePreviewSide), height: s(Self.filePreviewSide))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if item.type == .folder {
                     placeholder("folder.fill", color: .blue)
@@ -933,7 +929,7 @@ struct ClipboardItemCard: View {
     /// as one badly drawn page.
     private var stackedFilesPreview: some View {
         let icon = Self.genericIcon(folder: item.type == .folder)
-        let side = s(120)
+        let side = s(Self.filePreviewSide)
         return ZStack {
             Image(nsImage: icon)
                 .resizable()
@@ -948,6 +944,31 @@ struct ClipboardItemCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    /// The picture a file card stands for, at icon size rather than stretched across the card.
+    ///
+    /// It used to be `.resizable()` into the whole content rect — 232 by 154 points, which is the
+    /// shape of no photograph ever taken, so every thumbnail was drawn out of shape. Fitted into
+    /// the same square the stacked icons take, it is the file's icon in the sense that matters:
+    /// the card's subject is the file, and the picture is how you recognise which one.
+    ///
+    /// Rounded and shadowed, not chequerboarded. The chequerboard on an image card says "these
+    /// pixels are transparent", which is worth a card's whole background when the picture *is* the
+    /// content; here the picture is a stand-in for a file on disk, and Paste draws it as a small
+    /// print lying on the card.
+    private func filePhotoPreview(_ image: NSImage) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(width: s(Self.filePreviewSide), height: s(Self.filePreviewSide))
+            .clipShape(RoundedRectangle(cornerRadius: s(6), style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: s(5), x: 0, y: s(3))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The square every file card draws its subject in — a thumbnail, one icon, or the stack of
+    /// two. Shared so a card does not change size when it falls back from one to the next.
+    private static let filePreviewSide: CGFloat = 120
 
     /// The system's blank-page and blank-folder icons, resolved once each.
     ///
