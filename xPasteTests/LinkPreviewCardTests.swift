@@ -227,6 +227,48 @@ final class CardFooterLabelTests: XCTestCase {
         XCTAssertEqual(ClipboardItemCard.footerLabel(for: item), "2 files")
     }
 
+    /// A card holding several files is not the first of them. It used to draw that file's
+    /// thumbnail and that file's path, which says the card *is* that file — and left the other
+    /// four with nothing on the card to say they were there.
+    func test_a_card_holding_several_files_says_so_instead_of_naming_one() {
+        let files = ClipboardItem(type: .file,
+                                  fileURLs: [URL(fileURLWithPath: "/tmp/a"),
+                                             URL(fileURLWithPath: "/tmp/b")])
+        XCTAssertTrue(ClipboardItemCard.showsMultipleFiles(for: files))
+        XCTAssertEqual(ClipboardItemCard.fileFooterLabel(for: files), "Multiple files")
+
+        let folders = ClipboardItem(type: .folder,
+                                    fileURLs: [URL(fileURLWithPath: "/tmp/one"),
+                                               URL(fileURLWithPath: "/tmp/two")])
+        XCTAssertTrue(ClipboardItemCard.showsMultipleFiles(for: folders))
+        XCTAssertEqual(ClipboardItemCard.fileFooterLabel(for: folders), "Multiple folders")
+    }
+
+    /// One file, and the footer is its path in full — the whole point of the two lines it is
+    /// allowed to take. `showsMultipleFiles` stays false so the card keeps its thumbnail.
+    func test_a_card_holding_one_file_shows_the_path_in_full() {
+        let item = ClipboardItem(type: .file,
+                                 fileURLs: [URL(fileURLWithPath: "/Users/x/Downloads/shot.png")])
+        XCTAssertFalse(ClipboardItemCard.showsMultipleFiles(for: item))
+        XCTAssertEqual(ClipboardItemCard.fileFooterLabel(for: item),
+                       "/Users/x/Downloads/shot.png")
+    }
+
+    /// The other card that draws a file footer: a `.text` item whose text turned out to be a path.
+    /// It has no `fileURLs` at all, and its text is the path.
+    func test_a_text_item_that_is_a_path_footers_that_path() {
+        let item = ClipboardItem(type: .text, text: "/Users/x/Documents/notes.md")
+        XCTAssertFalse(ClipboardItemCard.showsMultipleFiles(for: item))
+        XCTAssertEqual(ClipboardItemCard.fileFooterLabel(for: item),
+                       "/Users/x/Documents/notes.md")
+    }
+
+    /// A file item restored without its paths — the store drops unreadable ones — must not put
+    /// the word "nil" on the card.
+    func test_a_file_item_with_no_paths_footers_nothing() {
+        XCTAssertEqual(ClipboardItemCard.fileFooterLabel(for: ClipboardItem(type: .file)), "")
+    }
+
     /// The taller footer a link with metadata gets has the URL on its second line, and it is the
     /// same URL in the same shape as the plain strip's — two link cards side by side, one with a
     /// title and one without, must not disagree about how a URL is written.

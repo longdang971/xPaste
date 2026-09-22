@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// The quick actions a card offers while the pointer is over it. Handed in from `ContentView`,
 /// which owns the store and the share picker.
@@ -224,8 +225,12 @@ struct ClipboardItemCard: View {
             if detectedIsDirectory != resolved.isDir { detectedIsDirectory = resolved.isDir }
 
             let imageURL: URL? = {
-                if item.type == .file, let url = item.fileURLs?.first, isImagePath(url) {
-                    return url
+                // `count == 1` and not `first`: a multi-file card draws the stacked icons, and
+                // decoding one of five pictures for a card that will never show it is work spent
+                // to produce nothing.
+                if item.type == .file, let urls = item.fileURLs, urls.count == 1,
+                   isImagePath(urls[0]) {
+                    return urls[0]
                 }
                 if let pathURL = resolved.url, isImagePath(pathURL) {
                     return pathURL
@@ -589,7 +594,9 @@ struct ClipboardItemCard: View {
                     placeholder("photo", color: .purple)
                 }
             case .file, .folder:
-                if let img = pathImage ?? Self.pathImageCache.object(forKey: item.id as NSUUID) {
+                if Self.showsMultipleFiles(for: item) {
+                    stackedFilesPreview
+                } else if let img = pathImage ?? Self.pathImageCache.object(forKey: item.id as NSUUID) {
                     Image(nsImage: img)
                         .resizable()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -917,6 +924,49 @@ struct ClipboardItemCard: View {
 
     private static var checkerboardCache: [Bool: NSImage] = [:]
 
+    /// Several files at once, drawn as the system's own blank icon stacked twice.
+    ///
+    /// Generic on purpose. The alternative — the first file's icon, or its thumbnail — reads as
+    /// "this card is that file", which is the misreading this whole branch exists to stop; and the
+    /// icons of five different files piled up is a heap, not a stack. The back sheet is offset up
+    /// and to the left with the front one shadowed over it, so the two read as a pile rather than
+    /// as one badly drawn page.
+    private var stackedFilesPreview: some View {
+        let icon = Self.genericIcon(folder: item.type == .folder)
+        let side = s(120)
+        return ZStack {
+            Image(nsImage: icon)
+                .resizable()
+                .scaledToFit()
+                .frame(width: side, height: side)
+                .offset(x: s(-10), y: s(-8))
+            Image(nsImage: icon)
+                .resizable()
+                .scaledToFit()
+                .frame(width: side, height: side)
+                .shadow(color: .black.opacity(0.18), radius: s(5), x: s(2), y: s(3))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The system's blank-page and blank-folder icons, resolved once each.
+    ///
+    /// Sized to 256 rather than left at whatever LaunchServices hands back, for the reason
+    /// `sourceAppIcon` gives: `NSImage.size` is what SwiftUI resolves a representation against, and
+    /// these draw at 120pt — 240 device pixels on a 2x display.
+    private static func genericIcon(folder: Bool) -> NSImage {
+        folder ? genericFolderIcon : genericFileIcon
+    }
+
+    private static let genericFileIcon: NSImage = sizedIcon(for: .data)
+    private static let genericFolderIcon: NSImage = sizedIcon(for: .folder)
+
+    private static func sizedIcon(for type: UTType) -> NSImage {
+        let icon = NSWorkspace.shared.icon(for: type).copy() as! NSImage
+        icon.size = NSSize(width: 256, height: 256)
+        return icon
+    }
+
     private func placeholder(_ name: String, color: Color) -> some View {
         Image(systemName: name)
             .font(.system(size: s(28)))
@@ -1085,22 +1135,66 @@ struct ClipboardItemCard: View {
         .background(Color(NSColor.textBackgroundColor))
     }
 
+    @ViewBuilder
     private var fileFooter: some View {
-        let path = item.fileURLs?.first?.path ?? item.text ?? ""
-        return HStack(spacing: 0) {
-            highlighted(path)
+        if Self.showsMultipleFiles(for: item) {
+            multipleFilesFooter
+        } else {
+            filePathFooter
+        }
+    }
+
+    /// The caption under a card holding several files. Centred and badge-overlaid for the same
+    /// reason `defaultFooter` centres "35 characters": this is a note about the card, not content
+    /// of it, and laying the badge out inline would nudge the label left on every ⌘ press.
+    private var multipleFilesFooter: some View {
+        Text(Self.fileFooterLabel(for: item))
+            .font(.system(size: s(12)))
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, s(12))
+            .padding(.vertical, s(7))
+            .frame(height: s(PanelLayout.cardFooterHeight))
+            .overlay(alignment: .trailing) {
+                shortcutBadge.padding(.trailing, s(12))
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    /// The path under a card holding one file, in full.
+    ///
+    /// Two lines, truncating at the end — not one line truncating in the middle, which is what this
+    /// used to be. A real path (`/Users/pikalong/Downloads/Ảnh màn hình 2026-09-22 lúc 09.29.41.png`)
+    /// does not fit on one line of a 232pt card, and a middle ellipsis eats the file name — the
+    /// one part that tells this card from the one next to it. The strip grows to whatever the two
+    /// lines need and the preview above gives up exactly that much, so the card stays square.
+    private var filePathFooter: some View {
+        HStack(alignment: .bottom, spacing: 0) {
+            highlighted(Self.fileFooterLabel(for: item))
                 .font(.system(size: s(12)))
                 .foregroundColor(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            // A fixed floor rather than the badge's own width. The badge appears only while ⌘ is
+            // down, so a column sized to it would widen the moment the key goes down — and a path
+            // that just fitted on one line would drop to two, growing the strip and shrinking the
+            // thumbnail under the user's finger.
             shortcutBadge
+                .frame(minWidth: s(Self.badgeSlotWidth), alignment: .trailing)
         }
         .padding(.horizontal, s(12))
         .padding(.vertical, s(7))
-        .frame(height: s(PanelLayout.cardFooterHeight))
+        .frame(minHeight: s(PanelLayout.cardFooterHeight))
         .background(Color(NSColor.controlBackgroundColor))
     }
+
+    /// Width reserved for the ⌘-number badge beside a path. Wide enough for the badge as it is
+    /// drawn with ⌘ alone; ⌘⇧ adds a glyph and takes a little more, which is the one case the
+    /// column is allowed to stretch for.
+    private static let badgeSlotWidth: CGFloat = 24
 
     private var defaultFooter: some View {
         Group {
@@ -1202,6 +1296,32 @@ struct ClipboardItemCard: View {
         if let separator = text.range(of: "://") { text = String(text[separator.upperBound...]) }
         if text.hasSuffix("/") { text.removeLast() }
         return text.isEmpty ? raw : text
+    }
+
+    /// Whether this card is holding several files at once rather than one.
+    ///
+    /// The single question behind both halves of a file card: a card that answers yes draws the
+    /// stacked icons and the "Multiple files" caption, and one that answers no draws the file's
+    /// own thumbnail and its path. Static so the preview and the footer switch on the same call —
+    /// a card that stacked icons while its footer named one path would be two cards.
+    static func showsMultipleFiles(for item: ClipboardItem) -> Bool {
+        guard item.type == .file || item.type == .folder else { return false }
+        return (item.fileURLs?.count ?? 0) > 1
+    }
+
+    /// What the strip under a file card says: the path, when there is one file to have a path.
+    ///
+    /// Several files get a caption instead. Naming the first of them is what the card used to do,
+    /// and it is a claim about the card that is not true — the other four are in there too, and
+    /// nothing on the card said so.
+    ///
+    /// The `text` fallback is the other card that comes through here: a `.text` item whose text
+    /// turned out to be a path on disk, which has no `fileURLs` to read.
+    static func fileFooterLabel(for item: ClipboardItem) -> String {
+        if showsMultipleFiles(for: item) {
+            return item.type == .folder ? "Multiple folders" : "Multiple files"
+        }
+        return item.fileURLs?.first?.path ?? item.text ?? ""
     }
 
     /// What the strip along the bottom of a card says about its content.
