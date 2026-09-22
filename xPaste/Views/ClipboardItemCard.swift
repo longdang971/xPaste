@@ -560,17 +560,18 @@ struct ClipboardItemCard: View {
             switch item.type {
             case .url:
                 if linkPreviewEnabled, let img = linkPreview?.image {
-                    if drawsDirectImage {
-                        // The picture is the content, not an illustration scraped off a page, so
-                        // this is an image card outright — dimensions and all. The size rule below
-                        // would park a small or square photograph on the logo plate.
-                        imagePreview(img)
-                    } else if Self.isLogoSized(img) {
+                    if Self.isLogoSized(img) {
                         logoPreview(img)
                     } else {
+                        // Filled and cropped, not stretched. A cover picture is close enough to the
+                        // card's own shape that stretching rarely showed, but "rarely" is not
+                        // never, and a picture drawn out of shape is the one thing about it the eye
+                        // catches first.
                         Image(nsImage: img)
                             .resizable()
+                            .aspectRatio(contentMode: .fill)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipped()
                     }
                 } else if drawsLinkBody {
                     noImagePlaceholder
@@ -1089,30 +1090,6 @@ struct ClipboardItemCard: View {
     static let logoMaxSide: CGFloat = 72
     static let logoMinSide: CGFloat = 28
 
-    /// Whether a link that points straight at a picture is drawing as an image card.
-    ///
-    /// Such a card is an image card in every visible respect — chequerboard, pixel dimensions, no
-    /// footer strip — while the item underneath stays a `.url`, so double-clicking it still pastes
-    /// the link rather than the picture.
-    ///
-    /// The image itself has to have arrived. Metadata lands one assignment earlier, and dropping
-    /// the footer in that gap leaves a card with no footer and nothing to fill the strip it gave up.
-    ///
-    /// Static so `contentPreview` and `footer` can switch on the same call: if one of them decided
-    /// there was no footer strip while the other drew one, the dimensions pill would land on top of
-    /// it — the same trap the `drawsRichPreview` comment describes.
-    static func drawsAsImageCard(type: ClipboardContentType,
-                                 linkPreviewEnabled: Bool,
-                                 preview: LinkPreviewData?) -> Bool {
-        type == .url && linkPreviewEnabled
-            && preview?.isDirectImage == true && preview?.image != nil
-    }
-
-    private var drawsDirectImage: Bool {
-        Self.drawsAsImageCard(type: item.type, linkPreviewEnabled: linkPreviewEnabled,
-                              preview: linkPreview)
-    }
-
     /// Whether a link's `og:image` is a logo rather than a cover picture.
     /// The glyph on the placeholder plate: a compass, which is what Paste draws and what the plate
     /// means — this is a link, and there is nothing of it to show.
@@ -1162,7 +1139,7 @@ struct ClipboardItemCard: View {
             // says nothing about a colour anyway. `contentPreview` claims the height instead, so
             // the card's total is unchanged and the hex label centres on the whole block.
             EmptyView()
-        } else if item.type == .image || drawsDirectImage {
+        } else if item.type == .image {
             // Same reasoning: the picture runs to the bottom edge and carries its dimensions in a
             // floating pill. A strip here would crop the picture to say "28 KB", which is the one
             // thing about an image nobody is looking for.

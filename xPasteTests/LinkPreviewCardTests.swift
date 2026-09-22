@@ -69,56 +69,34 @@ final class LinkPreviewCardTests: XCTestCase {
                        "the type has to start with image/, not merely mention it")
     }
 
-    /// The card branches on this flag before it branches on size, so a picture that happens to be
-    /// small or square is still drawn as a picture rather than parked on the logo plate.
-    func test_link_previews_are_pages_unless_told_otherwise() {
-        let page = LinkPreviewData(title: "t", imageURL: nil, image: nil, domain: "example.com")
-        XCTAssertFalse(page.isDirectImage,
-                       "scraped pages must keep the treatment they always had")
-    }
-
     // MARK: - Which card an image link draws
     //
-    // A link to a picture is drawn as an image card — chequerboard, pixel dimensions, no footer
-    // strip — while the item underneath stays a URL, so pasting it still pastes the link. Both the
-    // preview and the footer switch on this one function, so they cannot disagree about whether
-    // there is a footer strip for the dimensions pill to sit in.
+    // A link to a picture used to be drawn as an image card outright — chequerboard, pixel
+    // dimensions, no footer strip — and to skip the logo rule on the way, so that a picture "small
+    // or square is still drawn as a picture". That put a 48-pixel site icon across the whole card,
+    // blurred, with no footer to say what it was.
+    //
+    // It now goes through the same branch as any other link picture: the logo rule decides the
+    // size, and the two-line link footer stays, carrying the file name and the URL. `isDirectImage`
+    // survives only in the service, where it seeds the image cache and supplies that file name.
 
-    private func imagePreview(direct: Bool, loaded: Bool) -> LinkPreviewData {
-        LinkPreviewData(title: nil, imageURL: URL(string: "https://e.com/a.jpg"),
-                        image: loaded ? bitmap(800, 600) : nil,
-                        domain: "e.com", isDirectImage: direct)
+    /// A picture has no `og:title` to read. Without one the footer printed the whole URL twice,
+    /// once bold and once grey, so the file name stands in as the title.
+    func test_a_picture_link_is_titled_by_its_file_name() {
+        XCTAssertEqual(URL(string: "https://e.com/a/b/shot.w800")?.lastPathComponent, "shot.w800")
+        // Decoded, not the percent-escaped spelling the URL carries.
+        XCTAssertEqual(URL(string: "https://e.com/%C4%90%C4%83ng%20nh%E1%BA%ADp.png")?
+            .lastPathComponent, "Đăng nhập.png")
     }
 
-    func test_a_loaded_image_link_draws_the_image_card() {
-        XCTAssertTrue(ClipboardItemCard.drawsAsImageCard(
-            type: .url, linkPreviewEnabled: true, preview: imagePreview(direct: true, loaded: true)))
-    }
-
-    func test_an_image_link_keeps_the_link_card_until_the_picture_arrives() {
-        // Metadata lands one assignment before the image does. Dropping the footer in that gap
-        // would leave the card with no footer *and* no picture to fill the strip it vacated.
-        XCTAssertFalse(ClipboardItemCard.drawsAsImageCard(
-            type: .url, linkPreviewEnabled: true, preview: imagePreview(direct: true, loaded: false)))
-    }
-
-    func test_a_scraped_page_keeps_the_link_card() {
-        XCTAssertFalse(ClipboardItemCard.drawsAsImageCard(
-            type: .url, linkPreviewEnabled: true, preview: imagePreview(direct: false, loaded: true)),
-                       "an og:image belongs to a page, and the page's title and URL still matter")
-        XCTAssertFalse(ClipboardItemCard.drawsAsImageCard(
-            type: .url, linkPreviewEnabled: true, preview: nil))
-    }
-
-    func test_nothing_but_a_url_with_previews_on_draws_the_image_card() {
-        XCTAssertFalse(ClipboardItemCard.drawsAsImageCard(
-            type: .url, linkPreviewEnabled: false, preview: imagePreview(direct: true, loaded: true)),
-                       "previews switched off means no fetch ran — the flag is stale at best")
-        XCTAssertFalse(ClipboardItemCard.drawsAsImageCard(
-            type: .text, linkPreviewEnabled: true, preview: imagePreview(direct: true, loaded: true)))
-        XCTAssertFalse(ClipboardItemCard.drawsAsImageCard(
-            type: .image, linkPreviewEnabled: true, preview: imagePreview(direct: true, loaded: true)),
-                       "a real image card gets there on its own, not through the link branch")
+    /// The size rule applies to a picture link exactly as it does to a scraped `og:image` — which
+    /// is the whole of the change. A site icon linked directly is a 48-pixel image and belongs on
+    /// the plate, at 48pt.
+    func test_a_small_picture_link_is_drawn_on_the_logo_plate() {
+        XCTAssertTrue(ClipboardItemCard.isLogoSized(bitmap(48, 48)))
+        XCTAssertEqual(ClipboardItemCard.logoSide(forPixelWidth: 48), 48)
+        XCTAssertFalse(ClipboardItemCard.isLogoSized(bitmap(800, 538)),
+                       "a cover picture still fills the card")
     }
 
     func test_an_unreadable_image_falls_back_to_the_logo_treatment() {

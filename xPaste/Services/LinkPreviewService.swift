@@ -18,6 +18,9 @@ private struct CachedLinkMeta: Codable {
     let imageURL: URL?
     let domain: String?
     var faviconURL: URL?
+    /// Every icon the page declares, largest first. Optional for the same reason as the fields
+    /// below it: entries written before this existed have to keep decoding.
+    var faviconURLs: [URL]?
     // Optional rather than defaulted: synthesised `Codable` has no notion of a property default,
     // so a non-optional here would fail to decode every entry already on disk.
     var isDirectImage: Bool?
@@ -151,8 +154,17 @@ actor LinkPreviewService {
         return parts.url ?? url
     }
 
+    /// Whether an entry on disk was written by a version that knew less than this one.
+    ///
+    /// Only one case so far: a picture link used to be filed with no title, so its card printed the
+    /// URL twice. Those entries would keep doing it forever, because the cache is what a card
+    /// reads. Refetching one costs a single request, and only for links already previewed.
+    private static func isStale(_ meta: CachedLinkMeta) -> Bool {
+        meta.isDirectImage == true && meta.title == nil
+    }
+
     func fetchMetadata(_ url: URL) async -> LinkPreviewData? {
-        if let cached = metaCache[url] {
+        if let cached = metaCache[url], !Self.isStale(cached) {
             return LinkPreviewData(title: cached.title, imageURL: cached.imageURL, image: nil,
                                    domain: cached.domain,
                                    isDirectImage: cached.isDirectImage ?? false)
@@ -177,12 +189,17 @@ actor LinkPreviewService {
            Self.withinCap(resp, data, cap: Self.imageByteCap),
            let image = NSImage(data: data) {
             imageCache.setObject(image, forKey: url as NSURL, cost: image.approximateDecodedBytes)
-            var meta = CachedLinkMeta(url: url, title: nil, imageURL: target, domain: domain)
+            // The file name is the title. A picture has no `og:title` to read, and without one the
+            // card's footer printed the whole URL twice — once bold and once grey. `URL` hands the
+            // component back decoded, so an escaped name reads as itself rather than as %E1%BA%A2.
+            let name = target.lastPathComponent
+            var meta = CachedLinkMeta(url: url, title: name.isEmpty ? nil : name,
+                                      imageURL: target, domain: domain)
             meta.isDirectImage = true
             remember(meta)
             persistToDisk(meta)
             evictDiskIfNeeded()
-            return LinkPreviewData(title: nil, imageURL: target, image: nil, domain: domain,
+            return LinkPreviewData(title: meta.title, imageURL: target, image: nil, domain: domain,
                                    isDirectImage: true)
         }
 
@@ -198,10 +215,11 @@ actor LinkPreviewService {
         let imgStr = ogMeta("og:image", in: html) ?? ogMeta("twitter:image", in: html)
         var ogImageURL: URL?
         if let s = imgStr { ogImageURL = Self.resolvedURL(s, relativeTo: target) }
-        let favURL = htmlFaviconURL(in: html, relativeTo: target)
+        let favURLs = Self.faviconURLs(in: html, relativeTo: target)
 
         var meta = CachedLinkMeta(url: url, title: title, imageURL: ogImageURL, domain: domain)
-        meta.faviconURL = favURL
+        meta.faviconURL = favURLs.first
+        meta.faviconURLs = favURLs
         // Don't cache a fully-empty result — an error/redirect page that still returns HTML
         // would otherwise poison the cache and block a real preview once the site recovers.
         if title != nil || ogImageURL != nil {
@@ -271,22 +289,27 @@ actor LinkPreviewService {
         guard let host = url.host else { return nil }
         if let cached = faviconCache.object(forKey: host as NSString) { return cached }
 
-        var candidates: [URL] = []
-        if let favURL = metaCache[url]?.faviconURL {
-            candidates.append(favURL)
-        }
-        candidates += Self.faviconServices(for: host)
+        let meta = metaCache[url]
+        let declared = meta?.faviconURLs ?? meta?.faviconURL.map { [$0] } ?? []
 
+        // What the page says about itself, whatever size it is. A site's own declaration is the
+        // only source that is *about* this site; the services are guesses at it, and a guess must
+        // never win on size. xxxhay.tv declares a 48-pixel icon, which is under the threshold
+        // below, and letting the loop fall through to Google put a black YouTube play button on
+        // the card — 128 pixels of the wrong site. Drawing 48 pixels at 48pt is the right answer.
+        for favURL in declared {
+            if let img = await loadFavicon(favURL) {
+                faviconCache.setObject(img, forKey: host as NSString, cost: img.approximateDecodedBytes)
+                return img
+            }
+        }
+
+        // Only now, and here bigger is better: these are all guessing at the same thing, so the
+        // one with the most pixels is the best guess.
         var best: NSImage?
         var bestPixels = 0
-        for favURL in candidates {
-            var req = URLRequest(url: Self.secureTwin(of: favURL), timeoutInterval: 8)
-            req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
-            guard let (data, resp) = try? await URLSession.shared.data(for: req),
-                  (resp as? HTTPURLResponse)?.statusCode == 200,
-                  let img = NSImage(data: data),
-                  img.size.width > 1
-            else { continue }
+        for favURL in Self.faviconServices(for: host) {
+            guard let img = await loadFavicon(favURL) else { continue }
             let pixels = img.representations.map(\.pixelsWide).max() ?? 0
             if pixels > bestPixels { best = img; bestPixels = pixels }
             if bestPixels >= Self.faviconMinPixels { break }
@@ -295,6 +318,17 @@ actor LinkPreviewService {
             faviconCache.setObject(best, forKey: host as NSString, cost: best.approximateDecodedBytes)
         }
         return best
+    }
+
+    private func loadFavicon(_ url: URL) async -> NSImage? {
+        var req = URLRequest(url: Self.secureTwin(of: url), timeoutInterval: 8)
+        req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let img = NSImage(data: data),
+              img.size.width > 1
+        else { return nil }
+        return img
     }
 
     /// Records a metadata entry, dropping the oldest once there are more than the disk keeps.
@@ -344,31 +378,67 @@ actor LinkPreviewService {
         sorted.prefix(files.count - maxDiskEntries).forEach { try? FileManager.default.removeItem(at: $0) }
     }
 
-    /// The icon a page declares for itself.
+    /// Every icon a page declares, largest first.
     ///
-    /// `apple-touch-icon` is asked for first and separately. A page that has one has a 180-pixel
-    /// icon there and a 16- or 32-pixel one under `rel="icon"`, and taking whichever appeared first
-    /// in the markup is how a card ended up stretching 32 pixels across the plate.
-    private func htmlFaviconURL(in html: String, relativeTo base: URL) -> URL? {
-        for rel in ["apple-touch-icon", "shortcut icon|icon"] {
-            if let found = faviconHref(matching: rel, in: html, relativeTo: base) { return found }
-        }
-        return nil
+    /// It used to take whichever `<link rel=...icon>` appeared first in the markup, which is the
+    /// small one: a page with an `apple-touch-icon` has 180 pixels there and 16 or 32 under
+    /// `rel="icon"`, and the small one is usually written first. Ordering by declared size fixes
+    /// that without ever leaving the page's own answer.
+    ///
+    /// `mask-icon` is dropped. It is Safari's pinned-tab glyph: a flat monochrome silhouette meant
+    /// to be tinted by the browser, which on a card is a black blob.
+    static func faviconURLs(in html: String, relativeTo base: URL) -> [URL] {
+        iconLinks(in: html).compactMap { resolvedURL($0.href, relativeTo: base) }
     }
 
-    private func faviconHref(matching rel: String, in html: String, relativeTo base: URL) -> URL? {
-        let pattern = #"<link[^>]+rel=["'](?:\#(rel))["'][^>]+href=["']([^"']+)["']"#
-                    + #"|<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:\#(rel))["']"#
-        guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
-              let m = re.firstMatch(in: html, range: NSRange(html.startIndex..., in: html))
-        else { return nil }
-        for g in 1...2 {
-            guard m.range(at: g).location != NSNotFound,
-                  let r = Range(m.range(at: g), in: html) else { continue }
-            let href = String(html[r]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if let resolved = Self.resolvedURL(href, relativeTo: base) { return resolved }
+    /// The `<link>` tags that declare an icon, ordered largest first.
+    ///
+    /// Each whole tag is matched and then read attribute by attribute, rather than by one pattern
+    /// trying to cover both attribute orders at once: `rel`, `href` and `sizes` appear in any order
+    /// and a page may declare a dozen icons, and only reading them all can say which is biggest.
+    static func iconLinks(in html: String) -> [(href: String, size: Int)] {
+        guard let tags = try? NSRegularExpression(pattern: "<link\\\\b[^>]*>", options: .caseInsensitive)
+        else { return [] }
+        var found: [(href: String, size: Int)] = []
+        let whole = NSRange(html.startIndex..., in: html)
+        for match in tags.matches(in: html, range: whole) {
+            guard let range = Range(match.range, in: html) else { continue }
+            let tag = String(html[range])
+            guard let rel = attribute("rel", in: tag)?.lowercased(),
+                  rel.contains("icon"), !rel.contains("mask-icon"),
+                  let href = attribute("href", in: tag)?
+                      .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !href.isEmpty
+            else { continue }
+            found.append((href, declaredSize(of: tag, rel: rel)))
         }
-        return nil
+        // Stable: two icons declared at the same size keep the order the page wrote them in.
+        return found.enumerated()
+            .sorted { $0.element.size != $1.element.size ? $0.element.size > $1.element.size
+                                                        : $0.offset < $1.offset }
+            .map(\.element)
+    }
+
+    /// How many pixels a declared icon claims. `sizes="32x32"` when it says so; 180 for an
+    /// `apple-touch-icon`, which is that size by convention and the reason to prefer it.
+    private static func declaredSize(of tag: String, rel: String) -> Int {
+        if let sizes = attribute("sizes", in: tag)?.lowercased(),
+           let first = sizes.split(separator: " ").first,
+           let width = Int(first.split(separator: "x").first ?? "") {
+            return width
+        }
+        return rel.contains("apple-touch-icon") ? 180 : 0
+    }
+
+    /// One attribute out of one tag, quoted either way.
+    private static func attribute(_ name: String, in tag: String) -> String? {
+        let pattern = "\\\\b\(NSRegularExpression.escapedPattern(for: name))\\\\s*=\\\\s*[\"']([^\"']*)[\"']"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let m = re.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
+              m.numberOfRanges > 1,
+              let r = Range(m.range(at: 1), in: tag)
+        else { return nil }
+        return String(tag[r])
     }
 
     private func ogMeta(_ property: String, in html: String) -> String? {
