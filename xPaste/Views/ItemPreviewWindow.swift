@@ -104,15 +104,45 @@ struct PreviewPopoverContent: View {
         return URL(string: text)
     }
 
-    /// One size, whatever the popover is showing.
+    /// One size for everything except a web page.
     ///
     /// It used to be three: 420x340 for a text item, 560x440 for a link, 560x460 once the pencil
     /// was pressed. So opening a preview and choosing Edit resized the window under the pointer,
     /// and the text reflowed into a different shape at the moment the user was about to work on
-    /// it. The editor's size is the one that has to be big enough, so it is the one everything
-    /// else takes.
-    private var previewWidth: CGFloat { 560 }
-    private var previewHeight: CGFloat { 460 }
+    /// it. Everything took the editor's size, because the editor was the one that had to be big
+    /// enough.
+    ///
+    /// The editor has since moved into a window of its own — see `EditWindow` — so nothing
+    /// reshapes under the pointer any more, and the rule can stop paying for a problem that no
+    /// longer exists. Only the page gets the exception: a web page is the one thing here laid out
+    /// for a browser rather than for this window, and 560pt of it is a column of wrapped
+    /// fragments. Text, pictures, colours and files are all shown at their own size inside the
+    /// box, so a bigger box would only be emptier.
+    private var previewSize: CGSize {
+        guard item.type == .url, itemURL != nil else { return Self.defaultPreviewSize }
+        return Self.pagePreviewSize(fitting: NSScreen.main?.visibleFrame.size)
+    }
+
+    static let defaultPreviewSize = CGSize(width: 560, height: 460)
+
+    /// As much of `pagePreviewIdeal` as the screen will take.
+    ///
+    /// Clamped rather than fixed, for the reason `PanelLayout.minScale` exists: the panel runs
+    /// along one edge of the screen and this is anchored to a card inside it, so on a 13" laptop a
+    /// 660pt-tall popover has nowhere to go and AppKit would shunt it somewhere of its own
+    /// choosing. The margins taken off are what the panel and the menu bar occupy.
+    ///
+    /// It never shrinks below the size every other preview gets. A screen too small for that is
+    /// a screen the popover was already too big for.
+    static func pagePreviewSize(fitting screen: CGSize?) -> CGSize {
+        guard let screen else { return defaultPreviewSize }
+        return CGSize(
+            width: min(pagePreviewIdeal.width, max(defaultPreviewSize.width, screen.width - 120)),
+            height: min(pagePreviewIdeal.height, max(defaultPreviewSize.height, screen.height - 420))
+        )
+    }
+
+    static let pagePreviewIdeal = CGSize(width: 900, height: 660)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -123,7 +153,7 @@ struct PreviewPopoverContent: View {
             Divider()
             previewFooter
         }
-        .frame(width: previewWidth, height: previewHeight)
+        .frame(width: previewSize.width, height: previewSize.height)
         // Keyed on the appearance as well as the item, the same way the card is: the legibility
         // guard resolves against `textBackgroundColor`, so a popover left open across a light/dark
         // flip would otherwise keep a verdict that no longer matches what is behind it.
