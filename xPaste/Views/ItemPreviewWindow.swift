@@ -462,8 +462,16 @@ struct PreviewPopoverContent: View {
                 if !urls.isEmpty {
                     // Every URL at once, so revealing a multi-file item selects the whole set in
                     // Finder rather than making the user come back for the next one.
-                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(urls) }
-                        .controlSize(.small)
+                    //
+                    // And the bar goes with it. Finder comes forward, so leaving the panel up
+                    // parks it over the window the user was sent to — the same reason the editor
+                    // hides it on the way to opening.
+                    Button("Show in Finder") {
+                        onClose()
+                        NSWorkspace.shared.activateFileViewerSelecting(urls)
+                        NotificationCenter.default.post(name: .hidePanelRequested, object: nil)
+                    }
+                    .controlSize(.small)
                 }
             }
         }

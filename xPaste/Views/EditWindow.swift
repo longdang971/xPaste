@@ -2,11 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-extension Notification.Name {
-    /// The editor is opening and wants the bar out of the way.
-    static let hidePanelForEditing = Notification.Name("com.user.xPaste.hidePanelForEditing")
-}
-
 /// The editor, in a window of its own.
 ///
 /// It used to live inside the preview popover, and that is where a whole class of bugs came from.
@@ -55,7 +50,7 @@ final class EditWindowPresenter: NSObject, NSWindowDelegate {
         // came from, and it sidesteps the glass: the bar's Liquid Glass follows its window's key
         // state, so a key editor in front of a visible bar darkens it — the trap the delete
         // confirmation documents at length.
-        NotificationCenter.default.post(name: .hidePanelForEditing, object: nil)
+        NotificationCenter.default.post(name: .hidePanelRequested, object: nil)
 
         // The whole text, never the prefix a card carries: what the editor holds becomes the item.
         let hydrated = ClipboardStore.shared.hydrated(item)

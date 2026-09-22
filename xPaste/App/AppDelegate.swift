@@ -40,6 +40,12 @@ extension Notification.Name {
     static let saveSelectedItem     = Notification.Name("com.user.xPaste.saveSelectedItem")
     /// Space. Same division of labour as ⌘S: the key monitor sees the press, the panel knows
     /// which card it is about.
+    /// Something has taken over from the bar and wants it out of the way: the editor opening in a
+    /// window of its own, or a Finder reveal that is about to bring Finder forward.
+    ///
+    /// Named for what it asks rather than for who asks it. It was `hidePanelForEditing`, which was
+    /// true while the editor was the only caller and a lie the moment anything else needed it.
+    static let hidePanelRequested = Notification.Name("com.user.xPaste.hidePanelForEditing")
     static let togglePreviewSelected = Notification.Name("com.user.xPaste.togglePreviewSelected")
     /// ←/→/↑/↓. Carries `delta`: -1 towards the front of the row, +1 towards the back. Decided in
     /// the key monitor rather than by a hidden key equivalent — see `PanelArrowKey` for the two
@@ -260,8 +266,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
 
         NotificationCenter.default.addObserver(
-            self, selector: #selector(handleHidePanelForEditing),
-            name: .hidePanelForEditing, object: nil
+            self, selector: #selector(handleHidePanelRequested),
+            name: .hidePanelRequested, object: nil
         )
         NotificationCenter.default.addObserver(
             self, selector: #selector(openSettings),
@@ -1086,7 +1092,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// The editor is a window of its own now, and it opens with the bar out of the way — see
     /// `EditWindowPresenter`.
-    @objc private func handleHidePanelForEditing() { if panelVisible { hidePanel() } }
+    @objc private func handleHidePanelRequested() { if panelVisible { hidePanel() } }
 
     @objc private func handleAlertShown()  { alertIsPresented = true  }
     @objc private func handleAlertHidden() { alertIsPresented = false }
