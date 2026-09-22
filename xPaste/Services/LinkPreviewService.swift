@@ -45,11 +45,36 @@ actor LinkPreviewService {
 
     private static let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
-    /// A page is read for the handful of `<meta>` tags in its head. Anything past this is markup
-    /// nobody here looks at, and decoding it into a `String` — which the ISO-Latin-1 fallback
-    /// always succeeds at — would put the whole document in memory and then run six regexes over
-    /// it. A ten-megabyte page cost ten megabytes of `String` for a title.
-    private static let htmlScanCap = 512 * 1024
+    /// The backstop on how much of a document is decoded into a `String` and run past six regexes.
+    ///
+    /// A ceiling, not the usual amount: `headSlice` cuts at `</head>` first, so an ordinary page
+    /// costs its head and nothing else. This is what a document with no `</head>` in reach falls
+    /// back to.
+    private static let htmlScanCap = 2 * 1024 * 1024
+
+    /// The part of a document worth scanning: its head.
+    ///
+    /// It used to be the first 512KB, which is where every YouTube link stopped having a title.
+    /// Measured on two videos: `<title>` lands at byte 703,644 and 707,000-odd, `og:image` just
+    /// after it, and `</head>` at 712,419 — the 700KB in front of them is inline script. The
+    /// regexes found nothing, the card fell to the favicon plate, and the footer printed the URL
+    /// twice. github.com puts the same tags at byte 29,181 and vnexpress.net at 2,688, which is
+    /// why only YouTube showed it.
+    ///
+    /// Cutting at `</head>` rather than raising the prefix keeps the bound where it belongs: these
+    /// tags are in the head by definition, so scanning exactly the head is both the smallest slice
+    /// that can contain them and the largest that could be worth reading. A ten-megabyte page with
+    /// an ordinary head now costs less than it did before, not more.
+    ///
+    /// Only the two spellings real documents use are searched for. A page that closes its head as
+    /// `</Head>` gets the ceiling instead, which is what it would have had anyway.
+    static func headSlice(of data: Data) -> Data {
+        let ceiling = data.prefix(htmlScanCap)
+        for needle in [Data("</head>".utf8), Data("</HEAD>".utf8)] {
+            if let found = ceiling.range(of: needle) { return ceiling.prefix(upTo: found.upperBound) }
+        }
+        return ceiling
+    }
     /// The largest preview picture worth holding. A card draws it at 232pt.
     private static let imageByteCap = 8 * 1024 * 1024
 
@@ -161,10 +186,10 @@ actor LinkPreviewService {
                                    isDirectImage: true)
         }
 
-        // Only the head is of interest, and only a bounded amount of it. Truncated at a byte
-        // count, so a UTF-8 sequence can be cut in half — the ISO-Latin-1 fallback below decodes
-        // whatever UTF-8 rejects, and a mangled tail cannot affect tags that appear near the top.
-        let scanned = data.prefix(Self.htmlScanCap)
+        // Only the head is of interest. Truncated at a byte count when it has to fall back to the
+        // ceiling, so a UTF-8 sequence can be cut in half — the ISO-Latin-1 fallback below decodes
+        // whatever UTF-8 rejects, and a mangled tail cannot affect tags inside the head.
+        let scanned = Self.headSlice(of: data)
         guard let html = String(data: scanned, encoding: .utf8)
                 ?? String(data: scanned, encoding: .isoLatin1)
         else { return nil }
