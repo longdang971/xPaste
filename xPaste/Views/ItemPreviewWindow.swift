@@ -1,6 +1,8 @@
 import SwiftUI
 import AppKit
 import WebKit
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Whether a key press is the one that opens and closes the item preview.
 ///
@@ -47,6 +49,10 @@ struct PreviewPopoverContent: View {
     @State private var loadedImage: NSImage?
     @State private var richPreview: RichFullPreview?
     @State private var fileText: String?
+    /// The picture behind a single image file, at full size. See `loadFileImageIfNeeded`.
+    @State private var fileImage: NSImage?
+    /// What the filesystem says about the one file or folder this preview is showing.
+    @State private var fileFacts: FileFacts?
     /// Counted once in `.task`, not per body pass: three full walks of the string measured 50ms on
     /// a 468KB item, and the popover re-renders several times while it settles.
     @State private var stats = ""
@@ -68,8 +74,12 @@ struct PreviewPopoverContent: View {
         case .url:    return "Link"
         case .color:  return "Color"
         case .image:  return "Image"
-        case .file:   return "File"
-        case .folder: return "Folder"
+        case .file, .folder:
+            // Plural and counted, because for a multi-file item that count is the first thing
+            // worth knowing and the pane below is a list rather than one file.
+            let n = item.fileURLs?.count ?? 0
+            if n > 1 { return item.type == .folder ? "\(n) Folders" : "\(n) Files" }
+            return item.type == .folder ? "Folder" : "File"
         case .text:   return "Text"
         }
     }
@@ -109,6 +119,10 @@ struct PreviewPopoverContent: View {
             if item.type == .text || item.type == .url {
                 richPreview = RichTextRenderer.fullPreview(for: item)
             }
+            // Facts first: whether the file is a picture is what decides between reading it as
+            // text and decoding it as an image, and both of those are disk work worth not doing.
+            await loadFileFactsIfNeeded()
+            await loadFileImageIfNeeded()
             await loadFileTextIfNeeded()
             // `.color` shares the footer's character count with `.text` (see the `previewFooter`
             // switch below), so it needs the same stats computed here.
@@ -219,32 +233,98 @@ struct PreviewPopoverContent: View {
         }
     }
 
+    /// The file pane: one file shown as itself, several shown as a list.
+    ///
+    /// It used to be one shape for both — a stack of name rows, each with its own Reveal button,
+    /// and the file's text underneath when there was one. That shape said the same thing about a
+    /// screenshot as about a folder: here is a filename. A single item is the thing you pressed
+    /// Space to look at, so it gets the pane; the list is for when there is more than one and the
+    /// question is which.
+    @ViewBuilder
     private var fileContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(item.fileURLs ?? [], id: \.self) { url in
-                HStack(spacing: 10) {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
-                        .resizable().frame(width: 26, height: 26)
-                    Text(url.lastPathComponent).font(.system(size: 12)).lineLimit(1)
-                    Spacer()
-                    Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                        .controlSize(.small)
-                }
-            }
-            if let fileText {
-                Divider()
-                // The same `NSTextView` the text items use, rather than a `Text` in a `ScrollView`:
-                // this pane holds up to 256KB, which TextTkit pages and SwiftUI would lay out whole.
-                RichTextPreview(text: Self.monospaced(fileText), fill: nil)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, -14)
-                    .padding(.bottom, -14)
-            } else {
-                Spacer()
+        if let urls = item.fileURLs, urls.count > 1 {
+            fileListContent(urls)
+        } else if let url = item.fileURLs?.first {
+            singleFileContent(url)
+        } else {
+            // A file item whose paths did not survive the store. Nothing to draw and nothing to
+            // reveal, but the pane still has to be something.
+            ZStack {
+                Color(nsColor: .textBackgroundColor)
+                Text("No files").font(.system(size: 13)).foregroundStyle(.secondary)
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// One file or folder, shown as whatever it is: the picture, the text, or the icon.
+    @ViewBuilder
+    private func singleFileContent(_ url: URL) -> some View {
+        ZStack {
+            Color(nsColor: .textBackgroundColor)
+            if let fileImage {
+                // The same treatment an `.image` item gets, because at this size that is what the
+                // user opened the pane to see. `.high` interpolation matters here and nowhere else:
+                // a screenshot scaled down to fit 560pt is resampled, not merely drawn.
+                Image(nsImage: fileImage)
+                    .resizable().interpolation(.high).scaledToFit().padding(12)
+            } else if let fileText {
+                // The same `NSTextView` the text items use, rather than a `Text` in a `ScrollView`:
+                // this pane holds up to 256KB, which TextKit pages and SwiftUI would lay out whole.
+                RichTextPreview(text: Self.monospaced(fileText), fill: nil)
+            } else {
+                fileHero(url)
+            }
+        }
+    }
+
+    /// A file with nothing to show of itself — an app, an archive, a folder — drawn the way the
+    /// Finder's own Get Info draws one: its icon at size, its name, and one line of facts.
+    private func fileHero(_ url: URL) -> some View {
+        VStack(spacing: 12) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                .resizable().scaledToFit().frame(width: 128, height: 128)
+            Text(url.lastPathComponent)
+                .font(.system(size: 15, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+            if let subtitle = fileFacts?.subtitle, !subtitle.isEmpty {
+                Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+        }
+        .padding(24)
+    }
+
+    /// Several files: one row each, name over the folder it came from.
+    ///
+    /// The path is the second line rather than a tooltip because that is the whole question a
+    /// multi-file item raises — two files with the same name are the ordinary case, not the corner.
+    /// Keyed by position, not by URL: the same path can legitimately appear twice.
+    private func fileListContent(_ urls: [URL]) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+                    HStack(spacing: 10) {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                            .resizable().frame(width: 32, height: 32)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(url.lastPathComponent)
+                                .font(.system(size: 13)).lineLimit(1)
+                            Text(url.deletingLastPathComponent().path)
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    if index < urls.count - 1 {
+                        // Inset to clear the icon column, so the divider separates the names rather
+                        // than cutting the icons off from them.
+                        Divider().padding(.leading, 56)
+                    }
+                }
+            }
+        }
         .background(Color(nsColor: .textBackgroundColor))
     }
 
@@ -261,14 +341,48 @@ struct PreviewPopoverContent: View {
     ///
     /// Far more than the card reads: this pane scrolls, so it can show a whole config file rather
     /// than its opening. Multi-file items are left alone — there is no room to say which file the
-    /// pane belongs to.
+    /// pane belongs to, and a picture is skipped because it already has a pane of its own.
     private func loadFileTextIfNeeded() async {
-        guard item.type == .file, let urls = item.fileURLs, urls.count == 1, fileText == nil
+        guard item.type == .file, let urls = item.fileURLs, urls.count == 1, fileText == nil,
+              fileFacts?.isImage != true
         else { return }
         let url = urls[0]
         fileText = await Task.detached(priority: .userInitiated) {
             TextFileReader.read(url, maxBytes: 262_144)
         }.value
+    }
+
+    /// The single file or folder's size, kind and — for a picture — its pixel dimensions.
+    ///
+    /// Off the main actor: `resourceValues` and a directory listing both hit the disk, and this
+    /// pane appears under a key press.
+    private func loadFileFactsIfNeeded() async {
+        guard item.type == .file || item.type == .folder,
+              let urls = item.fileURLs, urls.count == 1, fileFacts == nil
+        else { return }
+        let url = urls[0]
+        fileFacts = await Task.detached(priority: .userInitiated) { FileFacts.read(url) }.value
+    }
+
+    /// The picture behind a single image file.
+    ///
+    /// Capped at 2000 pixels on the long edge rather than decoded whole: the pane is 560pt wide,
+    /// and a 48-megapixel photograph decoded at full size to be drawn a twentieth that big is
+    /// hundreds of megabytes resident for as long as the popover is up.
+    private func loadFileImageIfNeeded() async {
+        guard fileFacts?.isImage == true, fileImage == nil,
+              let url = item.fileURLs?.first
+        else { return }
+        let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
+            let opts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 2000,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+            ]
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+            return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+        }.value
+        if let cgImage { fileImage = NSImage(cgImage: cgImage, size: .zero) }
     }
 
 
@@ -295,10 +409,23 @@ struct PreviewPopoverContent: View {
                 }
                 Spacer()
             case .file, .folder:
-                let n = (item.fileURLs ?? []).count
-                Text(item.type == .folder ? "\(n) folder(s)" : "\(n) file(s)")
+                let urls = item.fileURLs ?? []
+                // The path for one file, the count for several — the same split the pane above
+                // makes, and for the same reason: with one file the path is what identifies it,
+                // and with several the list already carries every path there is.
+                Text(urls.count == 1 ? urls[0].path : ClipboardItemCard.footerLabel(for: item))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
-                Spacer()
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 8)
+                if let detail = fileFacts?.detail, !detail.isEmpty {
+                    Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                if !urls.isEmpty {
+                    // Every URL at once, so revealing a multi-file item selects the whole set in
+                    // Finder rather than making the user come back for the next one.
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+                        .controlSize(.small)
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -326,6 +453,70 @@ struct PreviewPopoverContent: View {
         } else if let data = item.imageData, let img = NSImage(data: data) {
             loadedImage = img
         }
+    }
+}
+
+/// What the preview pane can say about a single file or folder without opening it.
+///
+/// A value rather than three pieces of `@State`, so the pane can never be drawn having learned the
+/// size but not yet whether the thing is a picture — which is the difference between the image pane
+/// and the icon one.
+struct FileFacts: Sendable {
+    /// The system's own name for the type: "PNG image", "Application", "Folder".
+    var kind: String
+    /// The short fact for the footer: a byte count, an item count, or a picture's dimensions.
+    var detail: String
+    /// Whether this is a picture, and so whether the pane draws it rather than reading it.
+    var isImage: Bool
+
+    /// Kind and detail on one line, for the icon pane's subtitle.
+    var subtitle: String {
+        [kind, detail].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// Reads them off the filesystem. Pure disk work with no main-actor state, so it is called from
+    /// a detached task — see `loadFileFactsIfNeeded`.
+    static func read(_ url: URL) -> FileFacts {
+        let keys: Set<URLResourceKey> = [.localizedTypeDescriptionKey, .fileSizeKey,
+                                         .isDirectoryKey, .isPackageKey, .contentTypeKey]
+        let values = try? url.resourceValues(forKeys: keys)
+        let kind = values?.localizedTypeDescription ?? ""
+
+        // A package is a directory only to the filesystem. Counting its contents said
+        // "Application · 1 item" under Xcode.app, which is true of the folder and nonsense about
+        // the app — the one thing inside it is `Contents`. Its kind is the whole answer.
+        if values?.isPackage == true { return FileFacts(kind: kind, detail: "", isImage: false) }
+
+        if values?.isDirectory == true {
+            // The immediate contents, not a recursive count: this is a caption, and walking a home
+            // folder to write one would take longer than the popover stays up.
+            let n = (try? FileManager.default.contentsOfDirectory(atPath: url.path))?.count
+            let detail = n.map { "\($0) item\($0 == 1 ? "" : "s")" } ?? ""
+            return FileFacts(kind: kind, detail: detail, isImage: false)
+        }
+
+        let bytes = (values?.fileSize).map {
+            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+        } ?? ""
+        let isImage = values?.contentType?.conforms(to: .image) ?? false
+        // Read from the file's metadata rather than by decoding it: the dimensions are in the
+        // header, and this runs before anything has decided to decode anything.
+        if isImage, let size = pixelSize(of: url) {
+            let dimensions = "\(size.width) × \(size.height)"
+            return FileFacts(kind: kind,
+                             detail: bytes.isEmpty ? dimensions : "\(dimensions) · \(bytes)",
+                             isImage: true)
+        }
+        return FileFacts(kind: kind, detail: bytes, isImage: isImage)
+    }
+
+    private static func pixelSize(of url: URL) -> (width: Int, height: Int)? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int
+        else { return nil }
+        return (width, height)
     }
 }
 
