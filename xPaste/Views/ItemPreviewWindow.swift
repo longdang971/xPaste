@@ -53,6 +53,13 @@ struct PreviewPopoverContent: View {
     @State private var fileImage: NSImage?
     /// What the filesystem says about the one file or folder this preview is showing.
     @State private var fileFacts: FileFacts?
+    /// The tags and cover art behind a single sound file. Nil for everything else.
+    @State private var audioInfo: MediaInfo?
+    /// Which player this file gets, once AVFoundation has said it can play it at all.
+    @State private var mediaKind: MediaKind?
+    /// Whether that question has been answered yet. Separate from `mediaKind` because "not a media
+    /// file" and "not asked yet" are the same nil and must not draw the same thing.
+    @State private var mediaChecked = false
     /// Counted once in `.task`, not per body pass: three full walks of the string measured 50ms on
     /// a 468KB item, and the popover re-renders several times while it settles.
     @State private var stats = ""
@@ -122,6 +129,8 @@ struct PreviewPopoverContent: View {
             // Facts first: whether the file is a picture is what decides between reading it as
             // text and decoding it as an image, and both of those are disk work worth not doing.
             await loadFileFactsIfNeeded()
+            await resolveMediaKindIfNeeded()
+            await loadAudioInfoIfNeeded()
             await loadFileImageIfNeeded()
             await loadFileTextIfNeeded()
             // `.color` shares the footer's character count with `.text` (see the `previewFooter`
@@ -261,7 +270,17 @@ struct PreviewPopoverContent: View {
     private func singleFileContent(_ url: URL) -> some View {
         ZStack {
             Color(nsColor: .textBackgroundColor)
-            if let fileImage {
+            if mediaKind == .video {
+                // Edge to edge, the way every other video on the Mac is shown, with the controls
+                // floating over the picture rather than taking a strip out of the pane.
+                VideoPreviewPane(url: url)
+            } else if mediaKind == .audio {
+                AudioPreviewPane(url: url, info: audioInfo)
+            } else if !mediaChecked, MediaFile.kind(of: url) != nil {
+                // Deciding. Blank rather than the icon pane, which would appear for a moment and
+                // then be replaced by the player — a flash on every song opened.
+                Color.clear
+            } else if let fileImage {
                 // The same treatment an `.image` item gets, because at this size that is what the
                 // user opened the pane to see. `.high` interpolation matters here and nowhere else:
                 // a screenshot scaled down to fit 560pt is resampled, not merely drawn.
@@ -344,7 +363,7 @@ struct PreviewPopoverContent: View {
     /// pane belongs to, and a picture is skipped because it already has a pane of its own.
     private func loadFileTextIfNeeded() async {
         guard item.type == .file, let urls = item.fileURLs, urls.count == 1, fileText == nil,
-              fileFacts?.isImage != true
+              fileFacts?.isImage != true, MediaFile.kind(of: urls[0]) == nil
         else { return }
         let url = urls[0]
         fileText = await Task.detached(priority: .userInitiated) {
@@ -362,6 +381,26 @@ struct PreviewPopoverContent: View {
         else { return }
         let url = urls[0]
         fileFacts = await Task.detached(priority: .userInitiated) { FileFacts.read(url) }.value
+    }
+
+    /// Whether this file gets a player, and which.
+    private func resolveMediaKindIfNeeded() async {
+        guard !mediaChecked, let url = item.fileURLs?.first, item.fileURLs?.count == 1 else {
+            mediaChecked = true
+            return
+        }
+        mediaKind = await MediaFile.playableKind(of: url)
+        mediaChecked = true
+    }
+
+    /// The cover art and tags behind a single sound file.
+    ///
+    /// Only for sound: a video's pane is `AVPlayerView`, which reads the file itself, and parsing
+    /// its metadata here would open a second handle on it for nothing.
+    private func loadAudioInfoIfNeeded() async {
+        guard let url = item.fileURLs?.first, mediaKind == .audio, audioInfo == nil
+        else { return }
+        audioInfo = await MediaFile.readAudio(url)
     }
 
     /// The picture behind a single image file.

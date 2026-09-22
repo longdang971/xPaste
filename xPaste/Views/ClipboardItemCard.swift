@@ -256,6 +256,26 @@ struct ClipboardItemCard: View {
                 if linkImageChecked { linkImageChecked = false }
             }
 
+            // A song's cover art, or a video's opening frame, drawn the way a picture file is
+            // drawn. Both go through `pathImage` and its cache, so the card that shows one and the
+            // card that falls back to the generic icon are the same card with a different bitmap
+            // in it — and a card scrolled out of view and back does not re-parse the file.
+            if imageURL == nil,
+               pathImage == nil, Self.pathImageCache.object(forKey: item.id as NSUUID) == nil,
+               let media = Self.mediaSource(type: item.type, fileURLs: item.fileURLs,
+                                            detectedPath: resolved.url) {
+                let poster: NSImage? = switch media.kind {
+                case .audio: await MediaFile.readAudio(media.url).artwork.flatMap(NSImage.init(data:))
+                case .video: await MediaFile.posterFrame(for: media.url)
+                    .map { NSImage(cgImage: $0, size: .zero) }
+                }
+                if let poster {
+                    pathImage = poster
+                    Self.pathImageCache.setObject(poster, forKey: item.id as NSUUID,
+                                                  cost: poster.approximateDecodedBytes)
+                }
+            }
+
             if let imageURL {
                 let cgImage = await Task.detached(priority: .userInitiated) { () -> CGImage? in
                     let opts: [CFString: Any] = [
@@ -278,10 +298,11 @@ struct ClipboardItemCard: View {
             // A file the system had no thumbnail for may still be readable. Skipped when a picture
             // was just decoded — that already answers what the card shows, and the sniff would only
             // read 8KB of JPEG to conclude it is not text.
-            if imageURL == nil,
+            if imageURL == nil, pathImage == nil,
                let textURL = Self.fileTextSource(type: item.type, fileURLs: item.fileURLs,
                                                  detectedPath: resolved.url,
-                                                 detectedIsDirectory: resolved.isDir) {
+                                                 detectedIsDirectory: resolved.isDir),
+               MediaFile.kind(of: textURL) == nil {
                 if let cached = Self.fileTextCache.object(forKey: item.id as NSUUID) {
                     if fileText == nil { fileText = cached as String }
                 } else if let text = await Task.detached(priority: .utility, operation: {
@@ -755,6 +776,24 @@ struct ClipboardItemCard: View {
         // you would be reading.
         if type == .text, let path = detectedPath, !detectedIsDirectory { return path }
         return nil
+    }
+
+    /// The sound or video file this card should draw a picture out of, or nil to leave it alone.
+    ///
+    /// Shaped like `fileTextSource` and gated the same way: one file only, because a card showing
+    /// the artwork of one of five songs is making the claim the stacked icons exist to avoid.
+    static func mediaSource(type: ClipboardContentType, fileURLs: [URL]?,
+                            detectedPath: URL?) -> (url: URL, kind: MediaKind)? {
+        let url: URL?
+        if type == .file, let urls = fileURLs, urls.count == 1 {
+            url = urls[0]
+        } else if type == .text, let path = detectedPath {
+            url = path
+        } else {
+            url = nil
+        }
+        guard let url, let kind = MediaFile.kind(of: url) else { return nil }
+        return (url, kind)
     }
 
     /// The wash behind a search hit, taken from the same place the baked bitmaps take theirs so
