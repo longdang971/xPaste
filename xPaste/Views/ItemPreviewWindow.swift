@@ -466,8 +466,12 @@ struct PreviewPopoverContent: View {
                     // And the bar goes with it. Finder comes forward, so leaving the panel up
                     // parks it over the window the user was sent to — the same reason the editor
                     // hides it on the way to opening.
+                    //
+                    // Hiding the panel is the whole of it: `.panelWillHide` already closes this
+                    // popover — see `ContentView`'s handler, which calls `preview.close()`.
+                    // Closing it here as well made the popover go first and the bar follow, which
+                    // reads as the panel shutting twice.
                     Button("Show in Finder") {
-                        onClose()
                         NSWorkspace.shared.activateFileViewerSelecting(urls)
                         NotificationCenter.default.post(name: .hidePanelRequested, object: nil)
                     }
