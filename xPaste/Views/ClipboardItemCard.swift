@@ -563,15 +563,7 @@ struct ClipboardItemCard: View {
                     if Self.isLogoSized(img) {
                         logoPreview(img)
                     } else {
-                        // Filled and cropped, not stretched. A cover picture is close enough to the
-                        // card's own shape that stretching rarely showed, but "rarely" is not
-                        // never, and a picture drawn out of shape is the one thing about it the eye
-                        // catches first.
-                        Image(nsImage: img)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
+                        linkPicturePreview(img)
                     }
                 } else if drawsLinkBody {
                     noImagePlaceholder
@@ -1050,6 +1042,27 @@ struct ClipboardItemCard: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// A link's picture, shown whole.
+    ///
+    /// Fitted, and this is the third answer here. Stretching drew a portrait poster out of shape;
+    /// filling drew it at the right shape and then cropped nearly all of it away — a link to a DVD
+    /// cover came out as a zoomed slice of one, which reads as a broken card rather than a
+    /// picture. A card is 232 by 132 and the pictures people link to are every shape there is, so
+    /// the only treatment that is honest about all of them is to show the whole thing.
+    ///
+    /// On the muted plate the logo treatment uses, so the margins a tall picture leaves read as
+    /// part of the card rather than as a gap in it.
+    private func linkPicturePreview(_ image: NSImage) -> some View {
+        ZStack {
+            mutedBackground
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// A logo drawn as one: sitting at icon size on the muted plate rather than stretched across
