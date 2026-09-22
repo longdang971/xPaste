@@ -119,11 +119,28 @@ struct PreviewPopoverContent: View {
     /// fragments. Text, pictures, colours and files are all shown at their own size inside the
     /// box, so a bigger box would only be emptier.
     private var previewSize: CGSize {
-        guard item.type == .url, itemURL != nil else { return Self.defaultPreviewSize }
-        return Self.pagePreviewSize(fitting: NSScreen.main?.visibleFrame.size)
+        if item.type == .url, itemURL != nil {
+            return Self.pagePreviewSize(fitting: NSScreen.main?.visibleFrame.size)
+        }
+        if item.type == .file || item.type == .folder { return Self.filePreviewSize }
+        return Self.defaultPreviewSize
     }
 
     static let defaultPreviewSize = CGSize(width: 560, height: 460)
+
+    /// A file preview gets a tenth more than the default.
+    ///
+    /// A tenth, and written as a tenth rather than as 616x506, because that is what it is: a
+    /// nudge, not a size arrived at on its own. Everything on this pane is laid out by the pane —
+    /// the picture, the icon and its facts, the list of names — so it all takes the extra rather
+    /// than leaving it as margin, which is why it is worth giving and why the default is still
+    /// the right size for a colour swatch or a line of text.
+    static let filePreviewScale: CGFloat = 1.1
+
+    static var filePreviewSize: CGSize {
+        CGSize(width: (defaultPreviewSize.width * filePreviewScale).rounded(),
+               height: (defaultPreviewSize.height * filePreviewScale).rounded())
+    }
 
     /// As much of `pagePreviewIdeal` as the screen will take.
     ///

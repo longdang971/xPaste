@@ -37,9 +37,16 @@ final class PagePreviewSizeTests: XCTestCase {
                        PreviewPopoverContent.defaultPreviewSize)
     }
 
-    /// The page is the only exception. Everything else is drawn at its own size inside the box, so
-    /// a bigger box would only be emptier.
-    func test_the_page_is_the_only_thing_that_grows() {
+    /// A file pane lays out everything it shows — the picture, the icon and its facts, the list of
+    /// names — so it takes the extra rather than leaving it as margin.
+    func test_a_file_preview_is_a_tenth_larger_than_the_default() {
+        XCTAssertEqual(PreviewPopoverContent.filePreviewSize, CGSize(width: 616, height: 506))
+        XCTAssertEqual(PreviewPopoverContent.filePreviewScale, 1.1)
+    }
+
+    /// A colour swatch and a line of text are drawn at their own size inside the box, so for those
+    /// a bigger box would only be emptier — they keep the default, and the page is the largest.
+    func test_the_page_is_the_largest_of_the_three() {
         XCTAssertGreaterThan(PreviewPopoverContent.pagePreviewIdeal.width,
                              PreviewPopoverContent.defaultPreviewSize.width)
         XCTAssertGreaterThan(PreviewPopoverContent.pagePreviewIdeal.height,
