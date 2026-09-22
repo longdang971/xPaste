@@ -120,7 +120,10 @@ struct ContentView: View {
         }
     }
 
-    var body: some View {
+    /// The panel itself: glass, sheen, toolbar and list, clipped and shadowed into a floating
+    /// slab. Split off `body` only so the compiler can type-check it — `body` is that slab plus
+    /// three dozen `.onReceive`s, and as one expression it ran the solver out of budget.
+    private var panel: some View {
         ZStack {
             PanelGlassBackground(cornerRadius: PanelLayout.cornerRadius)
 
@@ -228,7 +231,23 @@ struct ContentView: View {
         )
         .shadow(color: .black.opacity(0.28), radius: 32, x: 0, y: -8)
         .shadow(color: .black.opacity(0.10), radius:  6, x: 0, y: -2)
-        .contentShape(Rectangle())
+    }
+
+    var body: some View {
+        panelNotifications(panelInteraction(panel))
+            .environment(\.panelScale, panelScale)
+    }
+
+    /// What the panel does with a click, a popover appearing, and the search box opening or
+    /// closing.
+    ///
+    /// A function taking the view rather than more modifiers on `body`: the chain here and the
+    /// one in `panelNotifications` are one expression to the type-checker, and together they ran
+    /// it out of budget — the build failed outright rather than merely slowly. Splitting is what
+    /// gives each half its own budget; the two are otherwise exactly the chain that was here.
+    private func panelInteraction<V: View>(_ content: V) -> some View {
+        content
+            .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded {
             // This ancestor gesture fires BEFORE a tapped card's own .onTapGesture (confirmed via
             // logging), so `suppressCardDeselect` isn't set yet at this instant. Defer the decision
@@ -312,6 +331,12 @@ struct ContentView: View {
         .onChange(of: activeTab) { _ in rebaseSelection() }
         .onChange(of: store.searchQuery) { _ in rebaseSelection() }
         .onChange(of: store.filters) { _ in rebaseSelection() }
+    }
+
+    /// Every panel-wide notification the view answers: hide, show, and the keyboard commands
+    /// AppDelegate forwards. The other half of the split — see `panelInteraction`.
+    private func panelNotifications<V: View>(_ content: V) -> some View {
+        content
         .onReceive(NotificationCenter.default.publisher(for: .panelWillHide)) { _ in
             // Only mutate when there is actually something to reset. `store.searchQuery` is
             // @Published and emits even when set to the same value, which would invalidate the
@@ -435,7 +460,6 @@ struct ContentView: View {
                 object: nil
             )
         }
-        .environment(\.panelScale, panelScale)
     }
 
     /// Uniform card scale for the screen the panel currently sits on, so cards stay
