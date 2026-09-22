@@ -1055,17 +1055,39 @@ struct ClipboardItemCard: View {
     /// the card. Shared by the favicon fallback and by the `og:image` that turns out to be an icon,
     /// so a site with both ends up with the same card either way.
     private func logoPreview(_ image: NSImage) -> some View {
-        ZStack {
+        let side = s(Self.logoSide(forPixelWidth: Self.pixelSize(of: image)?.width))
+        return ZStack {
             mutedBackground
             Image(nsImage: image)
                 .resizable()
+                .interpolation(.high)
                 .scaledToFit()
-                .frame(width: s(72), height: s(72))
+                .frame(width: side, height: side)
                 .clipShape(RoundedRectangle(cornerRadius: s(14), style: .continuous))
                 .shadow(color: .black.opacity(0.10), radius: s(6), x: 0, y: s(3))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    /// How big to draw a logo that has `pixelWidth` pixels in it.
+    ///
+    /// It used to be a flat 72pt for everything, and a favicon is very often 32 pixels — so the
+    /// card stretched 32 pixels across 144 device ones and the mark came out soft. `fetchFavicon`
+    /// now looks for a large icon first, and this is the backstop for a site that simply has none:
+    /// a small icon is drawn small and sharp rather than large and mushy.
+    ///
+    /// The rule is at most a 2x upscale in device pixels. A card draws at 2x, so P points spend 2P
+    /// pixels, and holding 2P ≤ 2 × pixelWidth gives P ≤ pixelWidth: 32 pixels draw at 32pt, 64 at
+    /// 64pt, and anything from 72 up gets the full plate. The floor keeps a 16-pixel icon from
+    /// becoming a speck — there is no drawing that one sharply, and small and centred is the least
+    /// bad of it.
+    static func logoSide(forPixelWidth pixelWidth: Int?) -> CGFloat {
+        guard let pixelWidth, pixelWidth > 0 else { return logoMaxSide }
+        return min(logoMaxSide, max(logoMinSide, CGFloat(pixelWidth)))
+    }
+
+    static let logoMaxSide: CGFloat = 72
+    static let logoMinSide: CGFloat = 28
 
     /// Whether a link that points straight at a picture is drawing as an image card.
     ///

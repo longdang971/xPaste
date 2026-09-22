@@ -229,21 +229,57 @@ actor LinkPreviewService {
         return image
     }
 
+    /// Below this, a favicon is too few pixels for the plate a card draws it on and the search
+    /// carries on to the next source.
+    ///
+    /// 64, because the card draws the icon at up to 72pt — 144 device pixels on a 2x display. A
+    /// site's own `rel="icon"` is very often 16 or 32, which is where the blurred Drive triangle
+    /// came from: a 32-pixel image stretched across 144.
+    private static let faviconMinPixels = 64
+
+    /// The services asked for an icon when the page's own is too small, biggest-first.
+    ///
+    /// Measured against drive.google.com, whose card was the blurred one: its own
+    /// `//docs.google.com/favicon.ico` is 32 pixels, Google's older `s2/favicons` hands back 20
+    /// whatever `sz` asks for, DuckDuckGo 32 — and `faviconV2` 64. So `faviconV2` goes first and
+    /// the other two stay as the fallbacks for a host it does not know.
+    private static func faviconServices(for host: String) -> [URL] {
+        var v2 = URLComponents(string: "https://t3.gstatic.com/faviconV2")
+        v2?.queryItems = [
+            URLQueryItem(name: "client", value: "SOCIAL"),
+            URLQueryItem(name: "type", value: "FAVICON"),
+            URLQueryItem(name: "fallback_opts", value: "TYPE,SIZE,URL"),
+            URLQueryItem(name: "size", value: "128"),
+            URLQueryItem(name: "url", value: "https://\(host)"),
+        ]
+        return [
+            v2?.url,
+            // 128, not the 64 this used to ask for: the card draws at up to 72pt, and asking for
+            // the size it draws costs the same request.
+            URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=128"),
+            URL(string: "https://icons.duckduckgo.com/ip3/\(host).ico"),
+        ].compactMap { $0 }
+    }
+
+    /// The site's icon, taken from whichever source has the most pixels of it.
+    ///
+    /// Every candidate used to be equal and the first that decoded won — which meant the page's own
+    /// `rel="icon"`, the smallest one there is, beat Google's service every time. Now a small one
+    /// is kept only as the fallback: the loop stops at the first icon big enough to draw, and
+    /// settles for the largest it saw if none of them were.
     func fetchFavicon(for url: URL) async -> NSImage? {
         guard let host = url.host else { return nil }
         if let cached = faviconCache.object(forKey: host as NSString) { return cached }
 
-        var candidates: [String] = []
-        if let favURL = metaCache[url]?.faviconURL?.absoluteString {
+        var candidates: [URL] = []
+        if let favURL = metaCache[url]?.faviconURL {
             candidates.append(favURL)
         }
-        candidates += [
-            "https://www.google.com/s2/favicons?domain=\(host)&sz=64",
-            "https://icons.duckduckgo.com/ip3/\(host).ico",
-        ]
+        candidates += Self.faviconServices(for: host)
 
-        for urlStr in candidates {
-            guard let favURL = URL(string: urlStr) else { continue }
+        var best: NSImage?
+        var bestPixels = 0
+        for favURL in candidates {
             var req = URLRequest(url: Self.secureTwin(of: favURL), timeoutInterval: 8)
             req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
             guard let (data, resp) = try? await URLSession.shared.data(for: req),
@@ -251,10 +287,14 @@ actor LinkPreviewService {
                   let img = NSImage(data: data),
                   img.size.width > 1
             else { continue }
-            faviconCache.setObject(img, forKey: host as NSString, cost: img.approximateDecodedBytes)
-            return img
+            let pixels = img.representations.map(\.pixelsWide).max() ?? 0
+            if pixels > bestPixels { best = img; bestPixels = pixels }
+            if bestPixels >= Self.faviconMinPixels { break }
         }
-        return nil
+        if let best {
+            faviconCache.setObject(best, forKey: host as NSString, cost: best.approximateDecodedBytes)
+        }
+        return best
     }
 
     /// Records a metadata entry, dropping the oldest once there are more than the disk keeps.
@@ -304,8 +344,21 @@ actor LinkPreviewService {
         sorted.prefix(files.count - maxDiskEntries).forEach { try? FileManager.default.removeItem(at: $0) }
     }
 
+    /// The icon a page declares for itself.
+    ///
+    /// `apple-touch-icon` is asked for first and separately. A page that has one has a 180-pixel
+    /// icon there and a 16- or 32-pixel one under `rel="icon"`, and taking whichever appeared first
+    /// in the markup is how a card ended up stretching 32 pixels across the plate.
     private func htmlFaviconURL(in html: String, relativeTo base: URL) -> URL? {
-        let pattern = #"<link[^>]+rel=["'](?:shortcut icon|icon|apple-touch-icon)["'][^>]+href=["']([^"']+)["']|<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:shortcut icon|icon|apple-touch-icon)["']"#
+        for rel in ["apple-touch-icon", "shortcut icon|icon"] {
+            if let found = faviconHref(matching: rel, in: html, relativeTo: base) { return found }
+        }
+        return nil
+    }
+
+    private func faviconHref(matching rel: String, in html: String, relativeTo base: URL) -> URL? {
+        let pattern = #"<link[^>]+rel=["'](?:\#(rel))["'][^>]+href=["']([^"']+)["']"#
+                    + #"|<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:\#(rel))["']"#
         guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
               let m = re.firstMatch(in: html, range: NSRange(html.startIndex..., in: html))
         else { return nil }
