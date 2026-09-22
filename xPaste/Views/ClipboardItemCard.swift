@@ -1044,25 +1044,28 @@ struct ClipboardItemCard: View {
         }
     }
 
-    /// A link's picture, shown whole.
+    /// A link's picture, filling the block it is given.
     ///
-    /// Fitted, and this is the third answer here. Stretching drew a portrait poster out of shape;
-    /// filling drew it at the right shape and then cropped nearly all of it away — a link to a DVD
-    /// cover came out as a zoomed slice of one, which reads as a broken card rather than a
-    /// picture. A card is 232 by 132 and the pictures people link to are every shape there is, so
-    /// the only treatment that is honest about all of them is to show the whole thing.
+    /// Three answers were tried here. Stretching drew a portrait poster out of shape. Fitting kept
+    /// every picture whole but left a bar above and below the ordinary one — an `og:image` is
+    /// 1200x630 and the block is 232x137, close but not equal, and the difference read as a white
+    /// border across the top of the card. Filling and cropping is what Paste draws and what a card
+    /// is for: a thumbnail is recognised, not read, and the crop costs the edges of a picture
+    /// whose middle is the part anyone looks at.
     ///
-    /// On the muted plate the logo treatment uses, so the margins a tall picture leaves read as
-    /// part of the card rather than as a gap in it.
+    /// `Color.clear` is what claims the space, with the picture overlaid on it. A filled image
+    /// reports an ideal size larger than the block, and laying it out directly would let it size
+    /// the `ZStack` around it — the card grew instead of the picture being cropped.
     private func linkPicturePreview(_ image: NSImage) -> some View {
-        ZStack {
-            mutedBackground
-            Image(nsImage: image)
-                .resizable()
-                .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Color.clear
+            .overlay {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
     }
 
     /// A logo drawn as one: sitting at icon size on the muted plate rather than stretched across
