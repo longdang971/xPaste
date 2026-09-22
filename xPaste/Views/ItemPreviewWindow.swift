@@ -29,12 +29,20 @@ enum PreviewSpaceKey {
     /// key — while the user is looking at cards, not at a query. Measured with the field editor
     /// logged on every press: every space after that sheet closed went into the search box, and
     /// the preview stopped answering Space entirely.
+    /// `webFieldFocused` is the same exemption as the editable-text one below, for a responder
+    /// that cannot be recognised by its class. A link preview is a `WKWebView`, and a text field
+    /// inside the page it is showing is not an `NSText` — it is not an `NSResponder` at all, it is
+    /// a DOM node. So a space typed into a search box on the page read as "nothing is being
+    /// edited" and shut the preview instead of being typed. The page reports its own focus; see
+    /// `WebTextFocus`.
     static func togglesPreview(keyCode: UInt16, modifiers: NSEvent.ModifierFlags,
-                               firstResponder: NSResponder?, inPanel: Bool) -> Bool {
+                               firstResponder: NSResponder?, inPanel: Bool,
+                               webFieldFocused: Bool = false) -> Bool {
         guard keyCode == spaceKeyCode else { return false }
         // Caps Lock is not a binding anyone makes, so it is not treated as a modifier here.
         let mods = modifiers.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
         guard mods.isEmpty else { return false }
+        if webFieldFocused { return false }
         if let text = firstResponder as? NSText, text.isEditable {
             return inPanel && text.string.isEmpty
         }
@@ -714,14 +722,89 @@ func makeScrollableTextView() -> (scroll: NSScrollView, text: IBeamTextView) {
     return (scroll, text)
 }
 
+/// Whether the page inside a link preview has the caret in one of its own fields.
+///
+/// A flag rather than something derived on demand, because the one reader is `AppDelegate`'s key
+/// monitor: it has to answer before the event is dispatched, and asking a `WKWebView` what has
+/// focus means running JavaScript, which is asynchronous. So the page reports it as it happens and
+/// this holds the answer.
+///
+/// Main thread only, and unannotated for it, like the panel's other small singletons: every writer
+/// is a `WKScriptMessageHandler` callback and every reader is a key monitor or the hide path, all
+/// of which AppKit runs on main. `@MainActor` would put the read behind an `await` in exactly the
+/// place that cannot wait.
+final class WebTextFocus {
+    static let shared = WebTextFocus()
+    private(set) var isEditing = false
+    private init() {}
+
+    func set(_ editing: Bool) { isEditing = editing }
+    /// Called when a preview goes away. A flag left true would swallow every space afterwards.
+    func clear() { isEditing = false }
+}
+
 private struct WebPreview: NSViewRepresentable {
     let url: URL
+
+    /// Reports whether what has focus in the page is something you type into.
+    ///
+    /// `focusout` is reported on the next tick, because at the moment it fires `activeElement` is
+    /// still the element being left. Injected into every frame, so a search box inside an iframe
+    /// counts as well as one in the page itself.
+    private static let focusReporter = """
+    (function () {
+      function editable(el) {
+        if (!el) return false;
+        if (el.isContentEditable) return true;
+        var tag = el.tagName;
+        if (tag === 'TEXTAREA') return true;
+        if (tag !== 'INPUT') return false;
+        var type = (el.type || 'text').toLowerCase();
+        return ['button', 'checkbox', 'radio', 'submit', 'reset', 'file', 'range', 'color',
+                'image'].indexOf(type) === -1;
+      }
+      function report() {
+        window.webkit.messageHandlers.\(WebPreview.focusHandlerName)
+          .postMessage(editable(document.activeElement));
+      }
+      document.addEventListener('focusin', report, true);
+      document.addEventListener('focusout', function () { setTimeout(report, 0); }, true);
+      report();
+    })();
+    """
+
+    private static let focusHandlerName = "xPasteWebFocus"
+
     func makeNSView(context: Context) -> WKWebView {
-        let web = WKWebView()
+        let config = WKWebViewConfiguration()
+        config.userContentController.addUserScript(
+            WKUserScript(source: Self.focusReporter, injectionTime: .atDocumentEnd,
+                         forMainFrameOnly: false))
+        config.userContentController.add(context.coordinator, name: Self.focusHandlerName)
+        let web = WKWebView(frame: .zero, configuration: config)
         web.load(URLRequest(url: url))
         return web
     }
+
     func updateNSView(_ nsView: WKWebView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// The handler is retained by the content controller, which the web view owns — so it has to be
+    /// taken off by hand or the coordinator outlives every preview ever opened.
+    static func dismantleNSView(_ web: WKWebView, coordinator: Coordinator) {
+        web.configuration.userContentController
+            .removeScriptMessageHandler(forName: focusHandlerName)
+        web.stopLoading()
+        WebTextFocus.shared.clear()
+    }
+
+    final class Coordinator: NSObject, WKScriptMessageHandler {
+        func userContentController(_ controller: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            WebTextFocus.shared.set(message.body as? Bool ?? false)
+        }
+    }
 }
 
 /// A read-only `NSTextView` showing an item's formatted text.

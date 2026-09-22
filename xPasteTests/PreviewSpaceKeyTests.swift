@@ -58,6 +58,33 @@ final class PreviewSpaceKeyTests: XCTestCase {
                                                       inPanel: false))
     }
 
+    /// A link preview is a `WKWebView`, and a text field inside the page it shows is not an
+    /// `NSText` — it is not an `NSResponder` at all, it is a DOM node. So the editable-text
+    /// exemption above could not see it, and a space typed into a search box on the page shut the
+    /// preview instead of being typed. The page reports its own focus; this is what that report
+    /// buys.
+    func test_space_belongs_to_a_field_inside_the_previewed_page() {
+        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [],
+                                                      firstResponder: nil, inPanel: false,
+                                                      webFieldFocused: true))
+    }
+
+    /// And only while a field there has the caret. A page being read, with focus nowhere in
+    /// particular, keeps Space as the key that puts the preview away.
+    func test_space_still_closes_a_page_that_is_only_being_read() {
+        XCTAssertTrue(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [],
+                                                     firstResponder: nil, inPanel: false,
+                                                     webFieldFocused: false))
+    }
+
+    /// The exemption is about a plain space, like every other rule here: ⌘Space is the system's
+    /// and never reaches the preview either way.
+    func test_a_modified_space_is_unaffected_by_the_page() {
+        XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 49, modifiers: [.command],
+                                                      firstResponder: nil, inPanel: false,
+                                                      webFieldFocused: true))
+    }
+
     func test_other_keys_do_not_toggle_the_preview() {
         XCTAssertFalse(PreviewSpaceKey.togglesPreview(keyCode: 36, modifiers: [], firstResponder: nil,
                                                       inPanel: true))

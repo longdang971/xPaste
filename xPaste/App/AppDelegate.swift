@@ -811,6 +811,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func hidePanel() {
         guard panelVisible else { return }
+        // Belt and braces with `WebPreview.dismantleNSView`: the flag lives past the view that set
+        // it, and one left true would swallow every space the panel saw afterwards.
+        WebTextFocus.shared.clear()
         NotificationCenter.default.post(name: .panelWillHide, object: nil)
         removeMonitors()
         panelVisible = false
@@ -1007,7 +1010,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if PreviewSpaceKey.togglesPreview(keyCode: event.keyCode,
                                               modifiers: event.modifierFlags,
                                               firstResponder: event.window?.firstResponder,
-                                              inPanel: event.window === self.panel) {
+                                              inPanel: event.window === self.panel,
+                                              webFieldFocused: WebTextFocus.shared.isEditing) {
                 NotificationCenter.default.post(name: .togglePreviewSelected, object: nil)
                 return nil
             }
