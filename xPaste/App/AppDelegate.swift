@@ -27,11 +27,9 @@ extension Notification.Name {
     static let doubleClickInPanel   = Notification.Name("com.user.xPaste.doubleClickInPanel")
     static let dragOutOfPanel       = Notification.Name("com.user.xPaste.dragOutOfPanel")
     static let panelDragBegan       = Notification.Name("com.user.xPaste.panelDragBegan")
-    static let panelDragCancelled   = Notification.Name("com.user.xPaste.panelDragCancelled")
     /// Test hook: stands in for a drag that ended at a screen point. Only ever posted by the
     /// env-gated harness, because a synthetic mouse release cannot end a real dragging session —
     /// see the spec for what the spike found.
-    static let simulateDragEnd      = Notification.Name("com.user.xPaste.simulateDragEnd")
     static let hotkeyChanged        = Notification.Name("com.user.xPaste.hotkeyChanged")
     static let pasteNumberedItem    = Notification.Name("com.user.xPaste.pasteNumberedItem")
     /// Save one named item to disk. Carries `itemID`.
@@ -252,10 +250,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             name: .panelDragBegan, object: nil
         )
         NotificationCenter.default.addObserver(
-            self, selector: #selector(handlePanelDragCancelled),
-            name: .panelDragCancelled, object: nil
-        )
-        NotificationCenter.default.addObserver(
             self, selector: #selector(handleAlertHidden),
             name: .clipboardAlertHidden, object: nil
         )
@@ -381,23 +375,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     // the run is to check that clicks still land where they should.
                     let dwell = ProcessInfo.processInfo.environment["XPASTE_DWELL"]
                         .flatMap { Double($0) } ?? 1.0
-                    // `XPASTE_DRAGEND=x,y[,shift]` stands in for a drag released at that screen
-                    // point. The gesture itself cannot be synthesised — a CGEvent release does not
-                    // end a dragging session — so this is how the paste-and-select tail of the
-                    // pipeline gets verified by machine.
-                    if let spec = ProcessInfo.processInfo.environment["XPASTE_DRAGEND"] {
-                        let parts = spec.split(separator: ",").map(String.init)
-                        if parts.count >= 2, let x = Double(parts[0]), let y = Double(parts[1]) {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                                PerfLog.note("simulating a drag ended at \(x),\(y)")
-                                NotificationCenter.default.post(
-                                    name: .simulateDragEnd, object: nil,
-                                    userInfo: ["screenPoint": NSPoint(x: x, y: y),
-                                               "shift": parts.count > 2 && parts[2] == "shift"]
-                                )
-                            }
-                        }
-                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + dwell) {
                         self.hidePanel()
                         done += 1
@@ -1086,14 +1063,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// item may be headed for, and leaving it up afterwards means reaching for Escape every time.
     /// Verified safe — a dragging session survives its source window being ordered out.
     @objc private func handlePanelDragBegan() { hidePanel() }
-
-    /// Escape during a drag puts everything back, the panel included. Nothing has been written to the
-    /// pasteboard at this point: that only happens once a drag has ended in a paste.
-    @objc private func handlePanelDragCancelled() {
-        guard !panelVisible else { return }
-        showPanel()
-    }
-
     /// The editor is a window of its own now, and it opens with the bar out of the way — see
     /// `EditWindowPresenter`.
     @objc private func handleHidePanelRequested() { if panelVisible { hidePanel() } }
@@ -1105,26 +1074,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         togglePanel()
     }
 
-    /// Pastes into the target application, optionally one the caller names.
-    ///
-    /// A keyboard paste means "the app the panel was opened in front of". A drag out of the panel
-    /// names the app it was released over instead, and asks for the pasted text to be left selected —
-    /// see `DragPaste`. Both arrive through the same notification so there is only ever one paste
-    /// path to keep working.
-    @objc private func handlePasteItem(_ note: Notification) {
+    /// Pastes into the application the panel was opened in front of.
+    @objc private func handlePasteItem() {
         guard AccessibilityPermission.isTrusted else {
             hidePanel()
             AccessibilityPermission.requestSystemPrompt()
             AccessibilityPermission.openSystemSettings()
             return
         }
-        let named = (note.userInfo?["targetPID"] as? pid_t)
-            .flatMap { NSRunningApplication(processIdentifier: $0) }
-        let target = named ?? previousApp
+        let target = previousApp
         let targetPID = target?.processIdentifier ?? 0
-        // Only a drag asks for this: it is what leaves the pasted text selected, ready to be typed
-        // straight over.
-        let selectLength = note.userInfo?["selectLength"] as? Int
         // Slide the panel closed (down) and refocus the target app, then post ⌘V after a short
         // settle delay. The reorder-freeze that used to make this janky is fixed, so the close
         // animation stays smooth even during a paste.
@@ -1142,12 +1101,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             } else {
                 keyDown?.post(tap: .cghidEventTap)
                 keyUp?.post(tap: .cghidEventTap)
-            }
-            guard let selectLength, targetPID > 0 else { return }
-            // Long enough for the target to have processed the keystroke and moved its caret; the
-            // selection is read back from wherever that ended up.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) {
-                AXTextSelection.selectPastedText(pid: targetPID, length: selectLength)
             }
         }
     }

@@ -361,14 +361,6 @@ struct ContentView: View {
             // Drop a half-finished rename rather than reopening the panel into edit mode.
             if renameItemID != nil { renameItemID = nil }
         }
-        // Test hook, inert unless the perf harness is running: see `.simulateDragEnd`.
-        .onReceive(NotificationCenter.default.publisher(for: .simulateDragEnd)) { note in
-            guard PerfLog.enabled,
-                  let point = note.userInfo?["screenPoint"] as? NSPoint,
-                  let item = displayedItems.first else { return }
-            finishDrag(dragPlan(for: item), at: point, operation: [],
-                       shiftHeld: note.userInfo?["shift"] as? Bool ?? false, cancelled: false)
-        }
         .onReceive(NotificationCenter.default.publisher(for: .moveSelectionBy)) { note in
             guard let delta = note.userInfo?["delta"] as? Int else { return }
             moveSelection(by: delta)
@@ -668,10 +660,7 @@ struct ContentView: View {
                             .onTapGesture(count: 1) { selectItem(item) }
                             .overlay(CardDragSource(
                                 plan: { dragPlan(for: item) },
-                                onEnded: { plan, point, operation, shift, cancelled in
-                                    finishDrag(plan, at: point, operation: operation,
-                                               shiftHeld: shift, cancelled: cancelled)
-                                }
+                                onEnded: { plan, point, accepted in finishDrag(plan, at: point, accepted: accepted) }
                             ))
                             .overlay(CardContextMenu { anchor in cardMenu(for: item, anchor: anchor) })
                             .modifier(PreviewAnchor(item: item, arrowEdge: previewArrowEdge))
@@ -712,10 +701,7 @@ struct ContentView: View {
                         // the card, and the drag image is cropped to whatever this overlay covers.
                         .overlay(CardDragSource(
                             plan: { dragPlan(for: item) },
-                            onEnded: { plan, point, operation, shift, cancelled in
-                                finishDrag(plan, at: point, operation: operation,
-                                           shiftHeld: shift, cancelled: cancelled)
-                            }
+                            onEnded: { plan, point, accepted in finishDrag(plan, at: point, accepted: accepted) }
                         ))
                         .frame(maxWidth: .infinity)
                         .overlay(PanelClickOverlay(notification: .cmdClickInPanel) { _, _ in toggleSelection(item.id) })
@@ -1101,41 +1087,17 @@ struct ContentView: View {
     private func dragPlan(for item: ClipboardItem) -> DragPaste.Plan {
         DragPaste.plan(dragging: item,
                        selection: selection.ids,
-                       displayed: displayedItems,
-                       accessibilityTrusted: accessibilityTrusted)
+                       displayed: displayedItems)
     }
 
     /// A drag has ended.
     ///
-    /// Nothing has touched the pasteboard until this point, which is what lets a cancelled drag leave
-    /// the user's clipboard exactly as it was.
-    private func finishDrag(_ plan: DragPaste.Plan, at point: NSPoint,
-                            operation: NSDragOperation, shiftHeld: Bool, cancelled: Bool) {
-        guard !cancelled else {
-            NotificationCenter.default.post(name: .panelDragCancelled, object: nil)
-            return
-        }
-        // The target took the drop and has already done the work — a file copied into Finder, a
-        // picture dropped into an upload zone. Pasting on top of that would deliver it twice.
-        if plan.kind == .native, !operation.isEmpty {
-            reorderAfterDrag(plan)
-            return
-        }
-        guard let content = DragPaste.content(
-            for: plan,
-            shiftHeld: shiftHeld,
-            alwaysPlainText: UserDefaults.standard.bool(forKey: "alwaysPastePlainText"),
-            separator: .stored()
-        ) else { return }
-
-        DragPaste.deliver(content)
-
-        var info: [String: Any] = [:]
-        // The release point names the application; failing that, the app the panel was opened in
-        // front of, which is almost always the one meant anyway.
-        if let pid = DropTargetResolver.pid(under: point) { info["targetPID"] = pid }
-        if let length = DragPaste.selectableLength(of: content) { info["selectLength"] = length }
-        NotificationCenter.default.post(name: .pasteClipboardItem, object: nil, userInfo: info)
+    /// The application it was released over has already done whatever it does with a drop, and is
+    /// brought forward so the keyboard follows — a drop does not do that by itself, which left ⌘Z
+    /// with nothing to undo. One that nobody took leaves everything as it is, the panel included.
+    private func finishDrag(_ plan: DragPaste.Plan, at point: NSPoint, accepted: Bool) {
+        guard accepted else { return }
+        DropTargetResolver.focus(under: point)
         reorderAfterDrag(plan)
     }
 

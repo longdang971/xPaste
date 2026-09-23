@@ -21,7 +21,6 @@
 		2055D3DA1B1D0C3F8B829EB8 /* MenuItemImageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B10561115C52A7DE242FC4C /* MenuItemImageTests.swift */; };
 		22D2144EDAFDC77875CE644B /* SystemFontRTFTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5BFC8D6FBAD34229FBF364 /* SystemFontRTFTests.swift */; };
 		232EF8790E86112F3204EF67 /* TextFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25BB186F271DE2F66DC8547C /* TextFileReader.swift */; };
-		26007E233FD2A049C4BC36B8 /* AXTextSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 344EFB5415ADCF676579FF61 /* AXTextSelection.swift */; };
 		2629EAB3660A7996C36FA580 /* VisualEffectBlur.swift in Sources */ = {isa = PBXBuildFile; fileRef = 733FA40DAFDCEF9D2073E7BC /* VisualEffectBlur.swift */; };
 		27CE8917AC01722EF1EE1A25 /* SemanticVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1537F86691B6B6C6AB10F1E /* SemanticVersion.swift */; };
 		2A948A37516E51AFD79D2C58 /* RemotePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4D5216BCC86B00488FF51AC /* RemotePathTests.swift */; };
@@ -136,7 +135,6 @@
 		E5C57E8FEC2489DB312AD188 /* PanelSlideGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32E1124DE2D62E699871D803 /* PanelSlideGeometryTests.swift */; };
 		E708BE78E0121B07680CE58D /* HotkeyRecorderButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A607B4A8D2B02DCCF0E7E5 /* HotkeyRecorderButton.swift */; };
 		E78B476F744BFBCC15FB2DC3 /* RichTextToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA5AF6EFCB37181CB25C5AD /* RichTextToolbar.swift */; };
-		E8DE24745EF30151A95DED7F /* AXTextSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3909597696AC92E5A5CF0A8 /* AXTextSelectionTests.swift */; };
 		EC123A15D559171EA0E7A02A /* ClipboardStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23DE041CE5171E0778614CC5 /* ClipboardStoreTests.swift */; };
 		EF36E1ED0EC2F2FF3026D9AF /* PanelSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D94625AC15E9694AF14C9DB4 /* PanelSelectionTests.swift */; };
 		F11F8D2D3A1BF742472FADD8 /* ColorEditRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 233D51F915B712C8320E2C8E /* ColorEditRowTests.swift */; };
@@ -188,7 +186,6 @@
 		324750236A13DDDA63254D96 /* DragPasteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragPasteTests.swift; sourceTree = "<group>"; };
 		32E1124DE2D62E699871D803 /* PanelSlideGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelSlideGeometryTests.swift; sourceTree = "<group>"; };
 		34214476375F7EF2B4930BEE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		344EFB5415ADCF676579FF61 /* AXTextSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXTextSelection.swift; sourceTree = "<group>"; };
 		361D38992D3805A472BABE21 /* ClipboardSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardSchema.swift; sourceTree = "<group>"; };
 		370DDE27D87B92CBEE7B7CE0 /* PerfLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfLog.swift; sourceTree = "<group>"; };
 		37EAD895113A93696109B981 /* ColorItemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorItemTests.swift; sourceTree = "<group>"; };
@@ -288,7 +285,6 @@
 		EC0F8032F243CCABB2DAD7D2 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
 		F02E7309431E160801B9345F /* DeleteConfirmDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeleteConfirmDialog.swift; sourceTree = "<group>"; };
 		F2FB132D93A8BFAE5ECA53C2 /* ClipboardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStore.swift; sourceTree = "<group>"; };
-		F3909597696AC92E5A5CF0A8 /* AXTextSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXTextSelectionTests.swift; sourceTree = "<group>"; };
 		F3BA3F59C53175864F9C26E4 /* FilterTokenLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterTokenLayoutTests.swift; sourceTree = "<group>"; };
 		F5B51D74B19769E22A5A5B22 /* CardDragSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardDragSourceTests.swift; sourceTree = "<group>"; };
 		F7B6AD1278EBD32FC4CEE1C3 /* HistoryRetention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryRetention.swift; sourceTree = "<group>"; };
@@ -354,7 +350,6 @@
 		86FFE7AE467A52B15F1CFDF3 /* xPasteTests */ = {
 			isa = PBXGroup;
 			children = (
-				F3909597696AC92E5A5CF0A8 /* AXTextSelectionTests.swift */,
 				F5B51D74B19769E22A5A5B22 /* CardDragSourceTests.swift */,
 				666D180932C3A400D4A14ABF /* ClipboardItemTests.swift */,
 				9A90315EEE284E6A70C7240A /* ClipboardMonitorTests.swift */,
@@ -422,7 +417,6 @@
 			children = (
 				0A9A03461D38597ED8BCC7D8 /* AccessibilityPermission.swift */,
 				C73920B6711E77128C1867C5 /* AppNameResolver.swift */,
-				344EFB5415ADCF676579FF61 /* AXTextSelection.swift */,
 				EA1736950F6841CE896F0B0D /* ClipboardMonitor.swift */,
 				AC7CD003E8667D4DE9CA37FC /* ColorFormat.swift */,
 				60C8768B3042119107630D95 /* ColorParser.swift */,
@@ -635,7 +629,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				26007E233FD2A049C4BC36B8 /* AXTextSelection.swift in Sources */,
 				D545F074BD74FB5C96751C27 /* AccessibilityPermission.swift in Sources */,
 				FB9D1C1E32E2847F9F2D6539 /* AppDelegate.swift in Sources */,
 				B8776C784FE37CCDB284B1EB /* AppNameResolver.swift in Sources */,
@@ -717,7 +710,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E8DE24745EF30151A95DED7F /* AXTextSelectionTests.swift in Sources */,
 				193A0D94EFD441DFC3BBC790 /* CardDragSourceTests.swift in Sources */,
 				5B285C5C89DE854BD0A96A5F /* ClipboardItemTests.swift in Sources */,
 				A40B9D266E976EEEAA716565 /* ClipboardMonitorTests.swift in Sources */,

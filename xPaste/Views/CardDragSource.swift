@@ -4,17 +4,16 @@ import AppKit
 /// Starts the AppKit dragging session for one card, and reports where it ended.
 ///
 /// The session has to be AppKit's rather than SwiftUI's `.onDrag`: SwiftUI owns the session it creates
-/// and tells us nothing about it, and this whole feature turns on knowing where the drag was
-/// released, whether ⇧ was held there, and whether the target took the drop at all.
+/// and tells us nothing about it — not whether the target took the drop, nor where it was released.
 ///
-/// It decides nothing — `DragPaste` does. This only carries the decision out.
+/// The drop itself is ordinary macOS drag and drop: each item's own representation, handled by
+/// whatever it is released over.
 struct CardDragSource: NSViewRepresentable {
     /// Worked out when the drag actually starts rather than when the view is built: the selection may
     /// have moved in between.
     let plan: () -> DragPaste.Plan
-    /// The plan, where it was released, what the target reported, whether ⇧ was held, whether the
-    /// drag was cancelled.
-    let onEnded: (DragPaste.Plan, NSPoint, NSDragOperation, Bool, Bool) -> Void
+    /// The plan, where it was released, and whether the drop was taken.
+    let onEnded: (DragPaste.Plan, NSPoint, Bool) -> Void
 
     func makeNSView(context: Context) -> CardDragSourceView {
         CardDragSourceView(plan: plan, onEnded: onEnded)
@@ -28,14 +27,14 @@ struct CardDragSource: NSViewRepresentable {
 
 final class CardDragSourceView: NSView, NSDraggingSource {
     var plan: () -> DragPaste.Plan
-    var onEnded: (DragPaste.Plan, NSPoint, NSDragOperation, Bool, Bool) -> Void
+    var onEnded: (DragPaste.Plan, NSPoint, Bool) -> Void
     private var observer: NSObjectProtocol?
     /// The plan the session in flight is carrying, so the end of the drag acts on what the start of
     /// it decided rather than on a selection that has moved since.
     private var draggingPlan: DragPaste.Plan?
 
     init(plan: @escaping () -> DragPaste.Plan,
-         onEnded: @escaping (DragPaste.Plan, NSPoint, NSDragOperation, Bool, Bool) -> Void) {
+         onEnded: @escaping (DragPaste.Plan, NSPoint, Bool) -> Void) {
         self.plan = plan
         self.onEnded = onEnded
         super.init(frame: .zero)
@@ -45,7 +44,6 @@ final class CardDragSourceView: NSView, NSDraggingSource {
 
     deinit {
         if let observer { NotificationCenter.default.removeObserver(observer) }
-        endEscapeWatch()
     }
 
     /// Claims nothing: the card underneath keeps its click, double-click and ⌘-click handling. The
@@ -83,18 +81,7 @@ final class CardDragSourceView: NSView, NSDraggingSource {
         let plan = self.plan()
         guard !plan.items.isEmpty else { return }
 
-        let writers: [NSPasteboardWriting]
-        switch plan.kind {
-        case .deferredPaste:
-            // One item, one private type, no public representation: nothing will accept this drop,
-            // which is what leaves the release free to mean "paste here".
-            let pbItem = NSPasteboardItem()
-            pbItem.setString(plan.items.map { $0.id.uuidString }.joined(separator: ","),
-                             forType: DragPaste.deferredType)
-            writers = [pbItem]
-        case .native:
-            writers = plan.items.map(Self.nativeWriter(for:))
-        }
+        let writers = plan.items.map(Self.nativeWriter(for:))
 
         let image = Self.snapshot(of: superview, badge: plan.items.count)
         let items = writers.map { writer -> NSDraggingItem in
@@ -114,57 +101,11 @@ final class CardDragSourceView: NSView, NSDraggingSource {
         [.copy, .generic]
     }
 
-    /// Set while the drag runs if Escape is pressed, which is what cancelling looks like.
-    ///
-    /// Watched with a *global* monitor because that is the only thing that sees the key: measured
-    /// against a real session, a local monitor received nothing at all (AppKit's drag loop does not
-    /// route key events through the application's own dispatch) and `NSApp.currentEvent` at
-    /// `endedAt` was never the keystroke either. A global monitor needs Accessibility, which this
-    /// path already requires — a drag only defers its paste when Accessibility is granted.
-    private var escapePressed = false
-    private var escapeMonitor: Any?
-
-    /// Starts watching for the Escape that cancels this drag.
-    ///
-    /// Paired with `endEscapeWatch`, which every path out of a drag has to run. A global monitor
-    /// is not tied to the view that installed it: left behind, it keeps receiving every keystroke
-    /// typed anywhere on the machine for the rest of the session, and one more is installed by
-    /// every drag after it.
-    private func beginEscapeWatch() {
-        endEscapeWatch()
-        escapePressed = false
-        escapeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 { self?.escapePressed = true }
-        }
-    }
-
-    private func endEscapeWatch() {
-        guard let escapeMonitor else { return }
-        NSEvent.removeMonitor(escapeMonitor)
-        self.escapeMonitor = nil
-    }
-
-    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
-        beginEscapeWatch()
-        // A deferred paste is refused by every application on purpose, so AppKit treats every one of
-        // these drags as failed and, by default, animates the image back to where it started before
-        // ending the session. `endedAt` — and therefore the paste — waited on that animation:
-        // measured at over a second from release to text appearing. Nothing should fly back here;
-        // releasing is the gesture succeeding, not failing.
-        session.animatesToStartingPositionsOnCancelOrFail = false
-    }
-
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
-        // Before the guard: the session is over either way, and a watch left running outlives it.
-        defer { endEscapeWatch() }
         guard let plan = draggingPlan else { return }
         draggingPlan = nil
-        // A cancelled drag and a drop nobody accepted both arrive with an empty operation, so
-        // Escape has to be caught while the drag is still running — see `escapePressed`.
-        let cancelled = escapePressed
-        let shift = NSEvent.modifierFlags.contains(.shift)
-        onEnded(plan, screenPoint, operation, shift, cancelled)
+        onEnded(plan, screenPoint, !operation.isEmpty)
     }
 
     // MARK: - Payload
@@ -295,3 +236,4 @@ final class CardDragSourceView: NSView, NSDraggingSource {
         return badged
     }
 }
+
