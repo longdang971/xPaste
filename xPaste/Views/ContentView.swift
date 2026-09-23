@@ -509,7 +509,13 @@ struct ContentView: View {
                 }
 
                 tabFull(title: "Clipboard", icon: "clock.arrow.circlepath", tab: .all)
-                tabFull(title: "Pinboard", icon: "pin.fill", iconColor: .red, tab: .pinned)
+                // 12, not 13. The pin is drawn head-on, so it is narrow: 0.65 as wide as it is
+                // tall against the clock's 1.12. Matching their heights exactly (11pt, ink
+                // 8.50 x 13.00) leaves the pin visibly thin; leaving both at 13 makes it 2pt
+                // taller and it reads as the bigger icon. 12pt is 9.75 x 13.75 — a quarter of a
+                // point of height over the clock, for a point and a quarter of width back.
+                tabFull(title: "Pinboard", icon: "pin.fill", iconColor: .red, iconSize: 12,
+                        tab: .pinned)
 
                 Spacer(minLength: 0)
             }
@@ -519,7 +525,9 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 expandedSearchBar
                 tabCompact(icon: "clock.arrow.circlepath", tab: .all)
-                tabCompact(icon: "pin.fill", iconColor: .red, tab: .pinned)
+                // One point down from this layout's 15, as above: at 14pt the pin measures
+                // 10.25 x 15.00 — the clock's exact height here, and wider than 13pt would give.
+                tabCompact(icon: "pin.fill", iconColor: .red, iconSize: 14, tab: .pinned)
             }
             .frame(maxWidth: expandedSearchMaxWidth)
             .padding(.trailing, moreMenuReserve)
@@ -575,14 +583,18 @@ struct ContentView: View {
                                appsInHistory: { FilterApp.present(in: store.items) }))
     }
 
-    private func tabFull(title: String, icon: String, iconColor: Color? = nil, tab: ClipboardTab) -> some View {
-        FullTabButton(title: title, icon: icon, iconColor: iconColor, isSelected: activeTab == tab) {
+    private func tabFull(title: String, icon: String, iconColor: Color? = nil,
+                         iconSize: CGFloat = 13, tab: ClipboardTab) -> some View {
+        FullTabButton(title: title, icon: icon, iconColor: iconColor, iconSize: iconSize,
+                      isSelected: activeTab == tab) {
             activeTab = tab
         }
     }
 
-    private func tabCompact(icon: String, iconColor: Color? = nil, tab: ClipboardTab) -> some View {
-        CompactTabButton(icon: icon, iconColor: iconColor, isSelected: activeTab == tab) {
+    private func tabCompact(icon: String, iconColor: Color? = nil,
+                            iconSize: CGFloat = 15, tab: ClipboardTab) -> some View {
+        CompactTabButton(icon: icon, iconColor: iconColor, iconSize: iconSize,
+                         isSelected: activeTab == tab) {
             searchToggleTapped = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { searchToggleTapped = false }
             activeTab = tab
@@ -767,6 +779,7 @@ struct ContentView: View {
         if let transformMenu = transformMenu(for: item) {
             let host = NSMenuItem(title: "Paste as", action: nil, keyEquivalent: "")
             host.image = NSImage(systemSymbolName: "textformat.alt", accessibilityDescription: nil)
+            if #available(macOS 27.0, *) { host.preferredImageVisibility = .visible }
             host.submenu = transformMenu
             menu.addItem(host)
         }
@@ -1300,20 +1313,27 @@ private struct MoreMenu: View {
             Button(role: .destructive, action: onClearHistory) {
                 Label("Clear History", systemImage: "trash")
             }
+            .labelStyle(.titleAndIcon)
             Divider()
             Button {
                 NotificationCenter.default.post(name: .openSettingsWindow, object: nil)
             } label: {
                 Label("Settings…", systemImage: "gearshape")
             }
+            .labelStyle(.titleAndIcon)
             Button {
                 NotificationCenter.default.post(name: .openUpdateWindow, object: nil)
             } label: {
                 Label("Check for Updates…", systemImage: "arrow.triangle.2.circlepath")
             }
+            .labelStyle(.titleAndIcon)
             Button { NSApplication.shared.terminate(nil) } label: {
                 Label("Quit xPaste", systemImage: "power")
             }
+            // SwiftUI has no `preferredImageVisibility` to set; asking for the icon outright is
+            // what makes it mark the NSMenuItem underneath `.visible`. Left at the default,
+            // macOS 27 drops every glyph here — same change as `ClosureMenuItem`'s, in SwiftUI.
+            .labelStyle(.titleAndIcon)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 18, weight: .regular))
@@ -1329,11 +1349,11 @@ private struct MoreMenu: View {
         // or 18 regular.
         //
         // The tint was `controlColor` besides, which lightens, in a bar where every other hover and
-        // every selected pill now darkens. Shape and height come from the tabs, so this is the same
-        // highlight they get.
-        .padding(.horizontal, 10)
-        .frame(height: ToolbarMetrics.rowHeight)
-        .background(Capsule().fill(ToolbarTint.fill(selected: false, hovered: hovered)))
+        // every selected pill now darkens. The tint is the tabs'; the shape is not — this is one
+        // glyph, so it gets a circle rather than a capsule stretched across it. `rowHeight` on
+        // both sides is what makes the Circle round and keeps it level with the rest of the bar.
+        .frame(width: ToolbarMetrics.rowHeight, height: ToolbarMetrics.rowHeight)
+        .background(Circle().fill(ToolbarTint.fill(selected: false, hovered: hovered)))
         .onHover { hovered = $0 }
     }
 }
@@ -1378,6 +1398,11 @@ private struct FullTabButton: View {
     let title: String
     let icon: String
     let iconColor: Color?
+    /// Point size for the glyph, because 13 does not mean the same height to every symbol.
+    /// Measured ink at 13pt regular: `clock.arrow.circlepath` stands 13.00pt tall, `pin.fill`
+    /// 15.00 — the pin is drawn tall and narrow, and 15% of extra height is what reads as "that
+    /// icon is bigger" in a row of 13pt text. The caller says what the glyph should measure.
+    var iconSize: CGFloat = 13
     let isSelected: Bool
     let action: () -> Void
     @State private var hovered = false
@@ -1388,7 +1413,7 @@ private struct FullTabButton: View {
             // this was leaving.
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .regular))
+                    .font(.system(size: iconSize, weight: .regular))
                     .foregroundColor(iconColor ?? Color(NSColor.labelColor))
                 Text(title)
                     // One weight, whichever tab is selected. A measurement said otherwise — Paste's
@@ -1421,6 +1446,8 @@ private struct FullTabButton: View {
 private struct CompactTabButton: View {
     let icon: String
     let iconColor: Color?
+    /// As in `FullTabButton`, and for the same reason — 15 here rather than 13.
+    var iconSize: CGFloat = 15
     let isSelected: Bool
     let action: () -> Void
     @State private var hovered = false
@@ -1430,7 +1457,7 @@ private struct CompactTabButton: View {
             Image(systemName: icon)
                 // Bigger than the full tab's 13, and on purpose: with no label beside it this glyph
                 // is the whole button. Regular weight, like everything else in the bar.
-                .font(.system(size: 15, weight: .regular))
+                .font(.system(size: iconSize, weight: .regular))
                 // Undimmed, like the full tab: the pill carries the selection on its own.
                 .foregroundColor(iconColor ?? Color(NSColor.labelColor))
                 .padding(.horizontal, 10)
@@ -1691,6 +1718,10 @@ final class ClosureMenuItem: NSMenuItem {
         target = self
         if let symbol {
             image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            // macOS 27 draws no menu item image unless the item asks: `preferredImageVisibility`
+            // starts at `.automatic`, under which AppKit "will typically hide images". Every icon
+            // in this menu vanished the day the app was built against the 27 SDK.
+            if #available(macOS 27.0, *) { preferredImageVisibility = .visible }
         }
     }
 
