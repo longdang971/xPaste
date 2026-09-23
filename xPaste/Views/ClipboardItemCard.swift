@@ -1631,7 +1631,11 @@ private struct CardHoverActions: View {
         HStack(spacing: s(2)) {
             // The pin stays red while unpinned — that colour is what marks the state, and red
             // reads on both a light and a dark fill.
+            // 10.25, not 11: that is where the pin's ink measures 12.25pt, the trash can's exact
+            // height beside it. Unlike the toolbar's pin there is nothing to trade for it — the
+            // glyph comes out 8.00pt wide against 8.25 at the full size.
             HoverActionButton(symbol: actions.isPinned ? "pin.slash.fill" : "pin.fill",
+                              iconSize: 10.25,
                               tint: actions.isPinned ? iconTint : .red,
                               help: actions.isPinned ? "Unpin" : "Pin",
                               action: actions.togglePin)
@@ -1648,6 +1652,11 @@ private struct CardHoverActions: View {
 
 private struct HoverActionButton: View {
     let symbol: String
+    /// Point size for the glyph: 11 does not mean the same height to every symbol. Measured ink
+    /// at 11pt semibold, `trash` stands 12.25pt tall and `pin.fill` 13.00 — three quarters of a
+    /// point more, on a glyph that is red besides, which is enough to read as the taller of the
+    /// two in a pair of buttons this small.
+    var iconSize: CGFloat = 11
     let tint: Color
     let help: String
     let action: () -> Void
@@ -1659,7 +1668,7 @@ private struct HoverActionButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: s(11), weight: .semibold))
+                .font(.system(size: s(iconSize), weight: .semibold))
                 .foregroundColor(tint)
                 .frame(width: s(22), height: s(20))
                 .background(Circle().fill(hovered ? Color.primary.opacity(0.12) : .clear))
