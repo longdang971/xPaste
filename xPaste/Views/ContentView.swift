@@ -348,14 +348,16 @@ struct ContentView: View {
             if !store.searchQuery.isEmpty { store.searchQuery = "" }
             // Filters go with the search box: reopening to a silently narrowed history reads
             // as "my clipboard lost everything".
-            filterSheet.close()
+            // Not animated: the bar is sliding, and a popover animating out over it is what made
+            // the close read as two — see `PanelPreview.close(animated:)`.
+            filterSheet.close(animated: false)
             if !store.filters.isEmpty { store.filters.clear() }
             selection.clear()
             // The next open starts from a clean row — the list is rewound on `.panelDidHide` —
             // so a request left pointing at the card the user walked to would be answered
             // against a list that has already scrolled back to the front.
             scrollRequest = nil
-            preview.close()
+            preview.close(animated: false)
             // Drop a half-finished rename rather than reopening the panel into edit mode.
             if renameItemID != nil { renameItemID = nil }
         }
@@ -386,7 +388,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .openSelectedItem)) { _ in
             guard let item = primarySelectedItem, let url = linkURL(of: item) else { return }
-            NSWorkspace.shared.open(url)
+            openLink(url)
         }
         .onReceive(NotificationCenter.default.publisher(for: .saveSelectedItem)) { _ in
             // ⌘S arrives from AppDelegate's key monitor, which cannot know what is selected.
@@ -804,9 +806,7 @@ struct ContentView: View {
         }
         if let url = linkURL(of: item) {
             menu.addItem(ClosureMenuItem(title: "Open URL", symbol: "safari",
-                                         key: "o", modifiers: .command) {
-                NSWorkspace.shared.open(url)
-            })
+                                         key: "o", modifiers: .command) { openLink(url) })
         }
         menu.addItem(ClosureMenuItem(title: "Delete", symbol: "trash",
                                      key: "\u{8}") { deleteOne(item) })
@@ -969,6 +969,16 @@ struct ContentView: View {
     }
 
     /// The link a card opens, if it is a link card at all — what both ⌘O and the menu entry ask.
+    /// Opens a link and takes the bar away with it.
+    ///
+    /// Same as a Finder reveal: the browser is about to come forward, and the panel stayed up over
+    /// the window it had just sent the user to. Both ways in — ⌘O and the card's own menu — go
+    /// through here, so they cannot drift apart again.
+    private func openLink(_ url: URL) {
+        NSWorkspace.shared.open(url)
+        NotificationCenter.default.post(name: .hidePanelRequested, object: nil)
+    }
+
     private func linkURL(of item: ClipboardItem) -> URL? {
         guard item.type == .url, let text = item.text else { return nil }
         return URL(string: text)

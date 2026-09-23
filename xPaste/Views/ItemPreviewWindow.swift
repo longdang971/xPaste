@@ -493,8 +493,13 @@ struct PreviewPopoverContent: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer()
-                    Button("Open in \(DefaultBrowser.name(for: url))") { NSWorkspace.shared.open(url) }
-                        .controlSize(.small)
+                    // As with Show in Finder below: the bar goes, and `.panelWillHide` closes
+                    // this popover on its way out.
+                    Button("Open in \(DefaultBrowser.name(for: url))") {
+                        NSWorkspace.shared.open(url)
+                        NotificationCenter.default.post(name: .hidePanelRequested, object: nil)
+                    }
+                    .controlSize(.small)
                 }
             case .image:
                 if let loadedImage {

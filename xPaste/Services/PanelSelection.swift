@@ -171,10 +171,16 @@ final class PanelPreview: ObservableObject {
 
     /// Both halves, in this order: the state change is what SwiftUI needs to agree the popover is
     /// gone, and the direct close is what guarantees it actually goes.
-    func close() {
+    ///
+    /// `animated: false` is for the panel going away underneath. Measured on a 60fps capture of
+    /// the close: an animated `performClose` lands its own animation on top of the bar's slide and
+    /// the bar blanks for four frames, comes back crisp for four, and only then leaves — which
+    /// reads as the panel shutting twice. Taken out, the slide is monotonic, frame by frame.
+    func close(animated: Bool = true) {
         if itemID != nil { itemID = nil }
         guard let live = popover else { return }
         popover = nil
+        guard animated else { live.animates = false; live.close(); return }
         live.performClose(nil)
     }
 }
@@ -201,10 +207,13 @@ final class PanelFilters: ObservableObject {
         if isPresented { close() } else { isPresented = true }
     }
 
-    func close() {
+    /// `animated: false` for the same reason `PanelPreview.close(animated:)` has it — this sheet
+    /// is an NSPopover too, and the panel closes with it.
+    func close(animated: Bool = true) {
         if isPresented { isPresented = false }
         guard let live = popover else { return }
         popover = nil
+        guard animated else { live.animates = false; live.close(); return }
         live.performClose(nil)
     }
 }
