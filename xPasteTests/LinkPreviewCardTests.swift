@@ -341,5 +341,33 @@ final class LinkFooterTypeTests: XCTestCase {
         XCTAssertLessThan(ClipboardItemCard.linkFooterURLFontSize,
                           ClipboardItemCard.linkFooterTitleFontSize)
     }
-}
 
+    // MARK: - Links whose preview has no title
+
+    func test_a_link_with_a_title_gets_the_titled_footer() {
+        XCTAssertEqual(ClipboardItemCard.linkFooterStyle(previewEnabled: true, title: "Rick Astley",
+                                                         fetchFinished: true), .titled)
+    }
+
+    func test_a_finished_preview_without_a_title_shows_the_url_alone() {
+        // It used to take the titled footer and print the URL twice, bold then grey.
+        XCTAssertEqual(ClipboardItemCard.linkFooterStyle(previewEnabled: true, title: nil,
+                                                         fetchFinished: true), .urlOnly)
+        XCTAssertEqual(ClipboardItemCard.linkFooterStyle(previewEnabled: true, title: "  ",
+                                                         fetchFinished: true), .urlOnly)
+    }
+
+    func test_a_pending_or_disabled_preview_keeps_the_plain_strip() {
+        XCTAssertEqual(ClipboardItemCard.linkFooterStyle(previewEnabled: true, title: nil,
+                                                         fetchFinished: false), .plain)
+        XCTAssertEqual(ClipboardItemCard.linkFooterStyle(previewEnabled: false, title: "T",
+                                                         fetchFinished: true), .plain)
+    }
+
+    func test_a_url_can_wrap_after_each_slash() {
+        let shown = ClipboardItemCard.wrappableURL("shopee.vn/product/110288481")
+        XCTAssertEqual(shown, "shopee.vn/\u{200B}product/\u{200B}110288481")
+        XCTAssertEqual(shown.replacingOccurrences(of: "\u{200B}", with: ""), "shopee.vn/product/110288481",
+                       "nothing but break opportunities is added")
+    }
+}

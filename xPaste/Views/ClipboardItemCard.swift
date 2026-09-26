@@ -680,6 +680,8 @@ struct ClipboardItemCard: View {
     private var drawsRichPreview: Bool {
         guard resolvedRichPreview?.image != nil else { return false }
         if item.type == .url, linkPreviewEnabled, linkPreview != nil { return false }
+        // The two-line URL strip is as tall as the titled footer, for the same reason.
+        if item.type == .url, drawsLinkBody { return false }
         return true
     }
 
@@ -806,13 +808,16 @@ struct ClipboardItemCard: View {
     /// Returns `Text` rather than a view so callers keep applying their own font, colour and line
     /// limit exactly as before. With no search running it hands back a plain `Text` and builds no
     /// attributed string at all — the panel's normal state must cost what it always did.
-    private func highlighted(_ string: String) -> Text {
-        guard !highlightTerm.isEmpty else { return Text(string) }
+    /// `display` reshapes each run for drawing after the term has been found, so a term that
+    /// spans whatever it inserts is still matched against the text as the user typed it.
+    private func highlighted(_ string: String,
+                             display: (String) -> String = { $0 }) -> Text {
+        guard !highlightTerm.isEmpty else { return Text(display(string)) }
         let runs = SearchHighlight.split(string, term: highlightTerm)
-        guard runs.contains(where: \.isMatch) else { return Text(string) }
+        guard runs.contains(where: \.isMatch) else { return Text(display(string)) }
         var result = AttributedString()
         for run in runs {
-            var piece = AttributedString(run.text)
+            var piece = AttributedString(display(run.text))
             if run.isMatch { piece.backgroundColor = searchHighlightFill }
             result.append(piece)
         }
@@ -1162,9 +1167,8 @@ struct ClipboardItemCard: View {
     /// footer — which is what Paste draws for the same item. Keeping the parameter keeps the
     /// caller's question honest: it is asking about a card whose metadata may or may not exist.
     ///
-    /// Not the condition `footer` switches on. That one still wants metadata, because without a
-    /// title there is nothing for the taller footer to show, and the plain strip with the URL in it
-    /// is right — again, what Paste draws.
+    /// Not the condition `footer` switches on — that is `linkFooterStyle`, which wants a title for
+    /// the titled footer and falls back to the URL over two lines once this is true without one.
     static func drawsLinkBody(previewEnabled: Bool, hasMetadata _: Bool, fetchFinished: Bool) -> Bool {
         previewEnabled && fetchFinished
     }
@@ -1186,7 +1190,10 @@ struct ClipboardItemCard: View {
 
     @ViewBuilder
     private var footer: some View {
-        let hasLinkPreview = item.type == .url && linkPreviewEnabled && linkPreview != nil
+        let linkFooter = item.type == .url
+            ? Self.linkFooterStyle(previewEnabled: linkPreviewEnabled, title: linkPreview?.title,
+                                   fetchFinished: linkImageChecked)
+            : .plain
         if detectedColor != nil {
             // No strip at all: a swatch runs to the bottom edge, and window chrome beneath it
             // reads as the colour stopping short of the card it is supposed to be. "7 characters"
@@ -1201,8 +1208,10 @@ struct ClipboardItemCard: View {
             // A link straight to a picture is included: it is showing the picture, so it wants the
             // picture's footer. The URL is still what gets pasted — only the chrome changes.
             EmptyView()
-        } else if hasLinkPreview {
+        } else if linkFooter == .titled {
             urlPreviewFooter
+        } else if linkFooter == .urlOnly {
+            urlOnlyFooter
         } else if item.type == .file || item.type == .folder || detectedFilePath != nil {
             fileFooter
         } else {
@@ -1220,6 +1229,52 @@ struct ClipboardItemCard: View {
 
     private var shortcutBadge: some View {
         ShortcutBadge(index: index)
+    }
+
+    enum LinkFooterStyle { case titled, urlOnly, plain }
+
+    /// Which strip a link card ends in.
+    ///
+    /// A title gets the two-line footer with the title over the URL. A link whose preview has come
+    /// back without one — a shop that builds its page in JavaScript, a site that refuses the
+    /// request — gets the URL alone across two lines, as Paste draws the same card. It used to take
+    /// the titled footer whenever any metadata came back, and with no title to show that footer
+    /// printed the URL twice, once bold and once grey. The plain one-line strip is left for a card
+    /// still waiting on its preview, or with previews turned off, where the body is the URL as text.
+    static func linkFooterStyle(previewEnabled: Bool, title: String?, fetchFinished: Bool) -> LinkFooterStyle {
+        guard previewEnabled else { return .plain }
+        if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .titled }
+        return fetchFinished ? .urlOnly : .plain
+    }
+
+    /// A URL with a break opportunity after every slash.
+    ///
+    /// Line breaking forbids a break between `/` and a digit, so `product/110288481/…` would
+    /// otherwise wrap wherever the first line happened to run out, mid-word. A zero-width space
+    /// after each slash lets the first line end on a path segment, which is where Paste ends it.
+    /// Display only: what is copied and pasted is the item's own text.
+    static func wrappableURL(_ text: String) -> String {
+        text.replacingOccurrences(of: "/", with: "/\u{200B}")
+    }
+
+    /// The footer of a link whose preview has no title: the URL, grey, over up to two lines.
+    /// Same height as `urlPreviewFooter`, so a row of link cards keeps one body height.
+    private var urlOnlyFooter: some View {
+        HStack(alignment: .center, spacing: s(6)) {
+            highlighted(Self.urlFooterLabel(item.text ?? ""), display: Self.wrappableURL)
+                .font(.system(size: s(12)))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            shortcutBadge
+        }
+        .padding(.horizontal, s(12))
+        .padding(.vertical, s(8))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: s(52))
+        .background(Color(NSColor.textBackgroundColor))
     }
 
     private var urlPreviewFooter: some View {
