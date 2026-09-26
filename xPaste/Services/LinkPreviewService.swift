@@ -50,10 +50,22 @@ actor LinkPreviewService {
     private let faviconCache = NSCache<NSString, NSImage>()
     private let maxDiskEntries = 200
 
-    private let cacheDir: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
+    private let cacheDir: URL?
+    private let fetcher: BoundedFetch
+
+    static let defaultCacheDir: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)
         .first?.appendingPathComponent("xPaste/LinkPreviews", isDirectory: true)
 
     private static let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+    /// Who to claim to be on the second try, when a page answered the browser with nothing.
+    ///
+    /// Some sites are single-page apps that write their title in with JavaScript, and serve the
+    /// tags a link preview reads only to the bots that draw link previews. Measured on a Shopee
+    /// short link: as a browser, 160KB of script and not one `<title>` or `og:` tag; as Twitterbot,
+    /// WhatsApp or TelegramBot, a 2KB page with `og:title` and `og:image`; as facebookexternalhit
+    /// or Googlebot, a 403. Twitterbot is the name sites most often keep that page for.
+    static let crawlerUA = "Twitterbot/1.0"
 
     /// The backstop on how much of a document is decoded into a `String` and run past six regexes.
     ///
@@ -106,7 +118,10 @@ actor LinkPreviewService {
         return data.count <= cap
     }
 
-    init() {
+    /// The parameters are for tests: a stubbed network, and nil to keep entries off the disk.
+    init(fetcher: BoundedFetch = .shared, cacheDir: URL? = LinkPreviewService.defaultCacheDir) {
+        self.fetcher = fetcher
+        self.cacheDir = cacheDir
         // Cost as well as count, for the same reason as everywhere else pictures are cached: an
         // `og:image` is a full-size cover picture, and fifty of them decoded is not a small number.
         imageCache.countLimit = 50
@@ -281,6 +296,10 @@ actor LinkPreviewService {
     }
 
     func fetchMetadata(_ url: URL) async -> LinkPreviewData? {
+        await fetchMetadata(url, userAgent: Self.ua)
+    }
+
+    private func fetchMetadata(_ url: URL, userAgent: String) async -> LinkPreviewData? {
         if let cached = metaCache[url], !Self.isStale(cached) {
             return LinkPreviewData(title: cached.title, imageURL: cached.imageURL, image: nil,
                                    domain: cached.domain,
@@ -293,8 +312,11 @@ actor LinkPreviewService {
         // URL the caller asked about, which is the one the item holds. See `secureTwin`.
         let target = Self.secureTwin(of: url)
         var req = URLRequest(url: target, timeoutInterval: 8)
-        req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
-        guard let fetched = await BoundedFetch.shared.fetch(req, plan: Self.plan(for:)) else { return nil }
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        // The second try must reach the server. `URLCache` keys on the URL alone, so without this
+        // it answered the bot's request with the page it had just cached for the browser.
+        if userAgent == Self.crawlerUA { req.cachePolicy = .reloadIgnoringLocalCacheData }
+        guard let fetched = await fetcher.fetch(req, plan: Self.plan(for:)) else { return nil }
         let resp = fetched.response
         let data = fetched.data
 
@@ -361,6 +383,13 @@ actor LinkPreviewService {
             remember(meta)
             persistToDisk(meta)
             evictDiskIfNeeded()
+        } else if userAgent != Self.crawlerUA,
+                  let retried = await fetchMetadata(url, userAgent: Self.crawlerUA),
+                  retried.title != nil || retried.imageURL != nil {
+            // Asked once more as a preview bot — see `crawlerUA`. Only a page that gave the
+            // browser nothing pays for the second request, and only an answer with something in it
+            // replaces this one, which at least has the page's own favicons.
+            return retried
         }
 
         return LinkPreviewData(title: title, imageURL: ogImageURL, image: nil, domain: domain)

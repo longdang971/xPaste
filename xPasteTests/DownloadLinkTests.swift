@@ -181,6 +181,50 @@ final class DownloadLinkTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(result).data.count, 4096)
     }
 
+    // MARK: - Pages that only preview bots get a title from
+
+    private func service() -> LinkPreviewService {
+        LinkPreviewService(fetcher: fetcher(), cacheDir: nil)
+    }
+
+    private let emptyShell = Data("<html><head><script src=app.js></script></head><body></body>".utf8)
+    private let botPage = Data("<html><head><meta property=\"og:title\" content=\"Hoá chất IPA\"><meta property=\"og:image\" content=\"https://cdn.test/p.jpg\"></head>".utf8)
+    private let html = ["Content-Type": "text/html; charset=utf-8"]
+
+    func test_a_page_with_nothing_for_the_browser_is_asked_again_as_a_preview_bot() async throws {
+        // A Shopee short link, as measured: an empty script shell for a browser, the tags for
+        // Twitterbot. Not covered here: live, the second request came back from `URLCache` with
+        // the browser's shell until it was told to ignore the cache. `URLCache` does not store
+        // what a stub `URLProtocol` serves, so that was checked by A/B against the real link.
+        StubProtocol.serve("spa", headers: html, first: emptyShell)
+        StubProtocol.serve("spa", toUserAgent: LinkPreviewService.crawlerUA, headers: html, body: botPage)
+
+        let fetched = await service().fetchMetadata(URL(string: "https://stub.test/spa")!)
+        let meta = try XCTUnwrap(fetched)
+
+        XCTAssertEqual(meta.title, "Hoá chất IPA")
+        XCTAssertEqual(meta.imageURL?.absoluteString, "https://cdn.test/p.jpg")
+        XCTAssertEqual(StubProtocol.requestCount("spa"), 2)
+    }
+
+    func test_a_page_with_a_title_is_asked_once() async throws {
+        StubProtocol.serve("plain", headers: html,
+                           first: Data("<html><head><title>Hello</title></head>".utf8))
+        let fetched = await service().fetchMetadata(URL(string: "https://stub.test/plain")!)
+        let meta = try XCTUnwrap(fetched)
+        XCTAssertEqual(meta.title, "Hello")
+        XCTAssertEqual(StubProtocol.requestCount("plain"), 1, "a page that answered pays for no second request")
+    }
+
+    func test_a_bot_answer_with_nothing_in_it_keeps_the_first_result() async throws {
+        StubProtocol.serve("bare", headers: html,
+                           first: Data("<html><head><link rel=icon sizes=180x180 href=/i.png></head>".utf8))
+        let fetched = await service().fetchMetadata(URL(string: "https://stub.test/bare")!)
+        let meta = try XCTUnwrap(fetched)
+        XCTAssertNil(meta.title)
+        XCTAssertEqual(StubProtocol.requestCount("bare"), 2, "asked once more, and only once more")
+    }
+
     func test_a_non_200_is_nil() async {
         StubProtocol.serve("gone", status: 404, headers: ["Content-Type": "text/html"], chunks: 1, chunkSize: 10)
         let result = await fetcher().fetch(request("gone"), plan: LinkPreviewService.plan(for:))
@@ -218,6 +262,23 @@ final class StubProtocol: URLProtocol {
         return sent[path] ?? 0
     }
 
+    /// Routes that answer only a given User-Agent, for sites that serve preview bots a different
+    /// page. Checked before the plain route.
+    private static var agentRoutes: [String: Route] = [:]
+
+    static func serve(_ path: String, toUserAgent agent: String, headers: [String: String], body: Data) {
+        lock.lock(); defer { lock.unlock() }
+        agentRoutes[path + "|" + agent] = Route(status: 200, headers: headers, leading: [body],
+                                                chunks: 0, chunkSize: 0)
+    }
+
+    private static var requests: [String: Int] = [:]
+
+    static func requestCount(_ path: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return requests[path] ?? 0
+    }
+
     private let stopLock = NSLock()
     private var stopped = false
 
@@ -226,8 +287,10 @@ final class StubProtocol: URLProtocol {
 
     override func startLoading() {
         let path = String(request.url!.path.dropFirst())
+        let agent = request.value(forHTTPHeaderField: "User-Agent") ?? ""
         Self.lock.lock()
-        let route = Self.routes[path]
+        let route = Self.agentRoutes[path + "|" + agent] ?? Self.routes[path]
+        Self.requests[path, default: 0] += 1
         Self.lock.unlock()
         guard let route else { return }
 
@@ -261,3 +324,4 @@ final class StubProtocol: URLProtocol {
         return stopped
     }
 }
+
