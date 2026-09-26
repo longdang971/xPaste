@@ -373,12 +373,16 @@ struct ClipboardItemCard: View {
                     imageURL: linkPreview?.imageURL,
                     image: img,
                     domain: linkPreview?.domain,
-                    isDirectImage: linkPreview?.isDirectImage ?? false
+                    isDirectImage: linkPreview?.isDirectImage ?? false,
+                    isDownload: linkPreview?.isDownload ?? false,
+                    mimeType: linkPreview?.mimeType
                 )
             }
             linkImageChecked = true
 
-            if linkPreview?.image == nil {
+            // A download draws its file-type icon; the site's favicon would say "a page on
+            // github.com" about something that is a zip.
+            if linkPreview?.image == nil, linkPreview?.isDownload != true {
                 favicon = await LinkPreviewService.shared.fetchFavicon(for: url)
             }
         }
@@ -559,7 +563,9 @@ struct ClipboardItemCard: View {
             Color(nsColor: richFill ?? .textBackgroundColor)
             switch item.type {
             case .url:
-                if linkPreviewEnabled, let img = linkPreview?.image {
+                if linkPreviewEnabled, let preview = linkPreview, preview.isDownload {
+                    downloadPreview(preview)
+                } else if linkPreviewEnabled, let img = linkPreview?.image {
                     if Self.isLogoSized(img) {
                         logoPreview(img)
                     } else {
@@ -1017,6 +1023,38 @@ struct ClipboardItemCard: View {
     private static func sizedIcon(for type: UTType) -> NSImage {
         let icon = NSWorkspace.shared.icon(for: type).copy() as! NSImage
         icon.size = NSSize(width: 256, height: 256)
+        return icon
+    }
+
+    /// A link to a file drawn the way a copied file is: the system's icon for its type, at the
+    /// size a file card draws one. The name and URL are in the footer beneath it.
+    private func downloadPreview(_ preview: LinkPreviewData) -> some View {
+        Image(nsImage: Self.downloadIcon(fileName: preview.title, mimeType: preview.mimeType))
+            .resizable()
+            .scaledToFit()
+            .frame(width: s(Self.filePreviewSide), height: s(Self.filePreviewSide))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The type whose icon a download is drawn with: from its name's extension, then its MIME
+    /// type, then plain data. GitHub serves every release asset as `application/octet-stream`,
+    /// so for those the extension is the only thing that says "zip".
+    static func downloadIconType(fileName: String?, mimeType: String?) -> UTType {
+        if let ext = fileName.map({ ($0 as NSString).pathExtension }), !ext.isEmpty,
+           let type = UTType(filenameExtension: ext) {
+            return type
+        }
+        if let mimeType, let type = UTType(mimeType: mimeType) { return type }
+        return .data
+    }
+
+    private static var downloadIconCache: [String: NSImage] = [:]
+
+    private static func downloadIcon(fileName: String?, mimeType: String?) -> NSImage {
+        let type = downloadIconType(fileName: fileName, mimeType: mimeType)
+        if let cached = downloadIconCache[type.identifier] { return cached }
+        let icon = sizedIcon(for: type)
+        downloadIconCache[type.identifier] = icon
         return icon
     }
 

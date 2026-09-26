@@ -27,6 +27,7 @@
 		2D57542F9822AD2B30050EC7 /* RichTextCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59C94384454AAB3839D2D74F /* RichTextCommandTests.swift */; };
 		2DDF751280E70D295824F45A /* EditSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469D90150032736BD076884F /* EditSession.swift */; };
 		2F7ED5A2C11A74DCEE2A4522 /* FilterPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1D1A520708631522EC71B50 /* FilterPopover.swift */; };
+		2FDF5F3A6F4D3978E9CD01F8 /* BoundedFetch.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9C44FB5DF2642D7E9131210 /* BoundedFetch.swift */; };
 		313097BFA8BB48539B57194F /* MediaPreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46123A3EF690B89B5B01869D /* MediaPreviewPane.swift */; };
 		31435D96C37E900906FA5E72 /* DurabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BF7C44B875D3F9E4A8A654 /* DurabilityTests.swift */; };
 		34886EEB79409908641D41FC /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DD73EBEF467CE2C6F89DB4 /* UpdateController.swift */; };
@@ -101,6 +102,7 @@
 		AD6E3E241C8C2DFB2FA00563 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B58622C67E0CFFBD148B70B6 /* SettingsView.swift */; };
 		AFA33A451592033EFE0C9BAB /* SystemFontRTF.swift in Sources */ = {isa = PBXBuildFile; fileRef = 844472E5F27FF51CD31E966A /* SystemFontRTF.swift */; };
 		B17A100DD2FCAE295CDBD62A /* RichTextRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9963093B2EB8B3BEE3B1135C /* RichTextRenderer.swift */; };
+		B1BC5648A75183B112AC19EE /* DownloadLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F24C66E2197BD1D7E619FE6C /* DownloadLinkTests.swift */; };
 		B4D410394D3ABB87FA7E0600 /* PayloadCompressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E2CE906892DC478FA62681 /* PayloadCompressionTests.swift */; };
 		B7CC5CC0DC0EF0B3650ED3DF /* SearchQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 908020B4223493ABD417BDB7 /* SearchQuery.swift */; };
 		B8646F0B25F959EAD38021FD /* ClipboardDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BE561E834B7CAFFED867960 /* ClipboardDatabase.swift */; };
@@ -281,9 +283,11 @@
 		E437A8C68C2F154F3AF59DC2 /* ColorFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorFormatTests.swift; sourceTree = "<group>"; };
 		E662DCE4553148A067F89681 /* ItemFileWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemFileWriterTests.swift; sourceTree = "<group>"; };
 		E82CAAB3832FCA2A676416E2 /* NSImage+Compress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSImage+Compress.swift"; sourceTree = "<group>"; };
+		E9C44FB5DF2642D7E9131210 /* BoundedFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundedFetch.swift; sourceTree = "<group>"; };
 		EA1736950F6841CE896F0B0D /* ClipboardMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardMonitor.swift; sourceTree = "<group>"; };
 		EC0F8032F243CCABB2DAD7D2 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
 		F02E7309431E160801B9345F /* DeleteConfirmDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeleteConfirmDialog.swift; sourceTree = "<group>"; };
+		F24C66E2197BD1D7E619FE6C /* DownloadLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadLinkTests.swift; sourceTree = "<group>"; };
 		F2FB132D93A8BFAE5ECA53C2 /* ClipboardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStore.swift; sourceTree = "<group>"; };
 		F3BA3F59C53175864F9C26E4 /* FilterTokenLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterTokenLayoutTests.swift; sourceTree = "<group>"; };
 		F5B51D74B19769E22A5A5B22 /* CardDragSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardDragSourceTests.swift; sourceTree = "<group>"; };
@@ -360,6 +364,7 @@
 				37EAD895113A93696109B981 /* ColorItemTests.swift */,
 				1C0BAE8F76DBDABDA23190BE /* ColorParserTests.swift */,
 				BF06D4F9B3D4880BDE3FE07F /* ContentChecksumTests.swift */,
+				F24C66E2197BD1D7E619FE6C /* DownloadLinkTests.swift */,
 				324750236A13DDDA63254D96 /* DragPasteTests.swift */,
 				1FFCFA47DD87111CF9EEECF9 /* DropTargetResolverTests.swift */,
 				C5BF7C44B875D3F9E4A8A654 /* DurabilityTests.swift */,
@@ -417,6 +422,7 @@
 			children = (
 				0A9A03461D38597ED8BCC7D8 /* AccessibilityPermission.swift */,
 				C73920B6711E77128C1867C5 /* AppNameResolver.swift */,
+				E9C44FB5DF2642D7E9131210 /* BoundedFetch.swift */,
 				EA1736950F6841CE896F0B0D /* ClipboardMonitor.swift */,
 				AC7CD003E8667D4DE9CA37FC /* ColorFormat.swift */,
 				60C8768B3042119107630D95 /* ColorParser.swift */,
@@ -632,6 +638,7 @@
 				D545F074BD74FB5C96751C27 /* AccessibilityPermission.swift in Sources */,
 				FB9D1C1E32E2847F9F2D6539 /* AppDelegate.swift in Sources */,
 				B8776C784FE37CCDB284B1EB /* AppNameResolver.swift in Sources */,
+				2FDF5F3A6F4D3978E9CD01F8 /* BoundedFetch.swift in Sources */,
 				1F58A497734B1B16387B6586 /* Bundle+Version.swift in Sources */,
 				938F8150EF2434AE70D8D610 /* CardDragSource.swift in Sources */,
 				B8646F0B25F959EAD38021FD /* ClipboardDatabase.swift in Sources */,
@@ -720,6 +727,7 @@
 				947F8D48883A61380BD25A69 /* ColorItemTests.swift in Sources */,
 				78CA7E921DFE367FA939EC88 /* ColorParserTests.swift in Sources */,
 				5695C5C11D561E81462DE497 /* ContentChecksumTests.swift in Sources */,
+				B1BC5648A75183B112AC19EE /* DownloadLinkTests.swift in Sources */,
 				A21822C371D5EDBB16D5FBCE /* DragPasteTests.swift in Sources */,
 				D6B5C34E3BE62D76E04A3E84 /* DropTargetResolverTests.swift in Sources */,
 				31435D96C37E900906FA5E72 /* DurabilityTests.swift in Sources */,

@@ -10,6 +10,11 @@ struct LinkPreviewData {
     /// treating it as a scraped `og:image`, which is what decides whether it may be shrunk to a
     /// logo: a link to a small or square photograph is still a photograph.
     var isDirectImage: Bool = false
+    /// The URL named a file to download rather than a page. `title` is then the file's name and
+    /// the card draws the system icon for its type instead of a picture or the site's favicon.
+    var isDownload: Bool = false
+    /// The download's declared type, which the icon falls back on when its name has no extension.
+    var mimeType: String? = nil
 }
 
 private struct CachedLinkMeta: Codable {
@@ -24,6 +29,8 @@ private struct CachedLinkMeta: Codable {
     // Optional rather than defaulted: synthesised `Codable` has no notion of a property default,
     // so a non-optional here would fail to decode every entry already on disk.
     var isDirectImage: Bool?
+    var isDownload: Bool?
+    var mimeType: String?
 }
 
 actor LinkPreviewService {
@@ -73,11 +80,13 @@ actor LinkPreviewService {
     /// `</Head>` gets the ceiling instead, which is what it would have had anyway.
     static func headSlice(of data: Data) -> Data {
         let ceiling = data.prefix(htmlScanCap)
-        for needle in [Data("</head>".utf8), Data("</HEAD>".utf8)] {
+        for needle in headClosers {
             if let found = ceiling.range(of: needle) { return ceiling.prefix(upTo: found.upperBound) }
         }
         return ceiling
     }
+    private static let headClosers = [Data("</head>".utf8), Data("</HEAD>".utf8)]
+
     /// The largest preview picture worth holding. A card draws it at 232pt.
     private static let imageByteCap = 8 * 1024 * 1024
 
@@ -154,6 +163,114 @@ actor LinkPreviewService {
         return parts.url ?? url
     }
 
+    /// How much of a response to read, decided from its headers.
+    ///
+    /// A picture is read whole or not at all; a page up to the end of its head, which is where
+    /// every tag worth reading lives; a download not at all.
+    static func plan(for response: HTTPURLResponse) -> BoundedFetch.Plan {
+        if isDirectImage(mimeType: response.mimeType) {
+            return .body(cap: imageByteCap, stopAfter: [], overflow: .reject)
+        }
+        if isDownload(mimeType: response.mimeType,
+                      contentDisposition: response.value(forHTTPHeaderField: "Content-Disposition")) {
+            return .headersOnly
+        }
+        return .body(cap: htmlScanCap, stopAfter: headClosers, overflow: .truncate)
+    }
+
+    /// Whether a response is a file to download rather than a page or a picture.
+    ///
+    /// A picture never is, even sent as an attachment: it previews better as itself. Past that,
+    /// `attachment` says so outright, and otherwise anything that is not HTML is a file — a PDF,
+    /// a disk image, a script served as `text/plain`. A response that declares no type at all is
+    /// read as a page, which is what the scrape did before this existed.
+    static func isDownload(mimeType: String?, contentDisposition: String?) -> Bool {
+        if isDirectImage(mimeType: mimeType) { return false }
+        if let disposition = contentDisposition?.trimmingCharacters(in: .whitespaces).lowercased(),
+           disposition.hasPrefix("attachment") {
+            return true
+        }
+        guard let mime = mimeType?.lowercased() else { return false }
+        return mime != "text/html" && mime != "application/xhtml+xml"
+    }
+
+    /// The name a download is shown under.
+    ///
+    /// `Content-Disposition` first, because the URL often has no name in it at all: a GitHub
+    /// release link redirects to `release-assets.githubusercontent.com/…/<uuid>?sig=…`, and
+    /// `EVKeyMac.zip` exists only in that header. Then whichever URL's last component looks like
+    /// a file name — the one copied, then the one the redirects ended on — and then any last
+    /// component at all. Nil leaves the caller to fall back to the host.
+    static func downloadName(contentDisposition: String?, requested: URL, final: URL?) -> String? {
+        if let name = fileName(fromContentDisposition: contentDisposition) { return name }
+        let components = [requested, final].compactMap { $0?.lastPathComponent }
+            .filter { !$0.isEmpty && $0 != "/" }
+        return components.first { !($0 as NSString).pathExtension.isEmpty } ?? components.first
+    }
+
+    /// The file name a `Content-Disposition` header carries, or nil if it carries none.
+    ///
+    /// `filename*` (RFC 5987, `UTF-8''EVKey%20M%C3%A1y.zip`) wins over `filename` when both are
+    /// there, as it does in browsers. A plain `filename` sent as raw UTF-8 reaches Foundation as
+    /// Latin-1 — a Vietnamese name arrives as `MÃ¡y` — so it is read back as UTF-8 when it can be.
+    /// Parameters are split on `;` outside quotes only, so a quoted name may contain one.
+    static func fileName(fromContentDisposition header: String?) -> String? {
+        guard let header else { return nil }
+        var plain: String?
+        for parameter in splitParameters(header) {
+            guard let eq = parameter.firstIndex(of: "=") else { continue }
+            let key = parameter[..<eq].trimmingCharacters(in: .whitespaces).lowercased()
+            var value = parameter[parameter.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+            if key == "filename*" {
+                let pieces = value.split(separator: "'", maxSplits: 2, omittingEmptySubsequences: false)
+                if pieces.count == 3,
+                   let decoded = String(pieces[2]).removingPercentEncoding,
+                   let name = sanitizedFileName(decoded) {
+                    return name
+                }
+            } else if key == "filename" {
+                if value.count >= 2, value.hasPrefix("\""), value.hasSuffix("\"") {
+                    value = String(value.dropFirst().dropLast()).replacingOccurrences(of: "\\\"", with: "\"")
+                }
+                plain = repairedUTF8(value)
+            }
+        }
+        return plain.flatMap(sanitizedFileName)
+    }
+
+    private static func splitParameters(_ header: String) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var quoted = false
+        var escaped = false
+        for ch in header {
+            if escaped { current.append(ch); escaped = false; continue }
+            if ch == "\\" && quoted { current.append(ch); escaped = true; continue }
+            if ch == "\"" { quoted.toggle() }
+            if ch == ";" && !quoted { parts.append(current); current = ""; continue }
+            current.append(ch)
+        }
+        parts.append(current)
+        return parts
+    }
+
+    /// A string that is really UTF-8 bytes read one per character, read again as UTF-8.
+    /// Anything else — plain ASCII, or text that does not decode — comes back unchanged.
+    private static func repairedUTF8(_ s: String) -> String {
+        let scalars = s.unicodeScalars.map(\.value)
+        guard scalars.contains(where: { $0 >= 0x80 }), scalars.allSatisfy({ $0 <= 0xFF }),
+              let decoded = String(bytes: scalars.map { UInt8($0) }, encoding: .utf8)
+        else { return s }
+        return decoded
+    }
+
+    /// Only the last path component: a header may send `../../x.zip` or a Windows path.
+    private static func sanitizedFileName(_ s: String) -> String? {
+        let last = s.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
+        let name = last.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
     /// Whether an entry on disk was written by a version that knew less than this one.
     ///
     /// Only one case so far: a picture link used to be filed with no title, so its card printed the
@@ -167,7 +284,9 @@ actor LinkPreviewService {
         if let cached = metaCache[url], !Self.isStale(cached) {
             return LinkPreviewData(title: cached.title, imageURL: cached.imageURL, image: nil,
                                    domain: cached.domain,
-                                   isDirectImage: cached.isDirectImage ?? false)
+                                   isDirectImage: cached.isDirectImage ?? false,
+                                   isDownload: cached.isDownload ?? false,
+                                   mimeType: cached.mimeType)
         }
 
         // The request goes to the https twin; everything below still files the result under the
@@ -175,18 +294,34 @@ actor LinkPreviewService {
         let target = Self.secureTwin(of: url)
         var req = URLRequest(url: target, timeoutInterval: 8)
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200
-        else { return nil }
+        guard let fetched = await BoundedFetch.shared.fetch(req, plan: Self.plan(for:)) else { return nil }
+        let resp = fetched.response
+        let data = fetched.data
 
         let domain = url.host?.replacingOccurrences(of: "www.", with: "")
+
+        // A file to download is described by its headers: the body was never read. Cached like any
+        // other result, so the card does not ask again every time it comes on screen.
+        let disposition = resp.value(forHTTPHeaderField: "Content-Disposition")
+        if Self.isDownload(mimeType: resp.mimeType, contentDisposition: disposition) {
+            let name = Self.downloadName(contentDisposition: disposition, requested: url,
+                                         final: resp.url) ?? domain
+            var meta = CachedLinkMeta(url: url, title: name, imageURL: nil, domain: domain)
+            meta.isDownload = true
+            meta.mimeType = resp.mimeType
+            remember(meta)
+            persistToDisk(meta)
+            evictDiskIfNeeded()
+            return LinkPreviewData(title: name, imageURL: nil, image: nil, domain: domain,
+                                   isDownload: true, mimeType: resp.mimeType)
+        }
 
         // A URL that names a picture is its own preview: the image URL is the link itself, and the
         // bytes are already here, so seed the image cache rather than fetch the same file twice.
         // Decodable, not merely declared: an `image/svg+xml` that `NSImage` cannot open falls
         // through to the scrape below and keeps the favicon card it used to get.
+        // Already held to `imageByteCap` by the fetch's plan.
         if Self.isDirectImage(mimeType: resp.mimeType),
-           Self.withinCap(resp, data, cap: Self.imageByteCap),
            let image = NSImage(data: data) {
             imageCache.setObject(image, forKey: url as NSURL, cost: image.approximateDecodedBytes)
             // The file name is the title. A picture has no `og:title` to read, and without one the
