@@ -422,10 +422,10 @@ struct ClipboardItemCard: View {
                     nameField(onAccent: onAccent, accent: accent)
                 } else {
                     Text(headerTitle)
-                        // Semibold, one step down from bold. Kept in step with `nameField` below:
+                        // Medium, two steps down from bold. Kept in step with `nameField` below:
                         // renaming is meant to read as typing over the title, which it stops doing
                         // the moment the two weights differ.
-                        .font(.system(size: s(15), weight: .semibold))
+                        .font(.system(size: s(15), weight: .medium))
                         .foregroundColor(onAccent)
                         .lineLimit(1)
                 }
@@ -453,7 +453,7 @@ struct ClipboardItemCard: View {
         TextField("", text: $draftName)
             .textFieldStyle(.plain)
             // In step with the title it replaces — see the note there.
-            .font(.system(size: s(15), weight: .semibold))
+            .font(.system(size: s(15), weight: .medium))
             .foregroundColor(onAccent)
             // The caret rides the title's colour, not the system accent: a blue accent on a blue
             // header (Chrome) leaves nothing to see.
