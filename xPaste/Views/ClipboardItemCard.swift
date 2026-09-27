@@ -1033,12 +1033,18 @@ struct ClipboardItemCard: View {
 
     /// A link to a file drawn the way a copied file is: the system's icon for its type, at the
     /// size a file card draws one. The name and URL are in the footer beneath it.
+    ///
+    /// It sits on the same muted plate as a link's logo: it is still a link card, and on a plain
+    /// white body it read as a copied file wearing a link's header.
     private func downloadPreview(_ preview: LinkPreviewData) -> some View {
-        Image(nsImage: Self.downloadIcon(fileName: preview.title, mimeType: preview.mimeType))
-            .resizable()
-            .scaledToFit()
-            .frame(width: s(Self.filePreviewSide), height: s(Self.filePreviewSide))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ZStack {
+            mutedBackground
+            Image(nsImage: Self.downloadIcon(fileName: preview.title, mimeType: preview.mimeType))
+                .resizable()
+                .scaledToFit()
+                .frame(width: s(Self.filePreviewSide), height: s(Self.filePreviewSide))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// The type whose icon a download is drawn with: from its name's extension, then its MIME
