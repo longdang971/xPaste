@@ -1648,13 +1648,20 @@ struct ClipboardItemCard: View {
         return (URL(fileURLWithPath: expanded), isDir.boolValue)
     }
 
-    /// Whether a header bar is pale enough to need dark text. Deliberately higher than the 0.5
-    /// mid-point `isLight` uses: white still reads better on saturated brand colours such as
-    /// Mail's or Xcode's blue, whose luminance drifts just past 0.5 on the green coefficient.
+    /// Whether a header bar is pale enough to need dark text. White is the default on every
+    /// vivid hue, however bright — a lemon yellow at ~1.37:1 against white or a cream at ~1.44
+    /// still carries it. What loses white text is a light bar with little colour in it: greys,
+    /// off-whites and washed-out pastels (saturation under 0.3) once contrast drops below 1.6:1.
+    /// Anything under 1.25:1 is close enough to white to go dark whatever its hue.
+    ///
+    /// Tuned by eye on real headers, which render a few percent darker than the icon they come
+    /// from: a 228 grey, a 209 grey and a (228, 228, 174) pastel went dark; the lemon and the
+    /// cream stayed white.
     private func isPaleColor(_ color: Color) -> Bool {
-        guard let ns = NSColor(color).usingColorSpace(.deviceRGB) else { return true }
-        let luminance = 0.2126 * ns.redComponent + 0.7152 * ns.greenComponent + 0.0722 * ns.blueComponent
-        return luminance > 0.62
+        guard let ns = NSColor(color).usingColorSpace(.sRGB) else { return true }
+        let contrast = RichTextRenderer.contrastRatio(.white, ns)
+        if contrast < 1.25 { return true }
+        return ns.saturationComponent < 0.3 && contrast < 1.6
     }
 
     /// Whether `colour` is light enough that dark text reads better on it.
