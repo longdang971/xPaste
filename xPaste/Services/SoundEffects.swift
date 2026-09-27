@@ -41,17 +41,8 @@ enum SoundEffects {
         for sound in Sound.allCases {
             guard let player = player(for: sound), !player.isPlaying else { continue }
             player.volume = 0
+            player.delegate = warmUp
             player.play()
-            DispatchQueue.main.asyncAfter(deadline: .now() + player.duration + 0.1) {
-                // A copy made in the meantime turned the volume back up; leave that one playing.
-                guard player.volume == 0 else { return }
-                // Let the silent pass run out on its own and never call `stop()` here: `stop()`
-                // "undoes the setup provided by prepareToPlay", which put the first copy straight
-                // back to opening the output from scratch — and silent again.
-                player.volume = 1
-                player.currentTime = 0
-                player.prepareToPlay()
-            }
         }
     }
 
@@ -59,10 +50,29 @@ enum SoundEffects {
         guard isEnabled(), let player = player(for: sound) else { return }
         // Rewind rather than skip: `play()` on a player that is still sounding carries on from
         // where it is, so two quick copies would otherwise only ever make one snap.
+        player.delegate = nil
         player.volume = 1
         player.currentTime = 0
         player.play()
     }
+
+    /// Puts a player back to full volume once its silent launch pass has really finished.
+    ///
+    /// Not a timer. The silent pass starts late — opening the output is the very delay it is there
+    /// to absorb — so a timer set to its duration fired while it was still sounding, and turning
+    /// the volume up and rewinding at that moment played the snap out loud at launch. Nor `stop()`:
+    /// it "undoes the setup provided by prepareToPlay", which left the first copy silent again.
+    private final class WarmUp: NSObject, AVAudioPlayerDelegate {
+        func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+            player.delegate = nil
+            // A copy during the silent pass has already turned it up and played; nothing to undo.
+            guard player.volume == 0 else { return }
+            player.volume = 1
+            player.currentTime = 0
+            player.prepareToPlay()
+        }
+    }
+    private static let warmUp = WarmUp()
 
     private static func player(for sound: Sound) -> AVAudioPlayer? {
         if let cached = players[sound] { return cached }
