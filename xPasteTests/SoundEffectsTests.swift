@@ -28,7 +28,7 @@ final class SoundEffectsTests: XCTestCase {
         XCTAssertTrue(SoundEffects.isEnabled(defaults: defaults))
     }
 
-    func testBothSoundsShipInTheBundleAndLoad() {
+    func testCopySoundShipsInTheBundleAndLoads() {
         for sound in SoundEffects.Sound.allCases {
             let url = SoundEffects.url(for: sound)
             XCTAssertNotNil(url, "\(sound) missing from the bundle")

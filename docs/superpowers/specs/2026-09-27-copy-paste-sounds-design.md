@@ -30,3 +30,7 @@ trên main thread.
 ## Kiểm thử
 - Unit: cờ `playSounds` mặc định true khi chưa đặt; cả hai file âm có trong bundle và nạp được thành `NSSound`.
 - Tay: copy ở app khác → tiếng copy; paste từ panel → tiếng paste, không kèm tiếng copy; tắt công tắc → im.
+
+## Cập nhật 27/09/2026
+User nghe thử rồi **bỏ tiếng paste**, chỉ giữ tiếng copy. Đã gỡ `xpaste-paste.caf`, case `.paste` và lời gọi
+trong `handlePasteItem`; công tắc Play sounds giờ chỉ điều khiển tiếng copy.

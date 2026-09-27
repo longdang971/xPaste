@@ -418,7 +418,7 @@ private struct GeneralTab: View {
                     CardDivider()
 
                     Row(title: "Play sounds",
-                        subtitle: "A soft snap when xPaste saves something you copy, and a double snap when you paste from the panel.") {
+                        subtitle: "A soft snap each time xPaste saves something you copy.") {
                         Toggle("", isOn: $playSounds)
                             .labelsHidden()
                             .toggleStyle(.switch)

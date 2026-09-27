@@ -1,17 +1,15 @@
 import AppKit
 
-/// The short cues xPaste plays when it captures a copy and when it pastes from the panel.
-///
-/// Both are synthesised paper snaps shipped in `Resources/Sounds` — the copy a single snap, the
-/// paste a double one — so they read as a pair without either sounding like a system alert.
+/// The short cue xPaste plays when it captures a copy: a synthesised paper snap shipped in
+/// `Resources/Sounds`, soft enough not to sound like a system alert. Pasting is silent — a paste
+/// sound was tried and dropped.
 enum SoundEffects {
     enum Sound: CaseIterable {
-        case copy, paste
+        case copy
 
         fileprivate var resourceName: String {
             switch self {
-            case .copy:  return "xpaste-copy"
-            case .paste: return "xpaste-paste"
+            case .copy: return "xpaste-copy"
             }
         }
     }

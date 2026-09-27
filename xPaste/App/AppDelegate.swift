@@ -1098,9 +1098,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             AccessibilityPermission.openSystemSettings()
             return
         }
-        // Here rather than in each of the panel's paste paths: they all end in this notification,
-        // so a multi-paste of five cards is one paste and makes one sound.
-        SoundEffects.play(.paste)
         let target = previousApp
         let targetPID = target?.processIdentifier ?? 0
         // Slide the panel closed (down) and refocus the target app, then post ⌘V after a short

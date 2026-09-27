@@ -133,7 +133,6 @@
 		DA4F586E68154388293B0DF7 /* TextTransform.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB7375FCADE20F5B68E4DA14 /* TextTransform.swift */; };
 		DB2814040C442BB2ADBB24A7 /* ExclusionRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6994ED19A5D9475BD517F3FE /* ExclusionRules.swift */; };
 		DC915A994E3F323AEB9D33FC /* ColorFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E437A8C68C2F154F3AF59DC2 /* ColorFormatTests.swift */; };
-		DE29EB7337DCDA5453B27395 /* xpaste-paste.caf in Resources */ = {isa = PBXBuildFile; fileRef = 7E1928BD7D20DA59A4C8675F /* xpaste-paste.caf */; };
 		DFE275AB5DC1FD71DEFEAA31 /* SearchFilters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4836ECB62756EC68D6160CF0 /* SearchFilters.swift */; };
 		E08ECF3C17D8DF48D0AFB204 /* DragTempFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C086EC059543829985A25B26 /* DragTempFile.swift */; };
 		E51DCC470588345C40A9788A /* UpdateInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46EAE3D9E5D98EA87F763404 /* UpdateInstallerTests.swift */; };
@@ -232,7 +231,6 @@
 		7474348F51BD9E19B8313AFA /* PanelSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelSelection.swift; sourceTree = "<group>"; };
 		7945AE8C10DF4C7DFF2DD420 /* RemotePathPropertyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathPropertyTests.swift; sourceTree = "<group>"; };
 		7BEB8E2188611A4B38186711 /* xpaste-copy.caf */ = {isa = PBXFileReference; path = "xpaste-copy.caf"; sourceTree = "<group>"; };
-		7E1928BD7D20DA59A4C8675F /* xpaste-paste.caf */ = {isa = PBXFileReference; path = "xpaste-paste.caf"; sourceTree = "<group>"; };
 		80E57409ECE65B44AF773795 /* LinkPreviewCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewCardTests.swift; sourceTree = "<group>"; };
 		844472E5F27FF51CD31E966A /* SystemFontRTF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemFontRTF.swift; sourceTree = "<group>"; };
 		884F34A4F28F0E901A9E884A /* LinkHeadSliceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkHeadSliceTests.swift; sourceTree = "<group>"; };
@@ -475,7 +473,6 @@
 			isa = PBXGroup;
 			children = (
 				7BEB8E2188611A4B38186711 /* xpaste-copy.caf */,
-				7E1928BD7D20DA59A4C8675F /* xpaste-paste.caf */,
 			);
 			path = Sounds;
 			sourceTree = "<group>";
@@ -646,7 +643,6 @@
 			files = (
 				D7059C1265C97291BC789544 /* Assets.xcassets in Resources */,
 				ECA8FC443264D0DF78B12741 /* xpaste-copy.caf in Resources */,
-				DE29EB7337DCDA5453B27395 /* xpaste-paste.caf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
