@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import AVFoundation
 @testable import xPaste
 
 final class SoundEffectsTests: XCTestCase {
@@ -33,7 +34,7 @@ final class SoundEffectsTests: XCTestCase {
             let url = SoundEffects.url(for: sound)
             XCTAssertNotNil(url, "\(sound) missing from the bundle")
             if let url {
-                XCTAssertNotNil(NSSound(contentsOf: url, byReference: true), "\(sound) did not load")
+                XCTAssertNoThrow(try AVAudioPlayer(contentsOf: url), "\(sound) did not load")
             }
         }
     }

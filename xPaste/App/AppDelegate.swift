@@ -229,6 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             "multiPasteSeparator": "newline",
         ])
         AppearanceManager.applyStored()
+        SoundEffects.prepare()
         setupStatusItem()
         setupPanel()
         setupHotKey()
