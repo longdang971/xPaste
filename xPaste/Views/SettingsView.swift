@@ -422,6 +422,9 @@ private struct GeneralTab: View {
                         Toggle("", isOn: $playSounds)
                             .labelsHidden()
                             .toggleStyle(.switch)
+                            // Turned on after a launch that had it off: warm up now, or the
+                            // next copy would be the silent one.
+                            .onChange(of: playSounds) { on in if on { SoundEffects.prepare() } }
                     }
 
                     CardDivider()

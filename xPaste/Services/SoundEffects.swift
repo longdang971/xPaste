@@ -1,5 +1,5 @@
 import AppKit
-import AudioToolbox
+import AVFoundation
 
 /// The short cue xPaste plays when it captures a copy: a synthesised paper snap shipped in
 /// `Resources/Sounds`, soft enough not to sound like a system alert. Pasting is silent — a paste
@@ -26,32 +26,73 @@ enum SoundEffects {
         Bundle.main.url(forResource: sound.resourceName, withExtension: "caf")
     }
 
-    /// Main thread only. Registered once and kept for the life of the app.
-    private static var ids: [Sound: SystemSoundID] = [:]
+    /// Main thread only. One player per sound, kept for the life of the app.
+    private static var players: [Sound: AVAudioPlayer] = [:]
 
-    /// Registers the sounds with the system sound server. Called at launch; cheap.
+    /// Loads the sounds and opens the audio output ahead of time. Called at launch.
     ///
-    /// Played through the system sound server rather than a player of xPaste's own. A player has to
-    /// open its own stream to the output first, and on a USB output such as a Studio Display's
-    /// speakers that took long enough to swallow the snap — whose whole body is its first 40 ms —
-    /// so the first copy after launch was silent. Warming a player up at zero volume only moved the
-    /// problem: a copy made right after launch landed inside the warm-up. The sound server keeps
-    /// its output open all the time, which is what it is for: short interface sounds.
+    /// The first sound a process plays is the one that opens its stream to the output device, and
+    /// on a USB output such as a Studio Display's speakers that takes long enough to swallow the
+    /// snap — whose whole body is its first 40 ms. So the first copy after launch made no sound,
+    /// and every later one did, however long the gap. `prepareToPlay` alone did not help: it fills
+    /// the buffers but does not start the stream. Playing each sound once at zero volume does.
     static func prepare() {
-        for sound in Sound.allCases { _ = soundID(for: sound) }
+        guard isEnabled() else { return }
+        for sound in Sound.allCases {
+            guard let player = player(for: sound), !player.isPlaying else { continue }
+            player.volume = 0
+            player.delegate = warmUp
+            player.play()
+        }
     }
 
     static func play(_ sound: Sound) {
-        guard isEnabled(), let id = soundID(for: sound) else { return }
-        AudioServicesPlaySystemSound(id)
+        guard isEnabled(), let player = player(for: sound) else { return }
+        // A copy made in the first moments after launch lands while the silent pass is still
+        // opening the output. Sounding it now would lose it the same way the first copy used to be
+        // lost; instead it plays the instant the output is ready — a fraction of a second late,
+        // and only right after launch.
+        if player.delegate === warmUp {
+            pendingAfterWarmUp.insert(sound)
+            return
+        }
+        // Rewind rather than skip: `play()` on a player that is still sounding carries on from
+        // where it is, so two quick copies would otherwise only ever make one snap.
+        player.delegate = nil
+        player.volume = 1
+        player.currentTime = 0
+        player.play()
     }
 
-    static func soundID(for sound: Sound) -> SystemSoundID? {
-        if let cached = ids[sound] { return cached }
-        guard let url = url(for: sound) else { return nil }
-        var id: SystemSoundID = 0
-        guard AudioServicesCreateSystemSoundID(url as CFURL, &id) == noErr else { return nil }
-        ids[sound] = id
-        return id
+    /// Puts a player back to full volume once its silent launch pass has really finished.
+    ///
+    /// Not a timer. The silent pass starts late — opening the output is the very delay it is there
+    /// to absorb — so a timer set to its duration fired while it was still sounding, and turning
+    /// the volume up and rewinding at that moment played the snap out loud at launch. Nor `stop()`:
+    /// it "undoes the setup provided by prepareToPlay", which left the first copy silent again.
+    private final class WarmUp: NSObject, AVAudioPlayerDelegate {
+        func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+            player.delegate = nil
+            player.volume = 1
+            player.currentTime = 0
+            if let sound = SoundEffects.players.first(where: { $0.value === player })?.key,
+               SoundEffects.pendingAfterWarmUp.remove(sound) != nil {
+                player.play()
+            } else {
+                player.prepareToPlay()
+            }
+        }
+    }
+    private static let warmUp = WarmUp()
+    /// Copies made during the silent pass, played as soon as it ends.
+    private static var pendingAfterWarmUp: Set<Sound> = []
+
+    private static func player(for sound: Sound) -> AVAudioPlayer? {
+        if let cached = players[sound] { return cached }
+        guard let url = url(for: sound),
+              let fresh = try? AVAudioPlayer(contentsOf: url) else { return nil }
+        fresh.prepareToPlay()
+        players[sound] = fresh
+        return fresh
     }
 }
