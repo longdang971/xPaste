@@ -45,9 +45,12 @@ enum SoundEffects {
             DispatchQueue.main.asyncAfter(deadline: .now() + player.duration + 0.1) {
                 // A copy made in the meantime turned the volume back up; leave that one playing.
                 guard player.volume == 0 else { return }
-                player.stop()
-                player.currentTime = 0
+                // Let the silent pass run out on its own and never call `stop()` here: `stop()`
+                // "undoes the setup provided by prepareToPlay", which put the first copy straight
+                // back to opening the output from scratch — and silent again.
                 player.volume = 1
+                player.currentTime = 0
+                player.prepareToPlay()
             }
         }
     }
