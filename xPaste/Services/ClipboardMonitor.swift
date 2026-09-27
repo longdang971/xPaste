@@ -198,7 +198,10 @@ final class ClipboardMonitor {
                         // give back the original picture rather than xPaste's re-encoding of it —
                         // which is all the history used to be able to return.
                         item.payload = payload
-                        DispatchQueue.main.async { ClipboardStore.shared.add(item) }
+                        DispatchQueue.main.async {
+                            ClipboardStore.shared.add(item)
+                            SoundEffects.play(.copy)
+                        }
                         // `compressed`, not `raw`, even though the original is right here: Vision
                         // resizes its input, so the smaller copy is both cheaper and no worse at
                         // small text. See `OCRService.tileSide` and the note in `startBackfill`.
@@ -232,6 +235,7 @@ final class ClipboardMonitor {
         item.sourceAppBundleID = sourceBundleID
         DispatchQueue.main.async {
             ClipboardStore.shared.add(item)
+            SoundEffects.play(.copy)
         }
     }
 }

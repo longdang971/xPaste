@@ -231,6 +231,7 @@ private struct GeneralTab: View {
     @AppStorage("ocrEnabled") private var ocrEnabled: Bool = true
     @AppStorage("multiPasteSeparator") private var multiPasteSeparator: String = "newline"
     @AppStorage("alwaysPastePlainText") private var alwaysPastePlainText: Bool = false
+    @AppStorage(SoundEffects.defaultsKey) private var playSounds: Bool = true
     @State private var accessibilityTrusted = AccessibilityPermission.isTrusted
     /// Polls for the Accessibility grant while this window is on screen.
     ///
@@ -410,6 +411,15 @@ private struct GeneralTab: View {
                     Row(title: "Always paste as Plain Text",
                         subtitle: "Remove formatting so items are always pasted as unformatted text.") {
                         Toggle("", isOn: $alwaysPastePlainText)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+
+                    CardDivider()
+
+                    Row(title: "Play sounds",
+                        subtitle: "A soft snap when xPaste saves something you copy, and a double snap when you paste from the panel.") {
+                        Toggle("", isOn: $playSounds)
                             .labelsHidden()
                             .toggleStyle(.switch)
                     }
