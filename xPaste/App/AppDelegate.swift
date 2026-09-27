@@ -115,6 +115,12 @@ private class ClipboardPanel: NSPanel {
                isOverCardList(loc) {
                 makeFirstResponder(nil)
             }
+            // A press anywhere else in the panel — the toolbar, the empty margins — does not take
+            // the rename field's focus, so its click-away commit never fired and the name was
+            // lost. The field itself is the field editor, an `NSTextView`.
+            if CardRename.inProgress, !(contentView?.hitTest(loc) is NSTextView) {
+                CardRename.commit()
+            }
 
         case .scrollWheel:
             let pos = UserDefaults.standard.string(forKey: "panelPosition") ?? "bottom"
@@ -954,6 +960,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // clicks stop moving the caret and the toolbar's commands land on nothing — and a
             // half-finished edit goes with it. Measured directly: ordering the panel out flips the
             // popover window's `isKeyWindow` to false and moves first responder off the text view.
+            //
+            // A rename is not one of those: it borrows the alert flag only so Escape cancels it.
+            // Clicking away saves the name and the panel goes as for any other click outside.
+            if CardRename.inProgress {
+                CardRename.commit()
+                // A turn later: hiding drops whatever rename is still open (`.panelWillHide`), and
+                // the save has to have landed before that runs.
+                DispatchQueue.main.async { self.hidePanel() }
+                return
+            }
             guard !self.alertIsPresented else { return }
             self.hidePanel()
         }

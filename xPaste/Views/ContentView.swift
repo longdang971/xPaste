@@ -449,6 +449,7 @@ struct ContentView: View {
         // Borrows the alert handshake so AppDelegate stops swallowing Escape while a name is
         // being typed: Escape must cancel the edit, not close the panel.
         .onChange(of: renameItemID) { id in
+            CardRename.inProgress = id != nil
             NotificationCenter.default.post(
                 name: id != nil ? .clipboardAlertShown : .clipboardAlertHidden,
                 object: nil
@@ -1817,5 +1818,25 @@ struct FilterAnchor: ViewModifier {
             // state change lands, so it sees an empty list.
             FilterPopover(filters: $filters, appsInHistory: appsInHistory)
         }
+    }
+}
+
+/// Whether a card's name is being edited, for the parts of the panel that live outside SwiftUI.
+///
+/// Renaming borrows the alert handshake so Escape cancels the edit instead of closing the panel —
+/// but that same flag also told the click-outside monitor to leave the panel up, as it must for a
+/// real confirmation. So a click away from a card being renamed neither saved the name nor closed
+/// the panel. This says which of the two is up.
+enum CardRename {
+    static var inProgress = false
+
+    /// "Save the name as typed." Clicking away commits — the Finder rule — but the field only
+    /// hears about a click that takes its focus, and a click on the toolbar or outside the panel
+    /// does not. The card with the field answers this synchronously.
+    static let commitRequested = Notification.Name("com.user.xPaste.commitRename")
+
+    static func commit() {
+        guard inProgress else { return }
+        NotificationCenter.default.post(name: commitRequested, object: nil)
     }
 }

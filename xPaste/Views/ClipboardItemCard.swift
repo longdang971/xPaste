@@ -463,6 +463,9 @@ struct ClipboardItemCard: View {
             .frame(width: s(PanelLayout.cardBaseWidth - 108), alignment: .leading)
             .onSubmit { finishRename(with: draftName) }
             .onExitCommand { finishRename(with: nil) }
+            .onReceive(NotificationCenter.default.publisher(for: CardRename.commitRequested)) { _ in
+                finishRename(with: draftName)
+            }
             .onChange(of: nameFieldFocused) { focused in
                 if !focused { finishRename(with: draftName) }
             }
