@@ -1,6 +1,5 @@
 import XCTest
 import AppKit
-import AVFoundation
 @testable import xPaste
 
 final class SoundEffectsTests: XCTestCase {
@@ -31,11 +30,8 @@ final class SoundEffectsTests: XCTestCase {
 
     func testCopySoundShipsInTheBundleAndLoads() {
         for sound in SoundEffects.Sound.allCases {
-            let url = SoundEffects.url(for: sound)
-            XCTAssertNotNil(url, "\(sound) missing from the bundle")
-            if let url {
-                XCTAssertNoThrow(try AVAudioPlayer(contentsOf: url), "\(sound) did not load")
-            }
+            XCTAssertNotNil(SoundEffects.url(for: sound), "\(sound) missing from the bundle")
+            XCTAssertNotNil(SoundEffects.soundID(for: sound), "\(sound) did not register")
         }
     }
 }
