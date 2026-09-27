@@ -35,12 +35,15 @@ enum SoundEffects {
     /// on a USB output such as a Studio Display's speakers that takes long enough to swallow the
     /// snap — whose whole body is its first 40 ms. So the first copy after launch made no sound,
     /// and every later one did, however long the gap. `prepareToPlay` alone did not help: it fills
-    /// the buffers but does not start the stream. Playing each sound once at zero volume does.
+    /// the buffers but does not start the stream. Playing each sound once, far too quietly to hear, does.
     static func prepare() {
         guard isEnabled() else { return }
         for sound in Sound.allCases {
             guard let player = player(for: sound), !player.isPlaying else { continue }
-            player.volume = 0
+            // Not zero. A pass of pure digital silence was not enough: the first copy after
+            // launch still came out silent, so whatever holds back the first sound only lets go on
+            // a real signal. -60 dB is a real signal nobody can hear.
+            player.volume = warmUpVolume
             player.delegate = warmUp
             player.play()
         }
@@ -84,6 +87,7 @@ enum SoundEffects {
         }
     }
     private static let warmUp = WarmUp()
+    private static let warmUpVolume: Float = 0.001
     /// Copies made during the silent pass, played as soon as it ends.
     private static var pendingAfterWarmUp: Set<Sound> = []
 
