@@ -38,4 +38,12 @@ final class SoundEffectsTests: XCTestCase {
             }
         }
     }
+
+    func testWakeSignalIsAPlayableAudibleWAV() throws {
+        let data = SoundEffects.wakeSignal(duration: 0.15)
+        let player = try AVAudioPlayer(data: data)
+        XCTAssertEqual(player.duration, 0.15, accuracy: 0.01)
+        // Not digital silence: silence was shown not to wake the output.
+        XCTAssertTrue(data.dropFirst(44).contains { $0 != 0 })
+    }
 }
