@@ -39,11 +39,13 @@ final class SoundEffectsTests: XCTestCase {
         }
     }
 
-    func testWakeSignalIsAPlayableAudibleWAV() throws {
-        let data = SoundEffects.wakeSignal(duration: 0.15)
-        let player = try AVAudioPlayer(data: data)
-        XCTAssertEqual(player.duration, 0.15, accuracy: 0.01)
+    func testWakeSignalIsInaudibleButNotSilent() throws {
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1))
+        let buffer = try XCTUnwrap(SoundEffects.wakeSignal(format: format, duration: 0.3))
+        XCTAssertEqual(Double(buffer.frameLength) / 44_100, 0.3, accuracy: 0.01)
+        let samples = UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength))
         // Not digital silence: silence was shown not to wake the output.
-        XCTAssertTrue(data.dropFirst(44).contains { $0 != 0 })
+        XCTAssertTrue(samples.contains { $0 != 0 })
+        XCTAssertTrue(samples.allSatisfy { abs($0) <= SoundEffects.wakeLevel })
     }
 }
