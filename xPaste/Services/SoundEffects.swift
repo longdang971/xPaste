@@ -57,13 +57,16 @@ enum SoundEffects {
     private static var snapQueuedBehindWake = false
     private static var idleStop: DispatchWorkItem?
     private static var commandMonitor: Any?
+    private static var rightClickMonitor: Any?
 
-    /// Loads the sounds, wakes the output and starts watching ⌘. Called at launch.
+    /// Loads the sounds, wakes the output and starts watching ⌘ and right-clicks. Called at launch.
     ///
     /// Waking only once a copy had been seen made the snap after launch or after a lull come about
     /// a second late: opening the USB output and the wake noise both came after the copy. So the
     /// output is woken at launch, and again whenever ⌘ goes down while it is asleep — ⌘ is pressed
-    /// before C, which gives the wake a head start on the copy it precedes.
+    /// before C, which gives the wake a head start on the copy it precedes. Likewise on a
+    /// right-click, for a copy made from a context menu: picking the item takes far longer than
+    /// the wake does.
     static func prepare() {
         guard isEnabled() else { return }
         setUp()
@@ -71,6 +74,12 @@ enum SoundEffects {
         if commandMonitor == nil {
             commandMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
                 guard event.modifierFlags.contains(.command), isEnabled() else { return }
+                wake()
+            }
+        }
+        if rightClickMonitor == nil {
+            rightClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .rightMouseDown) { _ in
+                guard isEnabled() else { return }
                 wake()
             }
         }
