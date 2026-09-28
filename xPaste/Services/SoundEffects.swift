@@ -43,48 +43,73 @@ enum SoundEffects {
     private static var wakeBuffer: AVAudioPCMBuffer?
     private static var isSetUp = false
 
-    /// When the snap last reached the output; past this long ago the output is treated as asleep.
-    private static var lastSounded = Date.distantPast
+    /// When the output last had signal going to it (snap or wake noise); past `idleBeforeRewake`
+    /// the output is treated as asleep.
+    private static var lastSignal = Date.distantPast
     /// Well under the ~2 minutes after which the snap was heard to go missing.
     private static let idleBeforeRewake: TimeInterval = 30
     /// As long as the launch pass that was shown to wake the output: the snap's own 300 ms.
     static let wakeDuration: TimeInterval = 0.3
     /// -60 dB: a real signal nobody can hear.
     static let wakeLevel: Float = 0.001
-    /// Until then the snap already queued behind the wake noise covers any further copy.
+    /// While the wake noise is still playing: a snap is queued behind it rather than cutting it off.
     private static var wakingUntil = Date.distantPast
+    private static var snapQueuedBehindWake = false
     private static var idleStop: DispatchWorkItem?
+    private static var commandMonitor: Any?
 
-    /// Loads the sounds and wires the engine. Called at launch; the output itself is only opened
-    /// when there is something to play.
+    /// Loads the sounds, wakes the output and starts watching ⌘. Called at launch.
+    ///
+    /// Waking only once a copy had been seen made the snap after launch or after a lull come about
+    /// a second late: opening the USB output and the wake noise both came after the copy. So the
+    /// output is woken at launch, and again whenever ⌘ goes down while it is asleep — ⌘ is pressed
+    /// before C, which gives the wake a head start on the copy it precedes.
     static func prepare() {
         guard isEnabled() else { return }
         setUp()
+        wake()
+        if commandMonitor == nil {
+            commandMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
+                guard event.modifierFlags.contains(.command), isEnabled() else { return }
+                wake()
+            }
+        }
+    }
+
+    /// Sends the inaudible wake noise if the output may be asleep. Harmless if it is not.
+    static func wake() {
+        guard isSetUp, let noise = wakeBuffer else { return }
+        guard !engine.isRunning || Date().timeIntervalSince(lastSignal) > idleBeforeRewake else { return }
+        if !engine.isRunning {
+            do { try engine.start() } catch { return }
+        }
+        node.scheduleBuffer(noise, at: nil, options: .interrupts)
+        if !node.isPlaying { node.play() }
+        let end = Date().addingTimeInterval(wakeDuration)
+        wakingUntil = end
+        snapQueuedBehindWake = false
+        lastSignal = end
+        scheduleIdleStop()
     }
 
     static func play(_ sound: Sound) {
         guard isEnabled() else { return }
         setUp()
-        guard let snap = buffers[sound], let wake = wakeBuffer else { return }
-
-        let now = Date()
-        if now < wakingUntil { return }
-
-        let asleep = !engine.isRunning || now.timeIntervalSince(lastSounded) > idleBeforeRewake
-        if !engine.isRunning {
-            do { try engine.start() } catch { return }
-        }
-        if asleep {
-            node.scheduleBuffer(wake, at: nil, options: .interrupts)
+        guard let snap = buffers[sound] else { return }
+        wake()
+        guard engine.isRunning else { return }
+        if Date() < wakingUntil {
+            // Behind the wake noise, so it sounds the instant the output is awake.
+            guard !snapQueuedBehindWake else { return }
             node.scheduleBuffer(snap, at: nil)
-            wakingUntil = now.addingTimeInterval(wakeDuration)
+            snapQueuedBehindWake = true
         } else {
             // Interrupts, so two quick copies make two snaps rather than one.
             node.scheduleBuffer(snap, at: nil, options: .interrupts)
+            if !node.isPlaying { node.play() }
+            lastSignal = Date()
+            scheduleIdleStop()
         }
-        if !node.isPlaying { node.play() }
-        lastSounded = now.addingTimeInterval(asleep ? wakeDuration : 0)
-        scheduleIdleStop()
     }
 
     /// Lets the output go once it would need waking again anyway, so an idle xPaste does not keep
@@ -120,7 +145,7 @@ enum SoundEffects {
         // the new device is asleep as far as anyone knows, wakes it first.
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
                                                object: engine, queue: .main) { _ in
-            lastSounded = .distantPast
+            lastSignal = .distantPast
         }
         isSetUp = true
     }
