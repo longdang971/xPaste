@@ -232,6 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         SoundEffects.prepare()
         setupStatusItem()
         setupPanel()
+        NotchController.shared.start()
         setupHotKey()
         ClipboardMonitor.shared.start()
         DragTempFile.clearLeftovers()

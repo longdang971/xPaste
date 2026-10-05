@@ -7,7 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		046D6813A656AFA34EF2B87D /* NotchGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B300F6B58FE3A734BDBE9F2 /* NotchGeometry.swift */; };
 		04BF45AB2AD51B46609ABD9C /* ItemEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 428AF6991C0BCD0A6DF4B698 /* ItemEdit.swift */; };
+		0B2ACCFC38CEE9516611B676 /* NotchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E92266BFEE6D0EF30B60C8 /* NotchController.swift */; };
 		0E38581EE499B1B876D9E331 /* ClipboardSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 361D38992D3805A472BABE21 /* ClipboardSchema.swift */; };
 		0ED3D1F184A5AA96AD5B6C85 /* HistoryRetention.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7B6AD1278EBD32FC4CEE1C3 /* HistoryRetention.swift */; };
 		0EF8ED7F4C3CA76685EA1196 /* FileFactsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69D0E027A040AEDB74EC2315 /* FileFactsTests.swift */; };
@@ -54,6 +56,7 @@
 		5AA7BEA1C61BAF9588953A16 /* PreviewSpaceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4234D90B039A63DC15B9C0F4 /* PreviewSpaceKeyTests.swift */; };
 		5B285C5C89DE854BD0A96A5F /* ClipboardItemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 666D180932C3A400D4A14ABF /* ClipboardItemTests.swift */; };
 		5F0AAD55D6B0EFCEDB514C8A /* SearchHighlightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A742A5A321DE505C0AC1D8 /* SearchHighlightTests.swift */; };
+		60FC8B52ACFD982AF04C5919 /* NotchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6C31DD2887FD53BB647FF0F /* NotchView.swift */; };
 		635BF0101B48AD50E897E446 /* FilterSuggestionList.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAC6D4C44B40D2213FD2C151 /* FilterSuggestionList.swift */; };
 		6514DF034670C7F40EDD05D1 /* PerfLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370DDE27D87B92CBEE7B7CE0 /* PerfLog.swift */; };
 		65223655B953600CB63804A2 /* LegacyJSONImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6696936991215517149CBE6B /* LegacyJSONImport.swift */; };
@@ -102,6 +105,7 @@
 		AD262897C916408A051D1D12 /* RemotePathPropertyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7945AE8C10DF4C7DFF2DD420 /* RemotePathPropertyTests.swift */; };
 		AD6E3E241C8C2DFB2FA00563 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B58622C67E0CFFBD148B70B6 /* SettingsView.swift */; };
 		AFA33A451592033EFE0C9BAB /* SystemFontRTF.swift in Sources */ = {isa = PBXBuildFile; fileRef = 844472E5F27FF51CD31E966A /* SystemFontRTF.swift */; };
+		B07FD89178E2462DFD46C38D /* NotchGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 777CA60AF2386743A3967B89 /* NotchGeometryTests.swift */; };
 		B17A100DD2FCAE295CDBD62A /* RichTextRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9963093B2EB8B3BEE3B1135C /* RichTextRenderer.swift */; };
 		B1BC5648A75183B112AC19EE /* DownloadLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F24C66E2197BD1D7E619FE6C /* DownloadLinkTests.swift */; };
 		B4D410394D3ABB87FA7E0600 /* PayloadCompressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8E2CE906892DC478FA62681 /* PayloadCompressionTests.swift */; };
@@ -229,11 +233,13 @@
 		72A278A6B784C347DBE841FA /* ItemFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemFileWriter.swift; sourceTree = "<group>"; };
 		733FA40DAFDCEF9D2073E7BC /* VisualEffectBlur.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectBlur.swift; sourceTree = "<group>"; };
 		7474348F51BD9E19B8313AFA /* PanelSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelSelection.swift; sourceTree = "<group>"; };
+		777CA60AF2386743A3967B89 /* NotchGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchGeometryTests.swift; sourceTree = "<group>"; };
 		7945AE8C10DF4C7DFF2DD420 /* RemotePathPropertyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathPropertyTests.swift; sourceTree = "<group>"; };
 		7BEB8E2188611A4B38186711 /* xpaste-copy.caf */ = {isa = PBXFileReference; path = "xpaste-copy.caf"; sourceTree = "<group>"; };
 		80E57409ECE65B44AF773795 /* LinkPreviewCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewCardTests.swift; sourceTree = "<group>"; };
 		844472E5F27FF51CD31E966A /* SystemFontRTF.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemFontRTF.swift; sourceTree = "<group>"; };
 		884F34A4F28F0E901A9E884A /* LinkHeadSliceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkHeadSliceTests.swift; sourceTree = "<group>"; };
+		8B300F6B58FE3A734BDBE9F2 /* NotchGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchGeometry.swift; sourceTree = "<group>"; };
 		8C5107DFBED0C58C6AABE75F /* SaveFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SaveFormatTests.swift; sourceTree = "<group>"; };
 		8C5BC31128194F5EBACB31C9 /* ReleaseInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseInfo.swift; sourceTree = "<group>"; };
 		908020B4223493ABD417BDB7 /* SearchQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchQuery.swift; sourceTree = "<group>"; };
@@ -287,6 +293,7 @@
 		DF07577A60130CAB93AF8FEA /* Date+Relative.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Date+Relative.swift"; sourceTree = "<group>"; };
 		E2B97E2F31EB55B97A0644BE /* PanelArrowKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelArrowKey.swift; sourceTree = "<group>"; };
 		E437A8C68C2F154F3AF59DC2 /* ColorFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorFormatTests.swift; sourceTree = "<group>"; };
+		E4E92266BFEE6D0EF30B60C8 /* NotchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchController.swift; sourceTree = "<group>"; };
 		E662DCE4553148A067F89681 /* ItemFileWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemFileWriterTests.swift; sourceTree = "<group>"; };
 		E82CAAB3832FCA2A676416E2 /* NSImage+Compress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NSImage+Compress.swift"; sourceTree = "<group>"; };
 		E9C44FB5DF2642D7E9131210 /* BoundedFetch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundedFetch.swift; sourceTree = "<group>"; };
@@ -297,6 +304,7 @@
 		F2FB132D93A8BFAE5ECA53C2 /* ClipboardStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardStore.swift; sourceTree = "<group>"; };
 		F3BA3F59C53175864F9C26E4 /* FilterTokenLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterTokenLayoutTests.swift; sourceTree = "<group>"; };
 		F5B51D74B19769E22A5A5B22 /* CardDragSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardDragSourceTests.swift; sourceTree = "<group>"; };
+		F6C31DD2887FD53BB647FF0F /* NotchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchView.swift; sourceTree = "<group>"; };
 		F7B6AD1278EBD32FC4CEE1C3 /* HistoryRetention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryRetention.swift; sourceTree = "<group>"; };
 		F8C605D985947C53E4ADA5C2 /* MediaFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaFile.swift; sourceTree = "<group>"; };
 		FAB7223E4D9C78D2DC3190BB /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
@@ -346,6 +354,7 @@
 				C8A607B4A8D2B02DCCF0E7E5 /* HotkeyRecorderButton.swift */,
 				56DC1FD216AF061320A8A99A /* ItemPreviewWindow.swift */,
 				46123A3EF690B89B5B01869D /* MediaPreviewPane.swift */,
+				F6C31DD2887FD53BB647FF0F /* NotchView.swift */,
 				FAB7223E4D9C78D2DC3190BB /* OnboardingView.swift */,
 				C3FAFB5E1011610BCA01A903 /* PanelNoticeCard.swift */,
 				BBACF14FD885E192BC581C43 /* ReleaseNotesView.swift */,
@@ -392,6 +401,7 @@
 				BB1413B5FDCC8D229DF77D13 /* MediaFileTests.swift */,
 				0B10561115C52A7DE242FC4C /* MenuItemImageTests.swift */,
 				BBA2A3D686FA2932814CF4AB /* MultiPasteTests.swift */,
+				777CA60AF2386743A3967B89 /* NotchGeometryTests.swift */,
 				1D38351BD63FC9F36F00229B /* NSImageCompressTests.swift */,
 				2CBD990C5CFEAF2A65C557A2 /* PagePreviewSizeTests.swift */,
 				43B38A5F8DCF79B961FD82FA /* PanelArrowKeyTests.swift */,
@@ -445,6 +455,7 @@
 				027F1DA10C007220C91A1C7D /* LoginItem.swift */,
 				F8C605D985947C53E4ADA5C2 /* MediaFile.swift */,
 				C950AD2579B86CCEB9A2B4C0 /* ModifierWatcher.swift */,
+				8B300F6B58FE3A734BDBE9F2 /* NotchGeometry.swift */,
 				9D244C7872AFC7C1FD6D6155 /* OCRService.swift */,
 				BB68721CD8D6CED8C68F53EB /* PageArchive.swift */,
 				E2B97E2F31EB55B97A0644BE /* PanelArrowKey.swift */,
@@ -495,6 +506,7 @@
 			isa = PBXGroup;
 			children = (
 				47CD9BF54E42FC2A5BDCC5EE /* AppDelegate.swift */,
+				E4E92266BFEE6D0EF30B60C8 /* NotchController.swift */,
 				D6DD73EBEF467CE2C6F89DB4 /* UpdateController.swift */,
 				155AF65BB95A30EB50C50D11 /* xPasteApp.swift */,
 			);
@@ -694,6 +706,9 @@
 				82A51819209A62566C8AE958 /* ModifierWatcher.swift in Sources */,
 				BEC01B0BAA9EEDEB452DD4A1 /* MultiPaste.swift in Sources */,
 				36D1D914A64791896C6BA966 /* NSImage+Compress.swift in Sources */,
+				0B2ACCFC38CEE9516611B676 /* NotchController.swift in Sources */,
+				046D6813A656AFA34EF2B87D /* NotchGeometry.swift in Sources */,
+				60FC8B52ACFD982AF04C5919 /* NotchView.swift in Sources */,
 				11961207D912058A70C6061C /* OCRService.swift in Sources */,
 				93C4A1A0547BF2161CB20633 /* OnboardingView.swift in Sources */,
 				AA0AC649B8FB0C1DC688DB4B /* PageArchive.swift in Sources */,
@@ -769,6 +784,7 @@
 				2055D3DA1B1D0C3F8B829EB8 /* MenuItemImageTests.swift in Sources */,
 				AADC9933B8F2635381D63798 /* MultiPasteTests.swift in Sources */,
 				D879AF744E6A7DA8B58EA971 /* NSImageCompressTests.swift in Sources */,
+				B07FD89178E2462DFD46C38D /* NotchGeometryTests.swift in Sources */,
 				947E61BB839B5BA820A61752 /* PagePreviewSizeTests.swift in Sources */,
 				53D24621501A9B197F037D78 /* PanelArrowKeyTests.swift in Sources */,
 				0F8F6E8A52D86A434E69099B /* PanelPerformanceTests.swift in Sources */,

@@ -201,6 +201,7 @@ final class ClipboardMonitor {
                         DispatchQueue.main.async {
                             ClipboardStore.shared.add(item)
                             SoundEffects.play(.copy)
+                            NotchController.shared.showSaved(item)
                         }
                         // `compressed`, not `raw`, even though the original is right here: Vision
                         // resizes its input, so the smaller copy is both cheaper and no worse at
@@ -236,6 +237,7 @@ final class ClipboardMonitor {
         DispatchQueue.main.async {
             ClipboardStore.shared.add(item)
             SoundEffects.play(.copy)
+            NotchController.shared.showSaved(item)
         }
     }
 }

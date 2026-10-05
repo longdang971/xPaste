@@ -1064,7 +1064,7 @@ struct ClipboardItemCard: View {
 
     private static var downloadIconCache: [String: NSImage] = [:]
 
-    private static func downloadIcon(fileName: String?, mimeType: String?) -> NSImage {
+    static func downloadIcon(fileName: String?, mimeType: String?) -> NSImage {
         let type = downloadIconType(fileName: fileName, mimeType: mimeType)
         if let cached = downloadIconCache[type.identifier] { return cached }
         let icon = sizedIcon(for: type)
@@ -1658,10 +1658,7 @@ struct ClipboardItemCard: View {
     /// from: a 228 grey, a 209 grey and a (228, 228, 174) pastel went dark; the lemon and the
     /// cream stayed white.
     private func isPaleColor(_ color: Color) -> Bool {
-        guard let ns = NSColor(color).usingColorSpace(.sRGB) else { return true }
-        let contrast = RichTextRenderer.contrastRatio(.white, ns)
-        if contrast < 1.25 { return true }
-        return ns.saturationComponent < 0.3 && contrast < 1.6
+        Self.isPale(color)
     }
 
     /// Whether `colour` is light enough that dark text reads better on it.
@@ -1855,5 +1852,43 @@ private struct CardSelectionBorder: View {
                          style: .continuous)
             .stroke((isHovered || selection.contains(itemID)) ? Color.accentColor : .clear,
                     lineWidth: 3 * panelScale)
+    }
+}
+
+// MARK: - Shared with the notch shelf
+
+extension ClipboardItemCard {
+    /// The accent a card for `item` is headed with: its source app's brand colour, or its type's
+    /// colour when there is no app to sample. Shared so the notch shelf and the panel never
+    /// disagree about what colour an item is.
+    static func accent(for item: ClipboardItem) async -> Color {
+        guard let bundleID = item.sourceAppBundleID else { return item.type.accentColor }
+        if let cached = colorCache[bundleID] { return cached }
+        guard let icon = AppNameResolver.shared.icon(for: bundleID),
+              let cgImage = icon.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return item.type.accentColor
+        }
+        let color = await Task.detached(priority: .utility) { extractDominantColor(from: cgImage) }.value
+        guard let color else { return item.type.accentColor }
+        colorCache[bundleID] = color
+        return color
+    }
+
+    /// The accent already known for `item`, without sampling anything.
+    static func cachedAccent(for item: ClipboardItem) -> Color {
+        item.sourceAppBundleID.flatMap { colorCache[$0] } ?? item.type.accentColor
+    }
+
+    /// Text colour for a title laid on `accent`: white, unless the bar is too pale to carry it.
+    static func titleColor(on accent: Color) -> Color {
+        isPale(accent) ? .black.opacity(0.78) : .white
+    }
+
+    /// See `isPaleColor`.
+    static func isPale(_ color: Color) -> Bool {
+        guard let ns = NSColor(color).usingColorSpace(.sRGB) else { return true }
+        let contrast = RichTextRenderer.contrastRatio(.white, ns)
+        if contrast < 1.25 { return true }
+        return ns.saturationComponent < 0.3 && contrast < 1.6
     }
 }

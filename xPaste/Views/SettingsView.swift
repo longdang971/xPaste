@@ -496,6 +496,9 @@ private struct AppearanceTab: View {
     @AppStorage("appearanceMode") private var appearanceMode: String = "system"
     @AppStorage("panelPosition") private var panelPosition: String = "bottom"
     @AppStorage("linkPreviewEnabled") private var linkPreviewEnabled: Bool = true
+    @AppStorage(NotchController.Keys.copyBanner) private var notchCopyBanner: Bool = true
+    @AppStorage(NotchController.Keys.hoverShelf) private var notchHoverShelf: Bool = true
+    @AppStorage(NotchController.Keys.dropToSave) private var notchDropToSave: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -539,6 +542,36 @@ private struct AppearanceTab: View {
                             .toggleStyle(.switch)
                     }
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("Notch")
+                SettingsCard {
+                    Row(title: "Show copies at the notch",
+                        subtitle: "A short banner drops from the camera notch each time something is saved.") {
+                        Toggle("", isOn: $notchCopyBanner)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    CardDivider()
+                    Row(title: "Recent items on hover",
+                        subtitle: "Rest the pointer on the notch to see your latest items; click one to paste it.") {
+                        Toggle("", isOn: $notchHoverShelf)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    CardDivider()
+                    Row(title: "Drop on the notch to save",
+                        subtitle: "Drag a file, picture or text onto the notch to keep it in xPaste.") {
+                        Toggle("", isOn: $notchDropToSave)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                }
+                Text("Only on a built-in display with a camera notch. Other displays never show these.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
             }
         }
     }
