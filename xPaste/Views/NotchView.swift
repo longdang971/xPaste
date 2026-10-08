@@ -17,12 +17,80 @@ final class NotchModel: ObservableObject {
 
     @Published var mode: Mode = .idle
     @Published var shelfItems: [ClipboardItem] = []
+    /// What a drag can be dropped as, left to right. Decided once, as the drag comes in.
+    @Published var dropZones: [NotchDropZone] = NotchDropZone.allCases
+    /// The zone under the drag, which is what a drop now would do.
+    @Published var dropTarget: NotchDropZone = .save
     var notchSize = CGSize(width: 200, height: 32)
 
     /// Pastes an item from the shelf. Set by the controller.
     var onPick: (ClipboardItem) -> Void = { _ in }
     /// Opens the full panel. Set by the controller.
     var onOpenPanel: () -> Void = {}
+
+    /// The banner's buttons, each acting on the item the banner is about. Set by the controller.
+    var onTogglePin: (UUID) -> Void = { _ in }
+    var onRemove: (UUID) -> Void = { _ in }
+    var onCopyText: (UUID) -> Void = { _ in }
+
+    /// Where each shelf tile is drawn, in the hosting view's top-left coordinates, so a press can
+    /// be traced back to the tile it landed on when it turns into a drag. Not published: nothing
+    /// on screen depends on it.
+    var tileFrames: [UUID: CGRect] = [:]
+    /// Where each drop zone is drawn, in the same coordinates.
+    var dropZoneFrames: [NotchDropZone: CGRect] = [:]
+}
+
+/// What a drop on the notch does, one per zone of the drop target.
+enum NotchDropZone: CaseIterable, Hashable {
+    case save
+    case pin
+    /// Reads the text out of a picture and copies it. Offered only for a drag carrying pictures.
+    case text
+
+    var title: String {
+        switch self {
+        case .save: return "Save"
+        case .pin: return "Save & Pin"
+        case .text: return "Copy Text"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .save: return "Add to history"
+        case .pin: return "Keep it on top"
+        case .text: return "Read the image"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .save: return "tray.and.arrow.down.fill"
+        case .pin: return "pin.fill"
+        case .text: return "text.viewfinder"
+        }
+    }
+
+    /// Each zone's own colour, so the three read apart at a glance rather than by their words.
+    var accent: Color {
+        switch self {
+        case .save: return Color(nsColor: .systemBlue)
+        case .pin: return Color(nsColor: .systemOrange)
+        case .text: return Color(nsColor: .systemPurple)
+        }
+    }
+
+    /// The zones a drag gets: reading text only when there is a picture to read it from.
+    static func zones(carryingImages: Bool) -> [NotchDropZone] {
+        carryingImages ? [.save, .pin, .text] : [.save, .pin]
+    }
+
+    /// The zone a drop at `x` lands in: the nearest one, so the gaps between them and the band
+    /// around the camera are not places where a drop does nothing.
+    static func nearest(to x: CGFloat, in frames: [NotchDropZone: CGRect]) -> NotchDropZone? {
+        frames.min { abs($0.value.midX - x) < abs($1.value.midX - x) }?.key
+    }
 }
 
 /// The contents of one "saved" banner.
@@ -33,12 +101,24 @@ struct NotchToast: Equatable {
     var image: NSImage? = nil
     var color: Color? = nil
     var symbol: String = "doc.on.clipboard"
+    /// The item the banner is about. Only a banner with one gets the buttons; a notice ("Removed",
+    /// "press ⌘V") has nothing for them to act on.
+    var itemID: UUID? = nil
+    var isPinned = false
+    var isImage = false
+    /// Something is still being worked on: a spinner where the tick would be.
+    var busy = false
 
     static func == (a: NotchToast, b: NotchToast) -> Bool { a.id == b.id }
 
-    /// The banner for an item that was just saved. `title` says how it got there.
-    static func make(for item: ClipboardItem, title: String) -> NotchToast {
+    /// The banner for an item that was just saved. `title` says how it got there; `stored` is
+    /// the item the history keeps for it, when that is a different one (see `ClipboardStore.add`).
+    static func make(for item: ClipboardItem, storedAs stored: ClipboardItem? = nil,
+                     title: String) -> NotchToast {
         var toast = NotchToast(title: title, text: NotchText.summary(of: item))
+        toast.itemID = (stored ?? item).id
+        toast.isPinned = (stored ?? item).isPinned
+        toast.isImage = item.type == .image
         switch item.type {
         case .image:
             toast.image = item.imageData.flatMap(NSImage.init(data:))
@@ -176,8 +256,16 @@ enum NotchLayout {
     /// Above the tiles, so a hovered tile's ring and lift are not cut off by the header band.
     static let shelfTopGap: CGFloat = 8
     static let shelfBottomGap: CGFloat = 14
+    /// A drop zone is as wide as a shelf tile, so the two states read as one family.
+    static let dropZoneWidth: CGFloat = 112
+    static let dropZoneSpacing: CGFloat = 8
+    static let dropPadding: CGFloat = 14
+    static let dropZoneHeight: CGFloat = 104
+    /// Same rounding as a shelf tile, and the target's corner concentric with it.
+    static let dropZoneRadius: CGFloat = shelfTileRadius
 
-    static func size(of mode: NotchModel.Mode, notch: CGSize, shelfItems: Int = shelfCount) -> CGSize {
+    static func size(of mode: NotchModel.Mode, notch: CGSize, shelfItems: Int = shelfCount,
+                     dropZones: Int = 2) -> CGSize {
         switch mode {
         case .idle:
             // A shade smaller than the housing, so nothing of it shows past the housing's edge.
@@ -187,8 +275,10 @@ enum NotchLayout {
             return even(CGSize(width: max(notch.width + 2 * flare + 160, 360),
                                height: notch.height + 58))
         case .drop:
-            return even(CGSize(width: max(notch.width + 2 * flare + 140, 340),
-                               height: notch.height + 92))
+            let count = CGFloat(max(dropZones, 1))
+            let zones = count * dropZoneWidth + (count - 1) * dropZoneSpacing + 2 * dropPadding
+            return even(CGSize(width: max(zones + 2 * flare, notch.width + 2 * flare + 140, 340),
+                               height: notch.height + shelfTopGap + dropZoneHeight + dropPadding))
         case .shelf:
             // As wide as the cards there are, so two items do not sit in a band built for six.
             let count = CGFloat(min(max(shelfItems, 1), shelfCount))
@@ -209,7 +299,8 @@ enum NotchLayout {
         switch mode {
         case .idle: return 8
         case .shelf: return shelfTileRadius + shelfPadding
-        case .toast, .drop: return 20
+        case .drop: return dropZoneRadius + dropPadding
+        case .toast: return 20
         }
     }
 
@@ -220,7 +311,8 @@ enum NotchLayout {
 
 extension NotchModel {
     func size(of mode: Mode) -> CGSize {
-        NotchLayout.size(of: mode, notch: notchSize, shelfItems: shelfItems.count)
+        NotchLayout.size(of: mode, notch: notchSize, shelfItems: shelfItems.count,
+                         dropZones: dropZones.count)
     }
 }
 
@@ -294,11 +386,11 @@ struct NotchView: View {
         case .idle:
             EmptyView()
         case .toast(let toast):
-            ToastRow(toast: toast)
+            ToastRow(toast: toast, model: model)
                 .padding(.top, model.notchSize.height)
                 .id(toast.id)
         case .drop:
-            DropPrompt()
+            DropZones(model: model)
                 .padding(.top, model.notchSize.height)
         case .shelf:
             Shelf(model: model)
@@ -308,6 +400,17 @@ struct NotchView: View {
 
 private struct ToastRow: View {
     let toast: NotchToast
+    let model: NotchModel
+    /// Kept here rather than read back from the store: the banner is about one item, for a second
+    /// or two, and observing the whole history to redraw one pin would redraw it on every copy.
+    @State private var pinned: Bool
+    @State private var reading = false
+
+    init(toast: NotchToast, model: NotchModel) {
+        self.toast = toast
+        self.model = model
+        _pinned = State(initialValue: toast.isPinned)
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -324,9 +427,31 @@ private struct ToastRow: View {
                     .truncationMode(.tail)
             }
             Spacer(minLength: 4)
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 18))
-                .foregroundStyle(.green)
+            if let id = toast.itemID {
+                HStack(spacing: 2) {
+                    BannerButton(symbol: pinned ? "pin.fill" : "pin",
+                                 help: pinned ? "Unpin" : "Pin", active: pinned) {
+                        pinned.toggle()
+                        model.onTogglePin(id)
+                    }
+                    if toast.isImage {
+                        BannerButton(symbol: "text.viewfinder", help: "Copy text in image",
+                                     busy: reading) {
+                            reading = true
+                            model.onCopyText(id)
+                        }
+                    }
+                    BannerButton(symbol: "trash", help: "Remove from history") {
+                        model.onRemove(id)
+                    }
+                }
+            } else if toast.busy {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.green)
+            }
         }
         .padding(.horizontal, 16)
         .frame(maxHeight: .infinity)
@@ -354,22 +479,140 @@ private struct ToastRow: View {
     }
 }
 
-private struct DropPrompt: View {
+/// One of the banner's round buttons, in the manner of `ShowAllButton`: faint until the pointer
+/// is on it.
+private struct BannerButton: View {
+    let symbol: String
+    let help: String
+    var active = false
+    var busy = false
+    let action: () -> Void
+    @State private var hovering = false
+
     var body: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
-            .overlay(
-                HStack(spacing: 8) {
-                    Image(systemName: "tray.and.arrow.down.fill")
-                        .font(.system(size: 18))
-                    Text("Drop to save to xPaste")
-                        .font(.system(size: 13, weight: .medium))
+        Button(action: action) {
+            Group {
+                if busy {
+                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                } else {
+                    Image(systemName: symbol)
+                        .font(.system(size: 12, weight: .medium))
                 }
-                .foregroundStyle(.primary)
-            )
-            .padding(.horizontal, 14)
-            .padding(.top, 10)
-            .padding(.bottom, 14)
+            }
+            .foregroundStyle(Color.white.opacity(hovering || active ? 0.95 : 0.6))
+            .frame(width: 28, height: 28)
+            .background(Circle().fill(Color.white.opacity(hovering ? 0.14 : 0)))
+            .contentShape(Circle())
+        }
+        .buttonStyle(PressStyle())
+        .disabled(busy)
+        .onHover { hovering = $0 }
+        .help(help)
+        .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+/// The drop target, split into what a drop can do: tiles in the shelf's manner, the one under
+/// the drag lifted and ringed the way a hovered shelf tile is, the others dimmed behind it.
+private struct DropZones: View {
+    @ObservedObject var model: NotchModel
+    /// Drives the staggered entrance, as the shelf's tiles have.
+    @State private var appeared = false
+
+    var body: some View {
+        HStack(spacing: NotchLayout.dropZoneSpacing) {
+            ForEach(Array(model.dropZones.enumerated()), id: \.element) { index, zone in
+                DropZoneCell(zone: zone, targeted: model.dropTarget == zone)
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: DropZoneFrames.self,
+                                               value: [zone: geo.frame(in: .global)])
+                    })
+                    .opacity(appeared ? 1 : 0)
+                    .offset(y: appeared ? 0 : -10)
+                    .scaleEffect(appeared ? 1 : 0.9, anchor: .top)
+                    .animation(.spring(response: 0.42, dampingFraction: 0.78)
+                        .delay(0.07 + Double(index) * 0.035), value: appeared)
+            }
+        }
+        .frame(height: NotchLayout.dropZoneHeight)
+        .onPreferenceChange(DropZoneFrames.self) { model.dropZoneFrames = $0 }
+        .padding(.horizontal, NotchLayout.dropPadding)
+        .padding(.top, NotchLayout.shelfTopGap)
+        .onAppear { appeared = true }
+    }
+}
+
+private struct DropZoneCell: View {
+    let zone: NotchDropZone
+    let targeted: Bool
+
+    private static let radius = NotchLayout.dropZoneRadius
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
+        VStack(spacing: 0) {
+            badge
+            Spacer(minLength: 8)
+            Text(zone.title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.95))
+                .lineLimit(1)
+            Text(zone.subtitle)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.5))
+                .lineLimit(1)
+                .padding(.top, 2)
+        }
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            ZStack {
+                Color(white: 0.105)
+                // The zone's colour rising from the bottom, brighter under the drag.
+                RadialGradient(colors: [zone.accent.opacity(targeted ? 0.6 : 0.22), zone.accent.opacity(0)],
+                               center: .bottom, startRadius: 0, endRadius: 110)
+            }
+        )
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Color.white.opacity(targeted ? 0.16 : 0.07), lineWidth: 0.5))
+        // The macOS selection ring, as on a hovered shelf tile.
+        .overlay(
+            RoundedRectangle(cornerRadius: Self.radius + 3, style: .continuous)
+                .strokeBorder(Color.white.opacity(targeted ? 0.9 : 0), lineWidth: 2)
+                .padding(-3.5)
+        )
+        .opacity(targeted ? 1 : 0.62)
+        .scaleEffect(targeted ? 1.04 : 1)
+        .shadow(color: .black.opacity(targeted ? 0.5 : 0), radius: 8, y: 4)
+        .animation(.spring(response: 0.28, dampingFraction: 0.72), value: targeted)
+    }
+
+    /// The symbol on a disc of the zone's colour, which swells when the drag arrives over it.
+    private var badge: some View {
+        ZStack {
+            Circle()
+                .fill(LinearGradient(colors: [zone.accent.opacity(0.95), zone.accent.opacity(0.65)],
+                                     startPoint: .top, endPoint: .bottom))
+            Circle()
+                .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.5)
+            Image(systemName: zone.symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.25), radius: 1, y: 1)
+        }
+        .frame(width: 40, height: 40)
+        .shadow(color: zone.accent.opacity(targeted ? 0.7 : 0), radius: 10)
+        .scaleEffect(targeted ? 1.14 : 1)
+        .animation(.spring(response: 0.3, dampingFraction: 0.5), value: targeted)
+    }
+}
+
+private struct DropZoneFrames: PreferenceKey {
+    static var defaultValue: [NotchDropZone: CGRect] = [:]
+    static func reduce(value: inout [NotchDropZone: CGRect], nextValue: () -> [NotchDropZone: CGRect]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
@@ -395,6 +638,10 @@ private struct Shelf: View {
                 HStack(spacing: NotchLayout.shelfCardSpacing) {
                     ForEach(Array(model.shelfItems.enumerated()), id: \.element.id) { index, item in
                         ShelfTile(item: item) { model.onPick(item) }
+                            .background(GeometryReader { geo in
+                                Color.clear.preference(key: ShelfTileFrames.self,
+                                                       value: [item.id: geo.frame(in: .global)])
+                            })
                             .opacity(appeared ? 1 : 0)
                             .offset(y: appeared ? 0 : -10)
                             .scaleEffect(appeared ? 1 : 0.9, anchor: .top)
@@ -403,6 +650,7 @@ private struct Shelf: View {
                     }
                 }
                 .padding(.top, NotchLayout.shelfTopGap)
+                .onPreferenceChange(ShelfTileFrames.self) { model.tileFrames = $0 }
                 Spacer(minLength: 0)
             }
         }
@@ -436,6 +684,13 @@ private struct Shelf: View {
             .font(.system(size: 18))
             .foregroundStyle(Color.white.opacity(0.32))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct ShelfTileFrames: PreferenceKey {
+    static var defaultValue: [UUID: CGRect] = [:]
+    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
@@ -653,7 +908,9 @@ private struct ShelfTile: View {
         link?.title.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
     }
 
-    /// A link's one line of footer: the site's icon and name, and the app it was copied from.
+    /// A link's one line of footer: the site's icon and name. Not the app it was copied from, as
+    /// the panel's card has: at this size a second icon crowded the host out, and a link almost
+    /// always comes from a browser, which says nothing.
     private var linkFooter: some View {
         let parts = NotchText.linkParts(of: item)
         return HStack(spacing: 5) {
@@ -670,12 +927,7 @@ private struct ShelfTile: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.55))
                 .lineLimit(1)
-            Spacer(minLength: 2)
-            if let bid = item.sourceAppBundleID, let icon = ShelfTile.icon(for: bid) {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 13, height: 13)
-            }
+            Spacer(minLength: 0)
         }
         .frame(height: 13)
     }

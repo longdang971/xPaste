@@ -291,7 +291,12 @@ final class ClipboardStore: ObservableObject {
         }
     }
 
-    func add(_ item: ClipboardItem) {
+    /// Records a copy, and returns the item the history now holds for it — which is not always the
+    /// one passed in. Copying again something already pinned brings the pinned item back to the
+    /// front instead of filing a second, identical one beside it: two pinned cards of the same
+    /// thing is never what anyone meant, and the pin was the user's own say on where it belongs.
+    @discardableResult
+    func add(_ item: ClipboardItem) -> ClipboardItem {
         var item = item
         // By checksum through the index rather than by walking the history: this runs on the main
         // thread for every copy made anywhere in the system, and the walk it replaces compared the
@@ -306,6 +311,11 @@ final class ClipboardStore: ObservableObject {
             removedIDs.forEach { forget($0) }
             items.removeAll { removedIDs.contains($0.id) }
             database?.delete(ids: removedIDs)
+        }
+
+        if let pinned = items.first(where: { candidates.contains($0.id) && $0.isPinned }) {
+            moveToTop(pinned)
+            return items.first { $0.id == pinned.id } ?? pinned
         }
 
         if let data = item.imageData, let imagesDir {
@@ -336,6 +346,7 @@ final class ClipboardStore: ObservableObject {
         trim()
         pruneExpired()
         database?.upsert(item, payload: payload)
+        return item
     }
 
     /// Records an item in the checksum index.

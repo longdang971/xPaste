@@ -129,3 +129,32 @@ final class NotchShelfItemsTests: XCTestCase {
         XCTAssertEqual(recent.map(\.text), ["fresh", "older"])
     }
 }
+
+final class NotchDropZoneTests: XCTestCase {
+    func testReadingTextIsOfferedOnlyForPictures() {
+        XCTAssertEqual(NotchDropZone.zones(carryingImages: false), [.save, .pin])
+        XCTAssertEqual(NotchDropZone.zones(carryingImages: true), [.save, .pin, .text])
+    }
+
+    /// A gap, or the band beside the camera, still lands in a zone: the nearest.
+    func testNearestZoneCoversTheGaps() {
+        let frames: [NotchDropZone: CGRect] = [
+            .save: CGRect(x: 20, y: 40, width: 112, height: 60),
+            .pin: CGRect(x: 140, y: 40, width: 112, height: 60),
+        ]
+        XCTAssertEqual(NotchDropZone.nearest(to: 0, in: frames), .save)
+        XCTAssertEqual(NotchDropZone.nearest(to: 135, in: frames), .save)
+        XCTAssertEqual(NotchDropZone.nearest(to: 137, in: frames), .pin)
+        XCTAssertEqual(NotchDropZone.nearest(to: 900, in: frames), .pin)
+        XCTAssertNil(NotchDropZone.nearest(to: 50, in: [:]))
+    }
+
+    func testThreeZonesFitWithoutSqueezing() {
+        let notch = CGSize(width: 185, height: 32)
+        let three = NotchLayout.size(of: .drop, notch: notch, dropZones: 3)
+        let zones = 3 * NotchLayout.dropZoneWidth + 2 * NotchLayout.dropZoneSpacing
+            + 2 * NotchLayout.dropPadding + 2 * NotchLayout.flare
+        XCTAssertGreaterThanOrEqual(three.width, zones)
+        XCTAssertEqual(three.width.truncatingRemainder(dividingBy: 2), 0)
+    }
+}

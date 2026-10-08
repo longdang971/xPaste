@@ -34,6 +34,44 @@ final class ClipboardStoreTests: XCTestCase {
         XCTAssertTrue(store.items.contains { $0.isPinned })
     }
 
+    /// Copying again what is already pinned brings the pin to the front rather than filing a
+    /// second, identical card beside it — and says which item the copy now is.
+    func test_add_of_pinned_content_reuses_the_pinned_item() {
+        var pinned = ClipboardItem(type: .text, text: "important",
+                                   timestamp: Date().addingTimeInterval(-3_600))
+        pinned.isPinned = true
+        store.add(pinned)
+        store.add(ClipboardItem(type: .text, text: "other"))
+
+        let stored = store.add(ClipboardItem(type: .text, text: "important"))
+
+        XCTAssertEqual(stored.id, pinned.id)
+        XCTAssertTrue(stored.isPinned)
+        XCTAssertEqual(store.items.filter { $0.text == "important" }.count, 1)
+        XCTAssertEqual(store.items.first?.id, pinned.id)
+        XCTAssertGreaterThan(store.items.first!.timestamp, pinned.timestamp)
+    }
+
+    /// The notch's "Save & Pin" with the same thing already pinned: still the one card.
+    func test_add_pinned_over_pinned_keeps_one() {
+        var pinned = ClipboardItem(type: .text, text: "snippet")
+        pinned.isPinned = true
+        store.add(pinned)
+        var again = ClipboardItem(type: .text, text: "snippet")
+        again.isPinned = true
+
+        XCTAssertEqual(store.add(again).id, pinned.id)
+        XCTAssertEqual(store.items.filter { $0.text == "snippet" }.count, 1)
+    }
+
+    /// Unpinned duplicates are replaced by the new copy, as before.
+    func test_add_returns_the_new_item_when_nothing_is_pinned() {
+        store.add(ClipboardItem(type: .text, text: "dup"))
+        let fresh = ClipboardItem(type: .text, text: "dup")
+        XCTAssertEqual(store.add(fresh).id, fresh.id)
+        XCTAssertEqual(store.items.filter { $0.text == "dup" }.count, 1)
+    }
+
     /// Deliberately NOT a test of the cap, despite what it used to be called.
     ///
     /// `maxItems` clamps its own argument up to `ClipboardStore.minHistoryCount` (500), so the `5`

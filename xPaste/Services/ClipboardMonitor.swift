@@ -199,9 +199,9 @@ final class ClipboardMonitor {
                         // which is all the history used to be able to return.
                         item.payload = payload
                         DispatchQueue.main.async {
-                            ClipboardStore.shared.add(item)
+                            let stored = ClipboardStore.shared.add(item)
                             SoundEffects.play(.copy)
-                            NotchController.shared.showSaved(item)
+                            NotchController.shared.showSaved(item, storedAs: stored)
                         }
                         // `compressed`, not `raw`, even though the original is right here: Vision
                         // resizes its input, so the smaller copy is both cheaper and no worse at
@@ -235,9 +235,9 @@ final class ClipboardMonitor {
 
         item.sourceAppBundleID = sourceBundleID
         DispatchQueue.main.async {
-            ClipboardStore.shared.add(item)
+            let stored = ClipboardStore.shared.add(item)
             SoundEffects.play(.copy)
-            NotchController.shared.showSaved(item)
+            NotchController.shared.showSaved(item, storedAs: stored)
         }
     }
 }

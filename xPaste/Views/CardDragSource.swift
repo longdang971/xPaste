@@ -146,11 +146,19 @@ final class CardDragSourceView: NSView, NSDraggingSource {
     /// nothing but the pointer.
     static func snapshot(of overlay: NSView?, badge count: Int) -> NSImage? {
         guard let overlay, overlay.bounds.width > 1, overlay.bounds.height > 1,
-              let host = hostingAncestor(of: overlay), let hostLayer = host.layer
+              let host = hostingAncestor(of: overlay)
         else { return nil }
-
-        let scale = overlay.window?.backingScaleFactor ?? 2
         let card = overlay.convert(overlay.bounds, to: host)
+        let radius = ClipboardItemCard.cornerRadius * (card.width / PanelLayout.cardBaseWidth)
+        return snapshot(of: card, in: host, radius: radius, badge: count)
+    }
+
+    /// A picture of the rectangle `card` (in `host`'s own coordinates) of what `host` has drawn,
+    /// with its corners rounded off. Also what the notch shelf drags its tiles with.
+    static func snapshot(of card: NSRect, in host: NSView, radius: CGFloat,
+                         badge count: Int = 1) -> NSImage? {
+        guard card.width > 1, card.height > 1, let hostLayer = host.layer else { return nil }
+        let scale = host.window?.backingScaleFactor ?? 2
         guard let ctx = CGContext(data: nil,
                                   width: Int((card.width * scale).rounded()),
                                   height: Int((card.height * scale).rounded()),
@@ -173,7 +181,6 @@ final class CardDragSourceView: NSView, NSDraggingSource {
         guard let cg = ctx.makeImage() else { return nil }
         // The crop is a rectangle, so it caught the panel's own background in the card's rounded
         // corners — four white spikes around an otherwise rounded card. Mask them back off.
-        let radius = ClipboardItemCard.cornerRadius * (card.width / PanelLayout.cardBaseWidth)
         guard let image = rounded(cg, size: card.size, radius: radius, scale: scale)
         else { return nil }
         guard count > 1 else { return image }
